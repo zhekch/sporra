@@ -132,12 +132,12 @@
 
             <!-- How the map is lit, which is one question with two answers
                  depending on what is drawing it. On 3D it is Standard's own
-                 light preset — Auto and four suns, built from LIGHT_CHOICES,
-                 `seg-split` so five equal choices split three and two rather
-                 than one wrapping alone — and the line under it says what Auto
-                 resolved to. On the flat basemaps it is which of the three is
-                 drawn. Satellite has neither: a photograph is lit by the sun
-                 that was up when it was taken.
+                 light — Day, Night, or Auto, built from LIGHT_CHOICES. Auto
+                 still picks among Standard's four suns (dawn, day, dusk, night)
+                 from the clock and where you are; the line under the row says
+                 which one it picked. On the flat basemaps it is which of the
+                 three is drawn. Satellite has neither: a photograph is lit by
+                 the sun that was up when it was taken.
 
                  One heading, renamed by main.js, and two rows of which at most
                  one is ever on screen. -->
@@ -147,7 +147,7 @@
               <button data-i18n="theme-seg.terrain" type="button" class="seg-btn" data-style="terrain">Terrain</button>
               <button data-i18n="theme-seg.light" type="button" class="seg-btn" data-style="voyager">Light</button>
             </div>
-            <div class="seg seg-split" id="light-seg" hidden></div>
+            <div class="seg" id="light-seg" hidden></div>
             <div class="seg-note" id="light-now" hidden></div>
 
             <div class="menu-subhead">
@@ -822,17 +822,6 @@
 
                 <div class="settings-col">
                 <div data-i18n="personal.the-map" class="settings-heading first">The map</div>
-                <!-- Whether the 3D basemap works out its own sun. The four suns
-                     themselves stay in the layers menu: which one is up is a
-                     question you ask while looking at the map, and you answer it
-                     by looking at what changed. Whether the map should decide
-                     for itself is the other kind — set once, never revisited —
-                     which is what this list is for. -->
-                <label class="import-row">
-                  <span data-i18n-text="personal.time-of-day">Time of day<small data-i18n="settings-light-note.the-3d-map-follows-the">The 3D map follows the sun where you are</small></span>
-                  <input type="checkbox" id="settings-light-auto" />
-                </label>
-
                 <!-- The one switch that changes what a tap on the map *does*
                      rather than what it shows, which is why it is here rather
                      than in the menu you open to change the view. -->

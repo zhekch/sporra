@@ -1012,8 +1012,9 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 /* What a segmented row is actually producing right now, on a line under it.
    Two rows have an answer of their own to give: Detail, where the numbers mean
    nothing on their own and a cell's ground size depends on the latitude on
-   screen, and Time of day, where Auto has to say which sun it picked. Both are
-   the same sentence in the same voice, so both are the same class. */
+   screen, and Time of day, where Auto has to say which of the four suns it
+   picked. Both are the same sentence in the same voice, so both are the same
+   class. */
 .seg-note {
   margin-top: var(--menu-row-gap);
   font-size: 11.5px;
@@ -1101,49 +1102,6 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 
 .seg-wrap {
   flex-wrap: wrap;
-}
-
-/* Five choices split 3-2 rather than left to wrap.
-   `flex-wrap` fits as many as the row holds, which for the basemaps is four
-   and then one — and a lone button on a second row reads as an afterthought
-   rather than as one of five equal choices. Six columns is the smallest grid
-   that divides evenly into both: the first three take two each, the last two
-   take three each. */
-.seg-split {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 2px;
-}
-
-.seg-split .seg-btn {
-  grid-column: span 2;
-}
-
-.seg-split .seg-btn:nth-child(4),
-.seg-split .seg-btn:nth-child(5) {
-  grid-column: span 3;
-}
-
-/* **Four choices go in one row**, which the rule above gets wrong on its own: it
-   is written for five, so the fourth button inherits the wide span meant for the
-   second row of a 3-2 and lands alone underneath. That is Time of day — Dawn,
-   Day, Dusk, Night — four short words that fit across at any width this panel
-   has, and which read as one control only when they are on one line.
-
-   The grid is respanned rather than the buttons: six columns cannot hold four
-   equal ones, so a `span 1.5` does not exist to ask for. Four columns can.
-
-   A quantity query rather than a class from the script that builds the row: the
-   count is a fact about the markup, and the two lists this grid serves are
-   filled from different modules. Anything that has to be remembered in a second
-   place is a thing that comes apart the next time somebody adds a choice. */
-.seg-split:has(.seg-btn:first-child:nth-last-child(4)) {
-  grid-template-columns: repeat(4, 1fr);
-}
-
-.seg-split .seg-btn:first-child:nth-last-child(4),
-.seg-split .seg-btn:first-child:nth-last-child(4) ~ .seg-btn {
-  grid-column: span 1;
 }
 
 /* A segmented control following a row of its own (the coloring modes under
@@ -6381,6 +6339,16 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   font-size: 12.5px;
 }
 
+/* The chip sits on the map, so it has to follow the map. Without this it
+   stayed the dark glass of the default theme over a daylight basemap — the
+   only floating surface that did, and the one at the top of the screen. */
+:is([data-theme='light'], [data-chrome='light']) .route-solo {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(15, 23, 42, 0.14);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
+  color: #0f172a;
+}
+
 .route-solo[hidden] {
   display: none;
 }
@@ -6408,6 +6376,16 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 
 .route-solo > button:not(.chip-arrow):hover {
   background: rgba(255, 255, 255, 0.2);
+}
+
+:is([data-theme='light'], [data-chrome='light']) .route-solo > button:not(.chip-arrow) {
+  border-color: rgba(15, 23, 42, 0.18);
+  background: rgba(15, 23, 42, 0.08);
+  color: #0f172a;
+}
+
+:is([data-theme='light'], [data-chrome='light']) .route-solo > button:not(.chip-arrow):hover {
+  background: rgba(15, 23, 42, 0.16);
 }
 
 /* --- A chip you can swipe ------------------------------------------------------
@@ -6445,12 +6423,32 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
    that second line rather than out at the end of the chip. "Show" beside a date
    is a button with no visible object; "3 activities · Show" says what it will
    show. See `setChipText` in src/main.js. */
-#trip-chip-text {
+#trip-chip-text,
+#route-solo-text {
   display: flex;
   min-width: 0;
+  flex: 1;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
+  overflow: visible;
+  white-space: normal;
+  text-overflow: unset;
+}
+
+/* The isolated-route chip's name is the one line that used to vanish into
+   an ellipsis. It wraps rather than truncating, so "Frutigen → Thun" is
+   still "Frutigen → Thun" on a phone. */
+#route-solo-text .chip-name {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  overflow-wrap: break-word;
+}
+
+#route-solo-text .chip-sub-text {
+  font-size: 11.5px;
+  line-height: 1.2;
 }
 
 .chip-name,
@@ -6503,13 +6501,13 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   display: none;
 }
 
-[data-theme='light'] .route-solo > #trip-chip-text .chip-sub > button {
+:is([data-theme='light'], [data-chrome='light']) .route-solo > #trip-chip-text .chip-sub > button {
   border-color: rgba(15, 23, 42, 0.18);
   background: rgba(15, 23, 42, 0.08);
   color: #0f172a;
 }
 
-[data-theme='light'] .route-solo > #trip-chip-text .chip-sub > button:hover {
+:is([data-theme='light'], [data-chrome='light']) .route-solo > #trip-chip-text .chip-sub > button:hover {
   background: rgba(15, 23, 42, 0.16);
 }
 
@@ -6553,7 +6551,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   background: rgba(255, 255, 255, 0.14);
 }
 
-[data-theme='light'] .route-solo > .chip-arrow:hover {
+:is([data-theme='light'], [data-chrome='light']) .route-solo > .chip-arrow:hover {
   background: rgba(15, 23, 42, 0.12);
 }
 
@@ -6666,19 +6664,19 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   background: rgba(240, 178, 74, 0.38);
 }
 
-[data-theme='light'] .route-solo.as-user {
+:is([data-theme='light'], [data-chrome='light']) .route-solo.as-user {
   background: rgba(255, 244, 219, 0.96);
   border-color: rgba(180, 118, 12, 0.4);
   color: rgba(76, 46, 3, 0.95);
 }
 
-[data-theme='light'] .route-solo.as-user > button {
+:is([data-theme='light'], [data-chrome='light']) .route-solo.as-user > button {
   border-color: rgba(180, 118, 12, 0.35);
   background: rgba(180, 118, 12, 0.16);
   color: rgba(60, 36, 2, 0.95);
 }
 
-[data-theme='light'] .route-solo.as-user > button:hover {
+:is([data-theme='light'], [data-chrome='light']) .route-solo.as-user > button:hover {
   background: rgba(180, 118, 12, 0.28);
 }
 
@@ -6747,7 +6745,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
      up, this drops below it rather than landing on top of the thing that says
      what the map is currently showing. */
   .map-chips:has(> *:not([hidden])) ~ .toast {
-    top: 62px;
+    top: 88px;
   }
 
   /* …which is where the offline banner already is. It's the sibling before this

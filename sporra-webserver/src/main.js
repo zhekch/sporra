@@ -42,8 +42,8 @@ import {
 } from './coloring.js';
 import { terrainStyle, satelliteStyle, washAnchorIn } from './basemap.js';
 import {
-  AUTO_LIGHT, BASEMAP_IMPORT, LIGHT_CHOICES, LIGHT_PRESETS, STANDARD_STYLE, autoPinned, configureStandard,
-  hasMapboxToken, lightChoice, lightPreset, mapboxToken, pinAuto, presetTheme, refreshAutoLight,
+  AUTO_LIGHT, BASEMAP_IMPORT, LIGHT_CHOICES, LIGHT_PRESETS, STANDARD_STYLE, configureStandard,
+  hasMapboxToken, lightChoice, lightPreset, mapboxToken, presetTheme, refreshAutoLight,
   setLightChoice, setMapboxToken,
 } from './mapbox.js';
 import { rememberSunSite } from './sun.js';
@@ -4497,8 +4497,26 @@ function updateSoloChip() {
   if (soloRoute != null && !route) soloRoute = null;
   chip.hidden = !route;
   if (!route) return;
-  document.getElementById('route-solo-text').textContent =
-    `Showing only ${route.name || 'one route'}`;
+  // Two lines so the name is never the thing the chip runs out of room for.
+  // "Showing only Frutigen → Thun" on one line is a sentence that ellipsises
+  // the only word worth reading; the name on its own row, under a caption,
+  // is the same fact with room to finish.
+  const el = document.getElementById('route-solo-text');
+  if (!el) return;
+  if (!route.name) {
+    const name = document.createElement('span');
+    name.className = 'chip-name';
+    name.textContent = t('route-solo-text.showing-one-route');
+    el.replaceChildren(name);
+    return;
+  }
+  const caption = document.createElement('span');
+  caption.className = 'chip-sub-text';
+  caption.textContent = t('route-solo-text.showing-only');
+  const name = document.createElement('span');
+  name.className = 'chip-name';
+  name.textContent = route.name;
+  el.replaceChildren(caption, name);
 }
 
 // One `match` over the feature's own `sport`, so a thousand routes are still one
@@ -7519,9 +7537,9 @@ let mapboxUi = null;
 //
 // The picker asks two questions now — *what is drawing this* and *what light is
 // it in* — where it used to ask one and answer the second one three times. Dark,
-// Terrain and Light are the flat map's answer to the second, exactly as the four
-// suns are 3D's; `flat` is what the first row's 2D button sends, and it means
-// "whichever of the three you were last on".
+// Terrain and Light are the flat map's answer to the second, exactly as Day,
+// Night and Auto are 3D's; `flat` is what the first row's 2D button sends, and
+// it means "whichever of the three you were last on".
 const FLAT_STYLES = ['dark', 'terrain', 'voyager'];
 const FLAT_KEY = 'visited-map:flat-style:v1';
 const isFlat = (key) => FLAT_STYLES.includes(key);
@@ -7586,17 +7604,11 @@ function setStyleKey(key) {
   //
   // It sets the choice rather than the preset, which turns Auto off — and that
   // is the honest reading of the gesture: pressing a button that means "light
-  // map" is choosing a sun, however indirectly. Auto is a switch in Settings and
-  // stays one press away.
-  //
-  // Unless Auto was asked for by hand, which outranks it. The reading above
-  // holds for an *indirect* gesture — nobody pressing "3D" is thinking about the
-  // sun — but it was also overruling the one control that exists to say "decide
-  // for me", and doing it on the only press that makes the 3D map appear at all.
-  // The switch could not survive being used: turn it on, press 3D to see what it
-  // does, and it is off again, with a fixed sun stored behind it for every visit
-  // after.
-  if (key === 'mapbox' && isFlat(styleKey) && !autoPinned()) {
+  // map" is choosing a sun, however indirectly. Auto is a button in the same
+  // row as Day and Night, so a stored Auto is left alone: that is the one
+  // answer that already means "decide for me", and crossing to 3D to see what
+  // it does must not undo it.
+  if (key === 'mapbox' && isFlat(styleKey) && lightChoice() !== AUTO_LIGHT) {
     setLightChoice(STYLES[styleKey].theme === 'light' ? 'day' : 'night');
   }
   // Crossing between the two map libraries, which no `setStyle` can do: the map
@@ -8753,20 +8765,15 @@ function mapboxTokenChanged() {
 }
 
 // The time-of-day row under the basemap picker, which exists only while 3D is
-// the basemap: it is Standard's own light preset, and no other basemap has a
-// sun to move. Built once from LIGHT_PRESETS — the four suns, and *not* Auto,
-// which is a switch in Settings — and shown or hidden by updateLayersUi().
+// the basemap: it is Standard's own light, and no other basemap has a sun to
+// move. Built once from LIGHT_CHOICES — Day, Night, Auto — and shown or hidden
+// by updateLayersUi().
 //
-// Auto used to be a fifth button here, and the two did not belong in one row.
-// Four of them named a sun and the fifth named a policy about the other four, so
-// pressing Auto looked like choosing a fifth kind of light and leaving it looked
-// like nothing had happened. Splitting them puts each where its question is
-// asked: which sun is up, beside the map you are looking at; who gets to decide,
-// once, in the list of things you decide once.
-//
-// The row still shows the sun Auto resolved to as the active one, rather than
-// showing nothing while Auto is on. That is what is actually lighting the map,
-// and `lightNow` underneath says where it came from.
+// Auto used to live in Settings, with the four suns in this row and no Auto
+// button, so the only press that showed you what Auto did was the one that
+// crossed to 3D and turned it off. Day / Night / Auto is the same question in
+// one place: pin a sun, or let it follow the sky. Dawn and dusk are still what
+// Auto resolves to — `lightNow` underneath says which of the four is up.
 const lightHead = document.getElementById('light-head');
 const lightSeg = document.getElementById('light-seg');
 // What Auto currently resolves to, in words, on the line under the row. The
@@ -8782,18 +8789,18 @@ const themeSeg = document.getElementById('theme-seg');
 
 function buildLightRow() {
   if (!lightSeg) return;
-  lightSeg.replaceChildren(...LIGHT_PRESETS.map((choice) => {
+  const label = {
+    day: t('light-seg.day'),
+    night: t('light-seg.night'),
+    auto: t('light-seg.auto'),
+  };
+  lightSeg.replaceChildren(...LIGHT_CHOICES.map((choice) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'seg-btn';
     btn.dataset.light = choice.key;
-    btn.textContent = choice.label;
-    // Picking a sun by hand is the plainest way there is of saying you no
-    // longer want one picked for you, so it releases the pin as well.
-    btn.addEventListener('click', () => {
-      pinAuto(false);
-      setLightPresetNow(choice.key);
-    });
+    btn.textContent = label[choice.key] ?? choice.label;
+    btn.addEventListener('click', () => setLightPresetNow(choice.key));
     return btn;
   }));
 }
@@ -8869,7 +8876,9 @@ function setLightPresetNow(choice) {
  * is still being evaluated. A hoisted function is defined for all of them.
  */
 function labelOfLight(key) {
-  return LIGHT_CHOICES.find((c) => c.key === key)?.label ?? key;
+  return LIGHT_PRESETS.find((c) => c.key === key)?.label
+    ?? LIGHT_CHOICES.find((c) => c.key === key)?.label
+    ?? key;
 }
 
 // How often an app that is simply left open re-asks where the sun is.
@@ -8925,9 +8934,10 @@ function updateLayersUi() {
     const headText = lightHead.querySelector('span') ?? lightHead;
     headText.textContent = flat ? t('light-head.theme') : t('light-head.time-of-day');
     if (on) {
-      // The preset rather than the choice: under Auto there is no `auto` button
-      // to light up, and the honest thing to mark is the sun actually in force.
-      const chosen = lightPreset();
+      // The choice rather than the preset: Auto is a button of its own now, so
+      // the honest thing to mark is what was pressed, not the sun it resolved
+      // to. `lightNow` underneath is where that sun is named.
+      const chosen = lightChoice();
       for (const btn of lightSeg.querySelectorAll('[data-light]')) {
         btn.classList.toggle('active', btn.dataset.light === chosen);
       }
@@ -10569,19 +10579,6 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       pushPrefs();
     },
     snowPossible: () => engine === MAPBOX,
-    sunAuto: () => lightChoice() === AUTO_LIGHT,
-    // Switching it off freezes the sun where it currently is rather than
-    // dropping back to a stored preference or to Day: whatever is on screen is
-    // what somebody looking at the switch means by "stop changing it". Switching
-    // it on re-resolves immediately, so the map is right before the dialog is
-    // shut. No `pushPrefs` — the choice lives in localStorage and nowhere else,
-    // because which sun a *screen* wants is a fact about the screen.
-    // The pin goes with it, in both directions: this switch is the only place
-    // Auto can be asked for, so it is the only place that can mean it.
-    onSunAuto: (on) => {
-      pinAuto(on);
-      setLightPresetNow(on ? AUTO_LIGHT : lightPreset());
-    },
     whatsNew: () => bannerMode(),
     onWhatsNew: (mode) => {
       setBannerMode(mode);

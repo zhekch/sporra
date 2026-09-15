@@ -408,7 +408,7 @@ kept to the same label and road density as Light, and roads on all of them fade
 out as you zoom away rather than shouting over the map.
 
 **3D** is Mapbox Standard — buildings with height, modelled landmarks, trees, and
-a **Light** setting that moves the sun between dawn, day, dusk and night. It is
+a sun that Auto still moves between dawn, day, dusk and night. It is
 the one basemap that needs something from you: Mapbox serves no tiles without an
 account and this app does not have one, so it runs on your own free access
 token. Make one at
@@ -419,8 +419,9 @@ spot and the map switches straight to 3D. The token is saved to your account, so
 every device you sign in on gets the basemap without being asked again. Empty the
 box and press Done to take it off all of them.
 
-**Time of day** appears under the basemaps while 3D is the one showing — dawn,
-day, dusk and night, and the last two turn the whole map dark. Tilt with a
+**Time of day** appears under the basemaps while 3D is the one showing — Day,
+Night, or Auto. Auto follows the sun where you are and still picks among dawn,
+day, dusk and night; dusk and night turn the whole map dark. Tilt with a
 right-button drag, or two fingers on a touchscreen: 3D leans all the way to 85°,
 far enough to put the sky and the horizon on screen, where the other four stop at
 60° because they have no sky to show you. Zoom in past about z14 to see the

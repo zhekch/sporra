@@ -32,8 +32,8 @@ globalThis.localStorage = {
 };
 
 const {
-  AUTO_LIGHT, BASEMAP_IMPORT, LIGHT_CHOICES, LIGHT_PRESETS, autoPinned, configureStandard,
-  hasMapboxToken, landmarksVisibleAt, lightChoice, lightPreset, mapboxToken, pinAuto, presetTheme,
+  AUTO_LIGHT, BASEMAP_IMPORT, LIGHT_CHOICES, LIGHT_PRESETS, configureStandard,
+  hasMapboxToken, landmarksVisibleAt, lightChoice, lightPreset, mapboxToken, presetTheme,
   refreshAutoLight, setLightChoice, setMapboxToken, standardConfig, tokenComplaint,
 } = await import('../../src/mapbox.js');
 const {
@@ -79,72 +79,35 @@ console.log('\nWhere the sun is');
     'which resolves to one of the four Standard has, whatever the clock says');
   check(!LIGHT_PRESETS.some((p) => p.key === AUTO_LIGHT),
     'and auto is not one of them — nothing may hand it to Mapbox');
-  eq(LIGHT_CHOICES.map((c) => c.key), ['auto', 'dawn', 'day', 'dusk', 'night'],
-    'the row offers auto and then the four');
+  eq(LIGHT_CHOICES.map((c) => c.key), ['day', 'night', 'auto'],
+    'the row offers Day, Night and Auto');
+  eq(LIGHT_PRESETS.map((p) => p.key), ['dawn', 'day', 'dusk', 'night'],
+    'and Auto still has all four Standard suns to pick from');
 
-  for (const preset of LIGHT_PRESETS) {
-    setLightChoice(preset.key);
-    eq(lightPreset(), preset.key, `${preset.label} can be chosen`);
-    eq(presetTheme(), preset.theme, `and reports the ${preset.theme} theme`);
+  for (const choice of LIGHT_CHOICES.filter((c) => c.key !== AUTO_LIGHT)) {
+    setLightChoice(choice.key);
+    eq(lightPreset(), choice.key, `${choice.label} can be chosen`);
+    eq(presetTheme(), choice.key === 'night' ? 'dark' : 'light',
+      `and reports the ${choice.key === 'night' ? 'dark' : 'light'} theme`);
   }
   // The one that decides whether the app's chrome is legible.
   eq(presetTheme('night'), 'dark', 'night is a dark map');
   eq(presetTheme('day'), 'light', 'day is a light one');
+  eq(presetTheme('dawn'), 'light', 'dawn is light too, even though the row no longer offers it');
+  eq(presetTheme('dusk'), 'dark', 'and dusk is dark');
   setLightChoice('nonsense');
   eq(lightChoice(), AUTO_LIGHT, 'and anything else falls back to Auto rather than being stored');
   // A value that predates this list, or a hand-edited one.
   stored['visited-map:mapbox-light:v1'] = 'midnight';
   eq(lightChoice(), AUTO_LIGHT, 'as does a stored value the list has never heard of');
   eq(presetTheme('midnight'), 'light', 'and an unknown preset is assumed light rather than crashing');
-}
-
-// --- Auto asked for, versus Auto by default ---------------------------------
-//
-// These are the same value of `lightChoice()` and different facts about the
-// viewer, and setStyleKey needs to tell them apart: crossing from a flat basemap
-// to 3D picks a fixed sun from the flat map's theme, which is a fair reading of
-// an indirect press and the wrong one for a switch somebody turned on by hand.
-//
-// Getting this wrong is not subtle in use and is invisible here without the
-// distinction: the only press that makes the 3D map appear is also the press
-// that turned Time of day off, so the switch could never survive being tried,
-// and the fixed sun it left behind is stored for every visit after.
-console.log('\nAuto, asked for rather than defaulted to');
-{
-  stored = {};
-  eq(lightChoice(), AUTO_LIGHT, 'Auto is the default');
-  check(!autoPinned(), 'but nobody has asked for it, which is a different thing');
-
-  pinAuto(true);
-  check(autoPinned(), 'the Settings switch says so');
-  // The pin is about intent and outlives any particular sun, so that turning
-  // Auto on, choosing Dusk, and turning it back on again is not three states.
-  setLightChoice('dusk');
-  check(autoPinned(), 'and survives a sun being stored underneath it');
-
-  pinAuto(false);
-  check(!autoPinned(), 'switching it off releases it');
-  pinAuto(false);
-  check(!autoPinned(), 'and releasing it twice is not an error');
-
-  // localStorage refused outright — a browser with site data switched off. The
-  // old behaviour is the safe fallback, so this must answer no rather than throw.
-  const real = globalThis.localStorage;
-  globalThis.localStorage = {
-    getItem() { throw new Error('denied'); },
-    setItem() { throw new Error('denied'); },
-    removeItem() { throw new Error('denied'); },
-  };
-  check(!autoPinned(), 'storage that refuses to be read answers no rather than throwing');
-  let threw = false;
-  try {
-    pinAuto(true);
-  } catch {
-    threw = true;
-  }
-  check(!threw, 'and storage that refuses to be written swallows it');
-  globalThis.localStorage = real;
-  stored = {};
+  // The old four-button row stored dawn and dusk as choices. They still light
+  // the map under Auto; as a leftover stored pick they become the sun on the
+  // same side of noon that the new row still offers.
+  stored['visited-map:mapbox-light:v1'] = 'dawn';
+  eq(lightChoice(), 'day', 'a stored Dawn from the old row is Day');
+  stored['visited-map:mapbox-light:v1'] = 'dusk';
+  eq(lightChoice(), 'night', 'and Dusk is Night');
 }
 
 console.log('\nAuto follows the clock, and reports only when it has moved');

@@ -9200,10 +9200,11 @@ Five, and the menu asks for them in two questions rather than one. The first row
 is **what kind of map** — 2D, Satellite, 3D — because that is how many kinds
 there are: a drawn map, a photograph, and a drawn map with the buildings
 standing up. The row under it is **how it is lit**: on 2D that is *Theme* (Dark,
-Terrain, Light) and on 3D it is *Time of day* (Standard's own light presets),
-one heading renamed over two rows of which at most one is ever on screen.
-Satellite has neither — a photograph is lit by the sun that was up when it was
-taken.
+Terrain, Light) and on 3D it is *Time of day* (Day, Night, Auto), one heading
+renamed over two rows of which at most one is ever on screen. Satellite has
+neither — a photograph is lit by the sun that was up when it was taken. Auto
+still maps onto Standard's four suns — dawn, day, dusk, night — from the clock
+and where you are; Day and Night pin one. Dawn and dusk are not buttons.
 
 It used to be one row of five, which put a question about rendering beside a
 question about lighting and answered the second one three times: Dark, Terrain
@@ -9229,21 +9230,11 @@ that means "light map" is choosing a sun however indirectly. And it runs after
 the token gate, because a press that ends in the dialog asking for a Mapbox token
 has not switched anything and should not have moved the sun either.
 
-**Unless Auto was asked for by hand, which outranks it.** That reading holds for
-an indirect gesture and not for a switch somebody opened Settings to turn on, and
-the difference was invisible because both end at the same `lightChoice()`. So
-`AUTO_PINNED_KEY` records the intent separately: the Settings switch sets it,
-choosing one of the four suns by hand clears it, and 2D→3D leaves the sun alone
-while it is set.
-
-Without it the switch could not survive being used. There is no Auto button in
-the layers row — `buildLightRow` offers the four presets, because under Auto
-there is no `auto` to mark as active — so Settings is the only place it can be
-turned on, and the only press that then shows you what it does is the one that
-crosses to 3D. Turn it on, press 3D to look, and it is off again, with a fixed
-sun stored behind it for every visit after: the setting read as broken rather
-than as overruled, because the gesture that undid it was the gesture for seeing
-it work.
+**Unless Auto is the stored choice, which outranks it.** Auto used to live in
+Settings, with the four suns in the layers row and no Auto button, so the only
+press that showed you what it did was the one that crossed to 3D and turned it
+off. It is a button in that row now, next to Day and Night, and a stored Auto
+is left alone: crossing to 3D to see the sky is not a reason to pin a sun.
 
 The five themselves: **Dark** (CARTO Dark Matter), **Terrain**, **Light**
 (CARTO Voyager), **Satellite**, and **3D** (Mapbox Standard — see "The 3D

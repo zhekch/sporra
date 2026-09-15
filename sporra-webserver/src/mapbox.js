@@ -107,16 +107,22 @@ export const LIGHT_PRESETS = [
 ];
 const DEFAULT_PRESET = 'day';
 
-// **Auto is a fifth choice and not a fifth preset**, and the distinction is the
+// **Auto is a choice and not a fifth preset**, and the distinction is the
 // whole shape of this. Standard has four suns; `auto` is an instruction to pick
 // one of them from the clock and the client's own latitude — see src/sun.js,
-// which is where the reason a table of hours will not do is written down. So it
-// is stored like a preset, offered like a preset, and *never* handed to Mapbox:
-// everything downstream of `lightPreset()` goes on seeing one of the four.
+// which is where the reason a table of hours will not do is written down. The
+// row offers Day, Night and Auto; dawn and dusk exist only as what Auto
+// resolves to. Auto is stored like a preset, offered like a preset, and *never*
+// handed to Mapbox: everything downstream of `lightPreset()` goes on seeing one
+// of the four.
 export const AUTO_LIGHT = 'auto';
 
-/** What the row of buttons offers, which is auto and then the four suns. */
-export const LIGHT_CHOICES = [{ key: AUTO_LIGHT, label: 'Auto' }, ...LIGHT_PRESETS];
+/** What the row of buttons offers: two suns you can pin, and Auto. */
+export const LIGHT_CHOICES = [
+  { key: 'day', label: 'Day' },
+  { key: 'night', label: 'Night' },
+  { key: AUTO_LIGHT, label: 'Auto' },
+];
 
 // The default, and it is auto rather than day. A map whose subject is where you
 // have been is looked at in the evening as often as at noon, and opening it on
@@ -220,15 +226,6 @@ export const landmarksVisibleAt = (zoom) => zoom >= BUILDINGS_MINZOOM;
 
 const TOKEN_KEY = 'visited-map:mapbox-token:v1';
 const PRESET_KEY = 'visited-map:mapbox-light:v1';
-// Whether Auto was asked for *deliberately*, which is a different fact from
-// whether Auto is currently in force. Crossing from a flat basemap to 3D picks a
-// fixed sun from the flat map's theme (see setStyleKey) — a reasonable reading
-// of an indirect gesture, and the wrong reading of a switch somebody went into
-// Settings and turned on. Without this the two were indistinguishable, so the
-// switch could not survive the very press that makes the 3D map visible: every
-// route to seeing Time of day turned it off on the way, and it stayed off,
-// because the fixed sun it left behind is stored.
-const AUTO_PINNED_KEY = 'visited-map:mapbox-light-auto:v1';
 
 /** The viewer's Mapbox token, or '' if they have not given one. */
 export function mapboxToken() {
@@ -319,10 +316,24 @@ function gateLandmarks(map) {
 }
 
 /**
- * Which of the five the viewer chose — one of the suns, or `auto`.
+ * Fold a stored value onto what the row can actually show.
+ *
+ * Dawn and dusk used to be buttons of their own. Auto still *resolves* to
+ * them; choosing them by hand is gone, so a leftover Dawn is Day and a leftover
+ * Dusk is Night — the suns the new row still offers, on the same side of noon.
+ */
+function menuChoiceOf(held) {
+  if (held === 'dawn') return 'day';
+  if (held === 'dusk') return 'night';
+  return LIGHT_CHOICES.some((p) => p.key === held) ? held : DEFAULT_CHOICE;
+}
+
+/**
+ * Which of the three the viewer chose — Day, Night, or Auto.
  *
  * The row of buttons is drawn from this; everything that lights a map reads
- * `lightPreset()` instead, which is this with `auto` answered.
+ * `lightPreset()` instead, which is this with `auto` answered as one of the
+ * four Standard suns.
  */
 export function lightChoice() {
   let held;
@@ -331,37 +342,12 @@ export function lightChoice() {
   } catch {
     held = null;
   }
-  return LIGHT_CHOICES.some((p) => p.key === held) ? held : DEFAULT_CHOICE;
-}
-
-/**
- * Was Auto turned on deliberately, rather than merely being the default?
- *
- * Only the Settings switch sets this: the row of suns in the layers menu offers
- * the four presets and no Auto button, so there is exactly one control in the
- * app that means "decide for me" and exactly one gesture to trust.
- */
-export function autoPinned() {
-  try {
-    return localStorage.getItem(AUTO_PINNED_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-/** Remember, or forget, that Auto was asked for by hand. */
-export function pinAuto(on) {
-  try {
-    if (on) localStorage.setItem(AUTO_PINNED_KEY, '1');
-    else localStorage.removeItem(AUTO_PINNED_KEY);
-  } catch {
-    /* fine — it falls back to the old behaviour, which is not harmful */
-  }
+  return menuChoiceOf(held);
 }
 
 /** Choose one. Returns what is now stored. */
 export function setLightChoice(key) {
-  const clean = LIGHT_CHOICES.some((p) => p.key === key) ? key : DEFAULT_CHOICE;
+  const clean = menuChoiceOf(key);
   try {
     localStorage.setItem(PRESET_KEY, clean);
   } catch {
