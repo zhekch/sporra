@@ -10828,8 +10828,8 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     /**
      * Workouts. The one permission with no web equivalent at all — there is no
      * standard way to raise HealthKit's sheet, so the iPhone app answers a
-     * message of its own (`HealthBridge` there) by throwing the same switch its
-     * Settings tab throws, which is what makes iOS ask.
+     * message of its own (`HealthBridge` there) by throwing the same switch
+     * Settings throws, which is what makes iOS ask.
      *
      * `settings` is the answer everywhere else, and it is a real answer rather
      * than a failure: on a Mac there is no HealthKit to ask, and in an older

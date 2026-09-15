@@ -103,7 +103,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.98.1';
+export const SERVER_VERSION = '0.99.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -2478,9 +2478,9 @@ function readBody(req, limit = 8 * 1024 * 1024) {
 // taken, unsent workouts are simply not marked as taken, and the photo library
 // is re-read from scratch on every scan. It all arrives on the next push, once
 // the admin is back in their own account. The message is written to be read on
-// a phone's Settings tab, which is where it will surface.
+// a phone's Settings, which is where it will surface.
 const WEARING_SOMEBODY_ELSE = 'You are viewing another account on this device. '
-  + 'Leave it on the Map tab before this phone syncs again.';
+  + 'Go back to the map before this phone syncs again.';
 const borrowed = (user) => !!user?.asAdmin;
 
 async function handleApi(req, res, pathname, query = new URLSearchParams()) {
@@ -4202,9 +4202,8 @@ function sendStatic(req, res, entry, immutable) {
 // --- Telling the iOS app apart ---------------------------------------------------
 // The app appends this to its User-Agent (WebViewController.userAgentTag). It is
 // the whole of the identification, and it buys one thing: the page can be served
-// already knowing it is inside an app with a native tab bar over the bottom of
-// the screen, so its chrome is laid out correctly on the first paint rather than
-// jumping once a script has run.
+// already knowing it is inside the iOS app, so its chrome is laid out correctly
+// on the first paint rather than jumping once a script has run.
 //
 // Nothing about the *data* changes — this marks a viewport, not an account.
 const IOS_CLIENT = 'SporraiOS';
@@ -4222,7 +4221,7 @@ function indexForClient(req, entry) {
     // added to index.html cannot silently stop the app being an app. It already
     // did once: `class="booting"` went on that tag and the exact-string replace
     // quietly matched nothing, which shows up as the iOS chrome sitting under
-    // the tab bar and nowhere else.
+    // the status bar and nowhere else.
     const html = entry.body
       .toString('utf8')
       .replace('<html lang="en"', '<html lang="en" data-client="ios"');

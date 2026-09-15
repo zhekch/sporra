@@ -27,8 +27,9 @@ import Foundation
 /// when the app is built. A server address typed in Settings afterwards cannot
 /// get into it. For an app that is compiled by the person who runs the server
 /// that is a fair trade — you already have the project open — but it does mean
-/// **the address has to be in two places**, and the Settings tab says so when
-/// they disagree rather than leaving you to find out at an airport.
+/// **the address has to be in two places**. A server typed in afterwards cannot
+/// get into the list; add it in Info.plist and rebuild, rather than finding
+/// out at an airport.
 ///
 /// ## Adding yours
 ///

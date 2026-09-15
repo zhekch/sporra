@@ -35,8 +35,7 @@
 	     `AppBoundDomains.swift`, and "The offline shell" in ARCHITECTURE.md.
 
 	     Left out of the box because the list is fixed when the app is built and
-	     only you know where your server is; the Settings tab says whether the
-	     address you typed is covered. Hosts only, no scheme or port, ten at most,
+	     only you know where your server is. Hosts only, no scheme or port, ten at most,
 	     and each covers its subdomains.
 
 	     `strava.com` is in the template for a reason that is easy to miss: with

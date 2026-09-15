@@ -88,8 +88,8 @@ export const WEB = 'web';
  *
  *   - `data-client="ios"` is stamped on the document by the server, for a
  *     request whose User-Agent carries `SporraiOS` (see `indexForClient` in
- *     server/index.js). It exists so the chrome is laid out for a native tab
- *     bar on the *first* paint.
+ *     server/index.js). It exists so the chrome is laid out for the app on
+ *     the *first* paint.
  *   - `sporraLocation` is the macOS app's geolocation shim, and it is only
  *     ever registered there — the iPhone's WebKit delivers positions perfectly
  *     well and needs none of it (see `LocationBridge` in the macOS sources).

@@ -74,15 +74,16 @@ glass look. Click hexagons to mark places you've visited.
   `orientation: landscape`: a short desktop window has the same problem, and a
   tablet in landscape has 768px of it and wants the column.
 - **The iOS position overrides are corrections to the phone stack, and are
-  scoped to it.** `html[data-client='ios']` lifts the cluster clear of the tab
-  bar. Written without a media query it also reached the landscape layout, which
-  sets `bottom: auto` to anchor the cluster at the *top* — so `.layers` ended up
-  with both edges pinned, which is not a box that hugs its content but one
-  stretched the height of the screen. Its reversed column then dropped the menu
-  and search pill into the bottom-left corner, on top of the attribution the
-  same block had just moved there. Anything that overrides a position inside the
-  app has to say which layout it is correcting; `scripts/test/card-lift.mjs`
-  guards the neighbouring version of this trap.
+  scoped to it.** `html[data-client='ios']` used to lift the cluster clear of a
+  tab bar; the bar is gone, and the remaining rules still have to name which
+  layout they correct. Written without a media query they also reached the
+  landscape layout, which sets `bottom: auto` to anchor the cluster at the
+  *top* — so `.layers` ended up with both edges pinned, which is not a box that
+  hugs its content but one stretched the height of the screen. Its reversed
+  column then dropped the menu and search pill into the bottom-left corner, on
+  top of the attribution the same block had just moved there. Anything that
+  overrides a position inside the app has to say which layout it is correcting;
+  `scripts/test/card-lift.mjs` guards the neighbouring version of this trap.
 - **Grid**: flat-top hexagons defined in Web Mercator space, so every cell
   renders as a perfect, identically-oriented hexagon at any location and zoom
   (no rotation or pentagon artifacts). The base (finest) cell is **~0.9 km**
@@ -711,9 +712,9 @@ it there and a visit means the same thing either way — see
   whole, and is the one thing here that is not cheap to repeat.
 
 **Is that address a Sporra server?** `GET /api/health` is the only route that
-answers before anybody has signed in, and it exists for the Settings tab: you
+answers before anybody has signed in, and it exists for Settings: you
 type an address there and, until now, the only way to find out whether it was
-right was to open the Map tab and see whether a web view stayed white. A typo, a
+right was to go back to the map and see whether a web view stayed white. A typo, a
 server that is down, a tailnet you are not on and something else answering on
 that port all looked identical, and none of them looked different from being
 signed out.
@@ -1303,7 +1304,7 @@ Two rules that are not symmetrical, on purpose:
 
 **On a phone it takes the screen including the parts that are not rectangular.**
 The overlay's padding carries the `--safe-*` insets, so the title clears the
-dynamic island and the buttons clear the app's own tab bar; the card's `100%`
+dynamic island and the buttons clear the home indicator; the card's `100%`
 then resolves against what is left. The controls scroll inside their own row
 rather than growing — letting them grow put the rest of them past the bottom of a
 fixed-height card with nothing able to scroll to them, so the list simply ended
@@ -3133,7 +3134,7 @@ no such thing exists on this side of the bridge.
   shim onto CoreLocation. The fix is kept, and the fix stays where it is.
 - **Apple Health.** The one with no web equivalent at all: there is no standard
   way to raise HealthKit's sheet, so the iPhone app answers a message of its own
-  (`HealthBridge`) by throwing the same switch its Settings tab throws — and
+  (`HealthBridge`) by throwing the same switch Settings throws — and
   that `didSet` is where `requestAuthorization` lives. The page and the switch
   therefore cannot disagree afterwards, because there is only one of them. No
   workout crosses that bridge; only the question does.
@@ -4258,7 +4259,7 @@ worse answer than an ugly one.
 That class is also why the server's iOS rewrite matches `<html lang="en"` rather
 than the whole tag. It matched the whole tag, and adding an attribute to
 index.html silently stopped it matching anything at all — which shows up as the
-iOS chrome sitting under the tab bar and nowhere else.
+iOS chrome sitting under the status bar and nowhere else.
 
 **Both MapLibre anchors are read before a single layer of ours is added.**
 `labelStart()` looks for the bottom of the topmost run of symbol layers, which is
@@ -6747,7 +6748,7 @@ because it is the one you must have been aiming at.
 
 ### Looking is not uploading
 
-The overlay does not consult the sync switch in the app's Settings tab, and asks
+The overlay does not consult the sync switch in the app's settings, and asks
 for photo permission on its own account. Wanting to see where your photographs
 were taken and wanting those places to become part of your map are two different
 decisions, and only the second one is what that switch means.
@@ -8689,7 +8690,7 @@ that the next person to sign in on the device would be shown the last one's map
 for as long as their own request took to arrive.
 
 **iOS gets all of it for one line of Info.plist, and got none of it for a long
-time without.** The Map tab is a `WKWebView` with `websiteDataStore =
+time without.** The app is a `WKWebView` with `websiteDataStore =
 .default()`, and WebKit has supported service workers in a web view since iOS 14
 — registration and Cache Storage included, persisted by that store across
 launches. So the shell, the gazetteer and the last view of the map are cached by
@@ -8729,8 +8730,8 @@ Three consequences shape how `sporra-ios/Sporra/AppBoundDomains.swift` uses it:
 - **The list is fixed at build time**, so a server address typed into Settings
   afterwards cannot get into it. For an app compiled by the person who runs the
   server that is a fair trade, but it means the address lives in two places —
-  and the Settings tab now says so when they disagree, rather than leaving it to
-  be discovered at an airport.
+  add it in Info.plist and rebuild, rather than discovering the gap at an
+  airport.
 - **The flag is set only when the address is actually declared.** With it on the
   web view may navigate nowhere else, so a build whose plist does not name your
   server would refuse to open your server — much worse than having no offline
@@ -8777,9 +8778,8 @@ moving (the Detail buttons, a dataset arriving), and a bar refreshed only on
 `move` would sit there describing the level before last.
 
 `pointer-events: none`, because it is a reading and not a control: it must never
-be the thing a press lands on. Inside the iOS app it clears the tab bar the way
-the button cluster does — the safe area ends exactly where the tab bar begins,
-so `--safe-b` alone puts it against the bar rather than above it.
+be the thing a press lands on. Inside the iOS app it clears the home indicator
+the way the button cluster does — `--safe-b` is the inset the host measured.
 
 **The bottom-left corner is a column, not a corner.** Three things want it: the
 map library's wordmark (bottom-left because Mapbox says so, and a condition of
@@ -9117,8 +9117,8 @@ Nothing is lost by refusing. The fix queue only drops a batch the server has
 taken (see `flush` in SyncClient.swift), unsent workouts are simply never marked
 as taken, and the photo library is re-read from scratch on every scan — so it
 all arrives on the next push, once the admin is back in their own account. The
-message is phrased for the phone's Settings tab, which is where a 409 surfaces:
-*"You are viewing another account on this device. Leave it on the Map tab before
+message is phrased for the phone's Settings, which is where a 409 surfaces:
+*"You are viewing another account on this device. Go back to the map before
 this phone syncs again."* Not a 401, which would tell them to sign in — the one
 thing that would not help.
 

@@ -12,7 +12,7 @@
 // not installed, because localhost is one origin and a laptop that once ran
 // `npm start` would otherwise keep it forever.
 //
-// **iOS gets this for free.** The Map tab of the iOS app is a `WKWebView` with
+// **iOS gets this for free.** The iOS app is a `WKWebView` with
 // `websiteDataStore = .default()`, and WebKit has supported service workers in
 // a web view since iOS 14 — registration, Cache Storage and all, persisted
 // across launches by that store. So the app's shell, its 3 MB of gazetteer and

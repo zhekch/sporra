@@ -5,8 +5,8 @@ import Foundation
 
 /// Whether the address you typed is a Sporra server, and whether it is up.
 ///
-/// The Settings tab used to answer that only by implication: you typed an
-/// address, went to the Map tab, and either the site appeared or a web view sat
+/// Settings used to answer that only by implication: you typed an
+/// address, went back to the map, and either the site appeared or a web view sat
 /// there being white. Everything in between — a typo, a server that is down, a
 /// tailnet you are not on, something else answering on that port — looked the
 /// same from here.

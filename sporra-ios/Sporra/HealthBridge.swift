@@ -8,7 +8,7 @@ import WebKit
 /// asked by *asking it a question* — see ``PhotoBridge`` — and a position by the
 /// ordinary `navigator.geolocation`. Health was the odd one out. There is no way
 /// to raise HealthKit's sheet from a web page, so the card had to end in
-/// directions: *go to the Settings tab and turn on Workouts*. Which works, and
+/// directions: *open App settings and turn on Workouts*. Which works, and
 /// is a worse thing to be told than to simply be asked.
 ///
 /// This is that gap closed. It carries no data whatsoever — the workouts
@@ -20,7 +20,7 @@ import WebKit
 ///
 /// There is no "ask for permission" call to make. ``HealthSync/apply()`` is
 /// where `requestAuthorization` lives, and it runs off the `didSet` on
-/// ``TrackingSettings/syncWorkouts``. So this sets the setting the Settings tab
+/// ``TrackingSettings/syncWorkouts``. So this sets the setting Settings
 /// would have set, and iOS puts its sheet in front of the result — which means
 /// the page and the switch cannot disagree afterwards, because there is only one
 /// of them.
@@ -32,7 +32,7 @@ import WebKit
 /// find out is to ask for data and see what arrives — which is why
 /// ``HealthSync/apply()`` has nothing to branch on either. So a `true` here says
 /// the sheet was raised and the sync is on, and a refusal shows up later as a
-/// sync that finds no workouts. The Settings tab says as much; so does the card.
+/// sync that finds no workouts. Settings says as much; so does the card.
 ///
 /// ## Not on the Mac
 ///

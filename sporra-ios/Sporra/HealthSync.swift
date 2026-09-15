@@ -132,7 +132,7 @@ final class HealthSync {
             // the same whether you said yes or no, and the only way to find out
             // is to ask for data and see. So there is nothing to branch on here
             // — a refusal shows up as a sync that finds no workouts, which is
-            // what the Settings tab says.
+            // what Settings says.
             Task { @MainActor in
                 self?.watch()
                 await self?.sync()

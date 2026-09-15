@@ -1,10 +1,11 @@
 # Sporra for iOS
 
-**The phone hosts the web app rather than replacing it.** The Map tab is the
+**The phone hosts the web app rather than replacing it.** The map is the
 site itself, unmodified — its map, its menu, its import dialogs, its sync
-connectors, its login. The Settings tab is the little this app knows that the
+connectors, its login. Settings is the little this app knows that the
 site does not: which server to open, how this phone records where it has been,
-and how to forget both.
+and how to forget both. Open it from the site — Settings → Personal →
+**App settings** — or, before there is a server, from the setup card.
 
 That second one is the reason to install this rather than add the site to your
 home screen. Everything else here a browser could do; **recording your location
@@ -116,9 +117,10 @@ sporra-ios/
   Sporra.entitlements     reading Apple Health, and being woken for it
   Sporra/                 the app itself — anything here is compiled, automatically
     SporraApp.swift       the entry point (@main), and the background-launch hook
-    ContentView.swift       the two tabs
-    WebPanel.swift          the web view that is the Map tab
+    ContentView.swift       the map, and the door into Settings
+    WebPanel.swift          the web view that is the map
     SettingsView.swift      the app's own settings
+    SettingsBridge.swift    the page asking this app to open them
     AppSettings.swift       the server address, and signing out
     TrackingSettings.swift  how often to record, and this phone's identity
     LocationLogger.swift    CoreLocation, with the screen off
@@ -132,8 +134,6 @@ sporra-ios/
     SaveBridge.swift        putting an exported picture in the photo library
     FixQueue.swift          what has been recorded but not yet accepted
     SyncClient.swift        the uploads, and the session they borrow
-    Notifications.swift     the permission, and the only things it ever says
-    FlightWatch.swift       ten minutes at an airport is a flight
   SporraCore/             a local Swift package: the maths, with tests
     Sources/SporraCore/
       HexGrid.swift         the hex lattice — a port of src/hexgrid.js
@@ -285,25 +285,31 @@ Swift's `.rounded()` rounds a half away from zero and gives `-3`. They disagree
 only exactly on a cell boundary, which is precisely where a map gets clicked.
 `HexGrid.jsRound` reproduces the JavaScript and has a test of its own.
 
-## How the two tabs divide the work
+## How the map and Settings divide the work
 
-**Map** is the web app. All of it, unmodified — the map, the menu, editing, the
-import dialogs, the sync connectors, statistics, backups, and its own login.
+**The map** is the web app. All of it, unmodified — the map, the menu, editing,
+the import dialogs, the sync connectors, statistics, backups, and its own login.
 Nothing is injected and nothing is hidden, which is the point: a bug here is a
 bug there, and a fix there is a fix here.
 
 **Settings** is the little this app knows that the site does not — which server
-to open, how this phone records where it has been, and how to forget both. Under
-the address is whether that address is actually a Sporra server and whether it
-is up: `GET /api/health` answers before there is a session, and names itself, so
-"nothing there", "something there that is not this" and "signed out" are three
+to open, how this phone records where it has been, and how to forget both. It
+is a sheet over the map, opened from the site (Settings → Personal →
+**App settings**) over `window.webkit.messageHandlers.sporraSettings`, the same
+kind of message the photo overlay uses. In a browser that handler is not there
+and the row is left out of Personal. Before there is a server to load, a setup
+card offers the same door, because there is no page to put the row on yet.
+
+Under the address is whether that address is actually a Sporra server and whether
+it is up: `GET /api/health` answers before there is a session, and names itself,
+so "nothing there", "something there that is not this" and "signed out" are three
 different sentences in three different colours instead of one white rectangle on
-the Map tab.
-Everything else about your *map* stays on the Map tab, where a laptop finds it in
+the map.
+Everything else about your *map* stays on the map, where a laptop finds it in
 the same place. Duplicating any of it natively would mean two screens that have
 to agree.
 
-The tracking settings look like they belong on the Map tab with the other sync
+The tracking settings look like they belong on the site with the other sync
 connectors, and they would, except that **a schedule stored on the server could
 not wake a sleeping phone**. The timer runs here or it does not run. What the
 server does keep is the result: Sync → *Your phone* on a laptop lists this
@@ -322,8 +328,9 @@ the **first paint**. A class added after the page boots means watching the
 buttons jump.
 
 It marks a viewport, not an account: nothing about the data differs. What it
-buys is the handful of rules at the end of `src/style.css` — the button cluster
-clearing the tab bar, and the attribution moving out from under the status bar.
+buys is the handful of rules at the end of `src/style.css` — the attribution
+moving out from under the status bar, and the pencil clearing the home
+indicator when the phone is held sideways.
 
 **Neither side derives anything that needs a gazetteer.** Trips and coverage are
 worked out once by the server (`server/derive.js`) and both clients render what
@@ -334,9 +341,9 @@ over the same server-derived trips.
 
 ### Edge to edge, without losing the buttons
 
-The map runs under the status bar and under the tab bar, which is how a map
-should look. The site's own buttons — geolocate, menu, pencil — stack in the
-bottom-right corner on a phone, so drawing over that corner would bury them.
+The map runs under the status bar, which is how a map should look. The site's
+own buttons — geolocate, menu, pencil — stack in the bottom-right corner on a
+phone, so drawing over that corner would bury them.
 
 They stay put because the app **hands the page its own geometry**:
 `WebViewController.pushSafeArea()` sets `--safe-t/r/b/l` on the root element from
@@ -345,8 +352,8 @@ them.
 
 **`env(safe-area-inset-*)` does not work here, and it took measuring to find
 out.** With the map drawn edge to edge the controller's
-`view.safeAreaInsets.bottom` is a correct **83** — tab bar plus home indicator —
-and the scroll view adjusts by the same 83, and the page still read
+`view.safeAreaInsets.bottom` is a correct reading of the home indicator, and the
+scroll view adjusts by the same amount, and the page still read
 `env(safe-area-inset-bottom)` as `0px`. Every button stayed in the corner it was
 meant to move out of, `viewport-fit=cover` was present, and nothing on the Swift
 side looked wrong. A `#if DEBUG` readback in `didFinish` prints what the page
@@ -357,13 +364,9 @@ browser uses. So the same rules give mobile Safari its notch and home-indicator
 handling — which it never had — and the app simply overrides them with numbers
 it can measure.
 
-Measured after the change: `--safe-b` is `83px` and the button cluster's computed
-`bottom` is `105px`, clear of the tab bar.
-
-**The tab bar is pinned to dark.** The site is dark — its login card, its menu,
-three of its four basemaps — and a tab bar that followed the system into light
-mode put a white strip under all of it, which read as a bar belonging to some
-other app.
+**The settings sheet is pinned to dark.** The site is dark — its login card, its
+menu, three of its four basemaps — and a sheet that followed the system into
+light mode would put a white form over all of it.
 
 ### Location, for the page's own button
 
@@ -415,10 +418,10 @@ to keep in step with it.
 The uploader has none either — **it borrows that one**. After every page load the
 web view's cookies are copied into `HTTPCookieStorage`, which is the jar
 `URLSession` reaches for unasked, and that is the whole of the app's
-authentication. When the session ends, a 401 says so on the Settings tab; nothing
-native can mend it, and signing in on the Map tab does.
+authentication. When the session ends, a 401 says so in Settings; nothing
+native can mend it, and signing in on the map does.
 
-Sign out from the Settings tab. It now throws away four things rather than one:
+Sign out from Settings. It now throws away four things rather than one:
 the web view's cookies and storage, the borrowed copy of the session, anything
 recorded but not yet sent, and how far Health had been read. Leaving any of them
 would mean a signed-out phone that went on uploading, or queued fixes landing in
@@ -431,7 +434,7 @@ pick how often.
 
 | | |
 | --- | --- |
-| **Off** | Nothing. The Map tab still works, and so does its locate button |
+| **Off** | Nothing. The map still works, and so does its locate button |
 | **Only when I go somewhere** | Significant-change monitoring alone. Roughly half a kilometre, whenever iOS feels like it, off radios the phone is already listening to — no measurable battery cost |
 | **Every hour** … **Every minute** | Standard updates, throttled to the interval you picked |
 
@@ -495,7 +498,7 @@ Asking for Always outright is allowed and is a worse question: iOS shows one
 dialog with the strongest option in it and people say no. The two-step ask
 arrives after the app has visibly done something with location.
 
-If the answer ends up being "While Using the App", the Settings tab says so
+If the answer ends up being "While Using the App", Settings says so
 rather than leaving a switch on over silence.
 
 ## Workouts from Apple Health
@@ -569,8 +572,7 @@ that works every day until the first time it is opened with no network, when it
 shows an empty rectangle. Add your host (and `strava.com`, since connecting
 Strava navigates the whole page to its sign-in), rebuild, and the next launch
 with a network builds the offline copy. The plist ships with the block commented
-out and the instructions in it; the Settings tab tells you when the address you
-typed is not covered. See `AppBoundDomains.swift`.
+out and the instructions in it. See `AppBoundDomains.swift`.
 
 macOS has no such rule, which is worth knowing before testing anything about
 offline on a Mac and believing it applies here — it does not, and for a long
@@ -626,7 +628,7 @@ screen would tell you.
 
 ### And seeing them, which is the other half
 
-Map tab → the layers menu → **Photos**. A point wherever you have taken one,
+The layers menu → **Photos**. A point wherever you have taken one,
 gathered into a counted group where they pile up, and the picture itself when you
 tap it. A tap on a group opens the group — all of it, however big — rather than
 zooming in: photographs re-cluster as fast as you can separate them, and zooming
@@ -679,66 +681,6 @@ that it does not come back.** It shipped once and a real phone settled it: iOS
 has no public way to open a particular asset, so the button opened the Photos app
 at whatever was last on screen — a control that lies about what it does, at
 exactly the moment you pressed it because you wanted that photograph.
-
-## Notifications
-
-Settings → **Notifications** → *Have a good flight*.
-
-Off by default, and the permission is asked for from that switch rather than at
-launch. An app that asks on first run is asking you to trust a promise; this asks
-next to a sentence saying what it will send, after you have said you want it.
-
-**Everything here is local.** There is no push server, no APNs certificate and no
-device token leaving the phone. Every notification is scheduled by this phone
-from something this phone already knew, so it works with the server unreachable —
-which matters, because the one thing this app is *for* is knowing where it is
-with the screen off.
-
-### Ten minutes at an airport is a flight
-
-The obvious implementation waits for a second fix ten minutes after the first and
-compares the two. It does not work, and the reason is the whole of
-`FlightWatch.swift`: **at an airport you are standing still.** On the *only when I
-go somewhere* cadence there is no standard location service running at all —
-significant-change monitoring is fed by the cell radio noticing you have moved
-half a kilometre, and a person sitting at gate B47 has not. The second fix
-arrives when you land.
-
-So the ten minutes are a `UNTimeIntervalNotificationTrigger`. The first fix inside
-an airport schedules a notification for ten minutes' time; any later fix outside
-one cancels it before it fires. What that amounts to is *you arrived at an airport
-ten minutes ago and nothing since has said you left* — the same claim, reached
-without needing the phone awake in between.
-
-The case it gets wrong in the direction of speaking is leaving within those ten
-minutes with no further fix: drive past a terminal on a coarse cadence and you may
-be wished a happy flight. Ten minutes makes that rare, and the cost is a friendly
-sentence rather than a wrong map.
-
-### The airport list stays on the server
-
-`GET /api/airport?lat=&lng=` (`server/airport-at.js`). The dataset is 5,272
-airports and this phone has no copy of it; bundling one would mean a generated
-resource in the Xcode project kept in step with
-`sporra-webserver/src/airports-airline.json` by hand, going stale silently. The
-phone asks, and only when a fix has moved 400 m from wherever it last asked —
-otherwise a one-minute cadence would ask sixty times an hour to be told the same
-thing. A phone at an airport has a network, because that is what an airport is;
-with no network nothing is scheduled, and a missing notification costs nothing.
-
-**Only airports with scheduled service count.** The other 44,000 entries in the
-dataset are airfields, helipads and closed strips — a flying club on the edge of
-town is somewhere you can legitimately spend an afternoon, and *have a good
-flight* is a strange thing to be told while mowing a runway. A wrong notification
-is worse than a missing one here, because the missing one costs nothing and the
-wrong one is the app being odd at you.
-
-The radius is generous — 3.2 km for a large field, 1.8 for a medium one — because
-a record is one reference point and an airport is not a point. Frankfurt is four
-kilometres across and Dallas/Fort Worth is seven, so a tight radius answers "no"
-from inside the terminal, which is the only place the question is ever asked
-from. Then a twelve-hour cooldown per airport, long enough to cover a flight and
-its connection.
 
 ## What is not here yet
 

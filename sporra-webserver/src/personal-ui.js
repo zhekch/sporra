@@ -1,7 +1,8 @@
 // Two of the Settings dialog's panes: **Personal** — where the map is measured
-// from, what a clock says, whether a tap edits, whether it snows — and
-// **Other**, which is the app rather than the map: get a fresh copy, see the
-// introduction again, close the account.
+// from, what a clock says, whether a tap edits, whether it snows, and (inside
+// the iOS app only) the door into the phone's own settings — and **Other**,
+// which is the app rather than the map: get a fresh copy, see the introduction
+// again, close the account.
 //
 // One module for two panes because they are one column split in half. This was
 // a dialog of its own until Settings became tabbed (see src/settings-ui.js);
@@ -15,6 +16,13 @@
 
 import { clockSource, localIs24Hour } from './clock.js';
 import { t } from './i18n.js';
+
+// The handler's name, and the whole of how this detects the iOS app. Changing
+// it means changing `SettingsBridge.name` in the Swift. A browser has no such
+// channel, and the row is left out of Personal rather than shown as a door
+// that opens nothing — the same bargain `photoHost()` strikes in src/photos.js.
+const APP_SETTINGS = 'sporraSettings';
+const appSettingsHost = () => globalThis.webkit?.messageHandlers?.[APP_SETTINGS] ?? null;
 
 /**
  * @param {object} opts
@@ -67,6 +75,7 @@ export function mountPersonal({
   const whatsNewSel = $('settings-whats-new');
   const whatsNewNote = $('settings-whats-new-note');
   const localeSel = $('settings-locale');
+  const appBtn = $('settings-app');
 
   // Filled once from the registry — the list of languages cannot change while
   // the dialog is open, and rebuilding it on every `draw()` would throw away the
@@ -88,6 +97,11 @@ export function mountPersonal({
   // from the picker this opens, and the answer has to be current when you come
   // back to it.
   function draw() {
+    // Shown only when the host can actually open the screen. Asked on every
+    // visit rather than once at mount: an older app that lacks the handler
+    // should keep the row hidden even if the page was served with
+    // `data-client="ios"`.
+    if (appBtn) appBtn.hidden = !appSettingsHost();
     const set = home?.();
     homeName.textContent = set?.name || 'Worked out from the cells you visit most';
     homeSet.textContent = set ? 'Change' : 'Set home';
@@ -206,6 +220,17 @@ export function mountPersonal({
   // src/i18n.js), so there is nothing left to redraw and the dialog is about to
   // be rebuilt from scratch in the language just chosen.
   localeSel.addEventListener('change', () => onLocale?.(localeSel.value));
+
+  // The native settings screen, in front of this dialog. The dialog stays
+  // open behind it: dismissing the sheet lands you back on Personal, which is
+  // where you pressed, rather than dumping you on the map.
+  appBtn?.addEventListener('click', () => {
+    const host = appSettingsHost();
+    if (!host) return;
+    host.postMessage({ ask: 'open' }).catch(() => {
+      /* an old app that advertised the handler and then refused it */
+    });
+  });
 
   // The introduction, on request. The dialog gets out of the way completely
   // rather than leaving itself open behind a full-screen takeover — the same

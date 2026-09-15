@@ -8,9 +8,10 @@ import SwiftUI
 
 /// One window with the map in it, and a Settings window behind ⌘,.
 ///
-/// The iPhone app puts those two on a tab bar, which is what a phone has. A Mac
-/// has a menu bar, so the second one lives where every Mac app keeps its
-/// settings and is reachable from the same keystroke as everyone else's.
+/// The iPhone app opens the same screen from the site — Personal ▸ App
+/// settings — because a phone has no menu bar. A Mac has one, so the second
+/// window lives where every Mac app keeps its settings and is reachable from
+/// the same keystroke as everyone else's.
 ///
 /// `Window` rather than `WindowGroup`, and that is not cosmetic: a group lets
 /// ⌘N open a second copy, and a second copy here means a second `WKWebView`,

@@ -38,10 +38,9 @@ final class WebViewController: NSViewController, WKUIDelegate, WKNavigationDeleg
     /// this app's traffic from a browser's.
     ///
     /// **Deliberately not the iPhone app's tag.** `server/index.js` keys a
-    /// layout on `SporraiOS` (`IOS_CLIENT`) — the button cluster clearing a
-    /// tab bar, the attribution moving out from under a status bar. A Mac window
-    /// has neither, so this wants the ordinary desktop page, and the way to ask
-    /// for it is to not claim to be a phone.
+    /// layout on `SporraiOS` (`IOS_CLIENT`) — the attribution moving out from
+    /// under a status bar. A Mac window has neither, so this wants the ordinary
+    /// desktop page, and the way to ask for it is to not claim to be a phone.
     static let userAgentTag = "SporraMac"
 
     private var webView: WKWebView!

@@ -21,7 +21,7 @@ import WebKit
 /// of thing that looks like a networking bug for a week.
 ///
 /// When the session does end, nothing here can mend it: a 401 is reported up to
-/// the Settings tab, which says to open the Map tab and sign in.
+/// Settings, which says to sign in on the map.
 @MainActor
 final class SyncClient {
 
@@ -62,7 +62,7 @@ final class SyncClient {
         var errorDescription: String? {
             switch self {
             case .noServer: return "No server set."
-            case .signedOut: return "Signed out. Open the Map tab and sign in."
+            case .signedOut: return "Signed out. Sign in on the map."
             case .http(let code, let message): return message ?? "The server answered \(code)."
             }
         }
@@ -72,7 +72,7 @@ final class SyncClient {
 
     /// Push whatever is queued, oldest first, until it is gone.
     ///
-    /// `force` skips the rate gap — the Settings tab's own button, and the
+    /// `force` skips the rate gap — Settings' own button, and the
     /// moment the app goes to the background, are both worth a push regardless
     /// of when the last one was.
     func flush(force: Bool = false) async {
@@ -183,36 +183,6 @@ final class SyncClient {
         TrackingSettings.shared.status.workoutsSent = 0
     }
 
-    // MARK: - Where am I standing
-
-    /// One airport, as much of it as is worth putting in a sentence.
-    struct Airport {
-        let name: String
-        let city: String
-        /// What identifies it for the cooldown — the ICAO code, which every
-        /// entry has, falling back to the name for the handful that do not.
-        let key: String
-    }
-
-    /// Which airport this point is standing in, or nil for none.
-    ///
-    /// The dataset lives on the server (`server/airport-at.js`) because this
-    /// phone has no copy of 5,272 airports and should not carry one. Asked by
-    /// `FlightWatch`, and only when a fix has moved far enough to have changed
-    /// the answer.
-    func airport(lat: Double, lng: Double) async throws -> Airport? {
-        var items = URLComponents()
-        items.queryItems = [
-            URLQueryItem(name: "lat", value: String(lat)),
-            URLQueryItem(name: "lng", value: String(lng)),
-        ]
-        let reply = try await get("/api/airport?\(items.percentEncodedQuery ?? "")")
-        guard let found = reply["airport"] as? [String: Any] else { return nil }
-        let name = (found["name"] as? String) ?? ""
-        let icao = (found["icao"] as? String) ?? ""
-        return Airport(name: name, city: (found["city"] as? String) ?? "", key: icao.isEmpty ? name : icao)
-    }
-
     // MARK: - The request itself
 
     private func get(_ path: String) async throws -> [String: Any] {
@@ -241,7 +211,7 @@ final class SyncClient {
 
     /// Send it, and turn the two answers that mean something into errors that
     /// say so. Shared by `get` and `post` because a 401 has to be recognised
-    /// identically either way — it is the one status the Settings tab has words
+    /// identically either way — it is the one status Settings has words
     /// for, and the one nothing here can mend.
     private func run(_ request: URLRequest) async throws -> [String: Any] {
         let (data, response) = try await session.data(for: request)

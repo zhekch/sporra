@@ -11,9 +11,9 @@ import WebKit
 /// phone hosts them rather than replacing them.
 ///
 /// Nothing is restyled and nothing is hidden. The one thing the host tells the
-/// page is its own geometry — how much of each edge the status bar and the tab
-/// bar are standing on — because that is a fact about the window which the page
-/// has no other way to learn. See ``WebViewController/pushSafeArea()``.
+/// page is its own geometry — how much of each edge the status bar and the home
+/// indicator are standing on — because that is a fact about the window which
+/// the page has no other way to learn. See ``WebViewController/pushSafeArea()``.
 struct WebPanel: UIViewControllerRepresentable {
 
     let url: URL
@@ -104,7 +104,7 @@ final class WebViewController: UIViewController, WKUIDelegate, WKNavigationDeleg
         // ARCHITECTURE.md.
         configuration.websiteDataStore = .default()
         configuration.allowsInlineMediaPlayback = true
-        // The one thing the page can ask this app *for*, rather than be told.
+        // What the page can ask this app *for*, rather than be told.
         //
         // Everything else the host offers is pushed at the page (the safe area)
         // or happens beside it (the uploader). The photo overlay is the other
@@ -131,6 +131,15 @@ final class WebViewController: UIViewController, WKUIDelegate, WKNavigationDeleg
         // `HealthBridge` — it moves no workouts, only the question.
         configuration.userContentController.addScriptMessageHandler(
             HealthBridge.shared, contentWorld: .page, name: HealthBridge.name
+        )
+        // And the door back into this app's own settings. The page cannot name
+        // the server it is being hosted by, or wake a sleeping phone, so those
+        // live here; Personal ▸ App settings asks over this channel and
+        // `SettingsBridge` puts the screen in front of the map. Its absence in
+        // a browser is what takes the row out of Personal — see
+        // `appSettingsHost()` in src/personal-ui.js.
+        configuration.userContentController.addScriptMessageHandler(
+            SettingsBridge.shared, contentWorld: .page, name: SettingsBridge.name
         )
         // How the server tells this app apart from a browser: it lands at the
         // end of the User-Agent, so `server/index.js` can key a layout on it.
@@ -276,10 +285,10 @@ final class WebViewController: UIViewController, WKUIDelegate, WKNavigationDeleg
     /// This exists because `env(safe-area-inset-*)` does not work here, and it
     /// took measuring to establish rather than reasoning: with the map drawn
     /// edge to edge this controller's `view.safeAreaInsets.bottom` is a correct
-    /// **83** — the tab bar and the home indicator — and the scroll view adjusts
-    /// by the same 83, and yet the page reads `env(safe-area-inset-bottom)` as
-    /// `0px`. Every button therefore stayed in the corner it was meant to move
-    /// out of, and nothing in the Swift said anything was wrong.
+    /// reading of the home indicator, and the scroll view adjusts by the same
+    /// amount, and yet the page reads `env(safe-area-inset-bottom)` as `0px`.
+    /// Every button therefore stayed in the corner it was meant to move out of,
+    /// and nothing in the Swift said anything was wrong.
     ///
     /// So the number is sent rather than inferred. `:root` in `src/style.css`
     /// still defaults these to `env()`, which is what a real browser uses and

@@ -37,7 +37,7 @@ final class LocationLogger: NSObject, ObservableObject, CLLocationManagerDelegat
 
     static let shared = LocationLogger()
 
-    /// What iOS currently allows, so the Settings tab can say why nothing is
+    /// What iOS currently allows, so Settings can say why nothing is
     /// arriving instead of leaving a switch on over silence.
     @Published private(set) var authorization: CLAuthorizationStatus = .notDetermined
 
@@ -162,10 +162,6 @@ final class LocationLogger: NSObject, ObservableObject, CLLocationManagerDelegat
                 lng: location.coordinate.longitude,
                 t: Int(stamp.timeIntervalSince1970),
             ))
-            // Offered every fix the app has decided to believe, and cheap on
-            // nearly all of them — it does nothing until you have moved a few
-            // hundred metres from wherever it last asked about.
-            FlightWatch.shared.note(location)
             took = true
         }
 
@@ -183,7 +179,7 @@ final class LocationLogger: NSObject, ObservableObject, CLLocationManagerDelegat
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         // `kCLErrorLocationUnknown` is ordinary — a phone in a lift, a cold
         // start indoors — and iOS keeps trying on its own. Anything else is
-        // worth showing, because the alternative is a Settings tab that says
+        // worth showing, because the alternative is a Settings screen that says
         // tracking is on while nothing arrives.
         guard (error as? CLError)?.code != .locationUnknown else { return }
         TrackingSettings.shared.status.lastError = error.localizedDescription

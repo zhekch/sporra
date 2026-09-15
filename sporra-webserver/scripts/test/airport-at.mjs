@@ -1,14 +1,12 @@
 // Standing in an airport, against the real dataset.
 //
-// This is the question behind the phone's happy-flight notification, and the
-// two ways it goes wrong are opposites:
+// The two ways this goes wrong are opposites:
 //
 //   - too tight a radius and it answers "no" from inside the terminal, which is
 //     the only place anybody ever asks it from. A record is the airport
 //     reference point and an airport is kilometres across.
-//   - too loose, or drawn from the wrong group, and it wishes somebody a happy
-//     flight in their own kitchen. Every wrong answer here is the app being odd
-//     at a person, which is worse than a missing one.
+//   - too loose, or drawn from the wrong group, and a kitchen a few kilometres
+//     from a regional field counts as being at an airport.
 //
 // So the cases below are real terminals, real city centres a few kilometres from
 // real airports, and the seam — because Anadyr and Nadi are both airports with
@@ -97,7 +95,7 @@ console.log('\nRubbish in');
 console.log('\nWhat comes back');
 {
   const zrh = at(47.4508, 8.5617);
-  check(typeof zrh.name === 'string' && zrh.name.length > 0, 'an airport has a name to put in a notification');
+  check(typeof zrh.name === 'string' && zrh.name.length > 0, 'an airport has a name');
   check(typeof zrh.km === 'number' && zrh.km >= 0, 'and how far away it was found to be');
   check(zrh.km < 4, 'which is inside the radius it was matched on', String(zrh.km));
   check(!('scheduled' in zrh), 'and nothing the caller has no use for');

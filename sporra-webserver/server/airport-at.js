@@ -1,11 +1,10 @@
 // Which airport a point is standing in, if any.
 //
-// This exists for one caller: the phone, which wishes you a happy flight after
-// you have been at an airport for ten minutes (`sporra-ios/Sporra/
-// FlightWatch.swift`). The phone cannot answer the question itself — the airport
-// dataset is 5,272 records it has no copy of, and bundling one would mean a
-// generated resource in the Xcode project that goes stale silently. It can ask,
-// and at an airport it has a network by definition.
+// Which airport a coordinate is standing in. The dataset is 5,272 records a
+// client should not have to carry: bundling one would mean a generated resource
+// that goes stale silently. The phone used to ask this to wish you a good
+// flight; the endpoint stays because the question is still a question, and a
+// phone at an airport has a network by definition.
 //
 // **Only airports with scheduled service.** `airports-airline.json` is already
 // the narrowest of the four groups, and this narrows it again to the ones an

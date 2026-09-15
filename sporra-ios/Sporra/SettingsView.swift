@@ -5,9 +5,9 @@ import UIKit
 /// The app's own settings, which are few on purpose.
 ///
 /// Almost everything about your *map* — importing, syncing, backups, colours,
-/// home, statistics — lives in the web app's own menu on the Map tab, where it
-/// already works and where a laptop finds it in the same place. Duplicating any
-/// of it here would mean two screens that have to agree.
+/// home, statistics — lives in the web app's own menu, where it already works
+/// and where a laptop finds it in the same place. Duplicating any of it here
+/// would mean two screens that have to agree.
 ///
 /// What is left is the handful of things only this app can answer: which server
 /// to open, how this phone records where it has been, and how to forget both.
@@ -18,13 +18,17 @@ import UIKit
 /// sleeping phone, so the timer runs here or it does not run. What the server
 /// *does* keep is the result: open the site on a laptop and this phone is listed
 /// under Import & sync with what it has sent and when it last spoke.
+///
+/// Presented as a sheet over the map, from Personal ▸ App settings on the site
+/// — or from the setup card, before there is a site to put that row on. See
+/// ``SettingsBridge``.
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var tracking: TrackingSettings
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var logger = LocationLogger.shared
     @StateObject private var photos = PhotoSync.shared
     @StateObject private var server = ServerCheck.shared
-    @StateObject private var notifications = Notifications.shared
 
     @State private var draft = ""
     @State private var confirmingReread = false
@@ -40,7 +44,6 @@ struct SettingsView: View {
                     if tracking.isTracking { statusSection }
                     healthSection
                     photosSection
-                    notificationsSection
 
                     technicalSection
                 }
@@ -51,7 +54,15 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
         }
+        // The map behind this sheet is dark. A form that followed the system
+        // into light mode would read as a page belonging to some other app.
+        .preferredColorScheme(.dark)
         .onAppear {
             draft = settings.serverURL
             server.check()
@@ -102,7 +113,6 @@ struct SettingsView: View {
                     .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             } else if settings.isConfigured {
                 connectionRow
-                offlineRow
             }
         } header: {
             Text("Server")
@@ -117,7 +127,7 @@ struct SettingsView: View {
     /// thing you just typed. It used to be inferable only from the sync errors
     /// further down, which are about *uploading* — a phone with nothing queued
     /// has nothing to fail, so a wrong address said nothing at all until you
-    /// went to the Map tab and found a white rectangle.
+    /// went back to the map and found a white rectangle.
     ///
     /// Three colours for three different mistakes: green for a Sporra server,
     /// orange for something that answered and is not one (a router, a NAS, the
@@ -151,35 +161,6 @@ struct SettingsView: View {
         case .notSporra: return .orange
         case .http, .unreachable: return .red
         case .unset, .checking: return .secondary
-        }
-    }
-
-    /// Whether this build will keep an offline copy of the address above.
-    ///
-    /// It is here, under the field, because it is a fact about *that address*
-    /// and because the alternative is finding out on a plane. iOS hands a web
-    /// view service workers and Cache Storage only for the domains in
-    /// `WKAppBoundDomains`, and an app pointed anywhere else opens on nothing
-    /// the first time it has no network — with no error anywhere to connect the
-    /// two. See ``AppBoundDomains``.
-    ///
-    /// Only shown when the answer is no. A row that says "yes, as expected" on
-    /// every launch is a row people stop reading, and this one has something to
-    /// say only when there is something to do about it.
-    @ViewBuilder
-    private var offlineRow: some View {
-        if let host = settings.baseURL?.host, !AppBoundDomains.covers(settings.baseURL) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Image(systemName: "wifi.slash")
-                    Text("No offline copy")
-                }
-                .font(.footnote)
-                .foregroundStyle(.orange)
-                Text("iOS keeps one only for declared domains. Add \(host) to WKAppBoundDomains in Info.plist and rebuild.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
     }
 
@@ -270,7 +251,7 @@ struct SettingsView: View {
             .disabled(syncing)
 
             if tracking.status.signedOut {
-                Text("Signed out. Open the Map tab and sign in to sync all the data.")
+                Text("Signed out. Sign in on the map to sync all the data.")
                     .font(.footnote)
                     .foregroundStyle(.orange)
             } 
@@ -366,65 +347,6 @@ struct SettingsView: View {
             Text("Photos")
         } footer: {
             Text("Import the geolocation of every photo from your library. Also allows to view your photos on the map from the phone.")
-        }
-    }
-
-    // MARK: - The only things this app says when it is not on screen
-    //
-    // A section rather than a tab of its own. A third tab bar item for one
-    // switch would make the app look like it does three things, and what it
-    // actually does is host a map and know where it is — this is a small part of
-    // the second. It sits after Photos because it is about what the app *sends
-    // you*, and everything above is about what it collects.
-
-    private var notificationsSection: some View {
-        Section {
-            Toggle("Have a good flight", isOn: $tracking.notifyFlights)
-                .disabled(notifications.authorization == .denied)
-
-            // Asked from here, next to the switch that wants it, rather than at
-            // launch. iOS shows its dialog once and only for `.notDetermined`,
-            // so once it has been refused the only way back is the Settings app
-            // — and a button that silently does nothing is worse than a link
-            // that admits where the answer lives.
-            if notifications.authorization == .denied {
-                Button {
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url)
-                    }
-                } label: {
-                    Label("Notifications are turned off for Sporra. Open Settings to allow them.",
-                          systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                }
-            } else if tracking.notifyFlights && !notifications.isAllowed {
-                Button("Allow notifications") {
-                    Task { await notifications.request() }
-                }
-                .font(.footnote)
-            }
-
-            if tracking.notifyFlights && !tracking.isTracking {
-                // The switch is real and it will work; it just cannot work yet.
-                // Saying so beats a notification that never comes.
-                Text("Turn Location on above, or this has nothing to notice.")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-            }
-        } header: {
-            Text("Notifications")
-        } footer: {
-            Text("After ten minutes at an airport, a note wishing you a good flight. Nothing is sent from a server — this phone works it out and says it to itself.")
-        }
-        .task { await notifications.refresh() }
-        // Permission can be changed in the Settings app while this app is in the
-        // background, so the answer shown here is stale exactly when somebody
-        // has just gone and changed it.
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIApplication.willEnterForegroundNotification
-        )) { _ in
-            Task { await notifications.refresh() }
         }
     }
 

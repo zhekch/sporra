@@ -6,7 +6,7 @@
          notch or a home indicator — and, more to the point, it is what makes
          `env(safe-area-inset-*)` report anything at all. Without it those are
          all zero, the chrome in style.css sits exactly where it always did, and
-         inside the iOS app it sits under the tab bar. -->
+         inside the iOS app it sits under the home indicator. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <link rel="icon" href="data:," />
     <title>Sporra</title>
@@ -754,6 +754,17 @@
                    away on the right with nothing in between. -->
               <div class="pane-body settings-cols two">
                 <div class="settings-col">
+                <!-- iOS only. Hidden until `sporraSettings` answers, which a
+                     browser never has — the native settings screen (server
+                     address, location, Health, photos) lives in the app, and
+                     this is the door the page opens it with. See
+                     SettingsBridge.swift. -->
+                <button type="button" class="app-settings-row" id="settings-app" hidden>
+                  <span data-i18n="personal.app-settings">App settings</span>
+                  <svg class="app-settings-go" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="m9 5 7 7-7 7" />
+                  </svg>
+                </button>
                 <div class="home-row">
                   <div class="home-line">
                     <span class="home-text">
@@ -1065,7 +1076,7 @@
                       <p data-i18n-text="device-help.everything-else-here-is-a" class="ha-help" id="device-help">
                         Everything else here is a file you export or an address this server can go and read.
                         A device is neither: it moves, it sleeps, and it decides for itself when to speak. So it
-                        is set up <b data-i18n="device-help.on-the-device">on the device</b> — Sporra for iOS, Settings tab — and this page is where
+                        is set up <b data-i18n="device-help.on-the-device">on the device</b> — Sporra for iOS, App settings — and this page is where
                         you see whether it is working.
                       </p>
                       <div class="ha-devices-list" id="device-list"></div>

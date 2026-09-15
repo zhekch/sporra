@@ -1,10 +1,9 @@
 :root {
   color-scheme: dark;
   /* How much of each edge belongs to something else — a notch, a home
-     indicator, or a native tab bar when this page is hosted inside the iOS app.
-     Everything anchored to the edge of the viewport adds these, so the chrome
-     sits inside the usable area rather than under whatever is covering it.
-     `env()` is 0 in a desktop browser, so nothing moves there. */
+     indicator. Everything anchored to the edge of the viewport adds these, so
+     the chrome sits inside the usable area rather than under whatever is
+     covering it. `env()` is 0 in a desktop browser, so nothing moves there. */
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-r: env(safe-area-inset-right, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
@@ -2147,13 +2146,12 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 
      Every dialog is capped at `100%` of this box, so what the padding leaves is
      exactly what the card is allowed to fill — and with a flat 24px that box
-     was the whole screen, status bar and tab bar included. In the iPhone app
-     that put the Settings dialog's heading behind the clock and its Back and
-     Done buttons behind the tab bar: both still there, both unreachable,
-     because a `position: fixed` overlay cannot be scrolled back into view.
-     `WebViewController.pushSafeArea` has been handing the page the right
-     numbers all along — 83px at the bottom, which is the tab bar and the home
-     indicator — and this was not asking for them. */
+     was the whole screen, status bar and home indicator included. In the
+     iPhone app that put the Settings dialog's heading behind the clock and
+     its Back and Done buttons behind the home indicator: both still there,
+     both unreachable, because a `position: fixed` overlay cannot be scrolled
+     back into view. `WebViewController.pushSafeArea` has been handing the
+     page the right numbers all along, and this was not asking for them. */
   padding: calc(24px + var(--safe-t)) calc(24px + var(--safe-r))
     calc(24px + var(--safe-b)) calc(24px + var(--safe-l));
   /* --- Why this is black and not a dark blue -------------------------------
@@ -7912,6 +7910,43 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   background: rgba(255, 255, 255, 0.18);
 }
 
+/* The door from Personal into the iOS app's own settings. Hidden in a browser
+   — the handler is not there — and a row rather than a labelled control,
+   because it opens a screen rather than setting a value. */
+.app-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 4px 0 12px;
+  padding: 12px 14px;
+  appearance: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  color: #fff;
+  cursor: pointer;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.app-settings-row[hidden] {
+  display: none;
+}
+
+.app-settings-row:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.app-settings-go {
+  flex: none;
+  opacity: 0.4;
+}
+
 .home-hits {
   display: flex;
   flex-direction: column;
@@ -7991,6 +8026,16 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   background: rgba(15, 23, 42, 0.07);
   border-color: rgba(15, 23, 42, 0.14);
   color: #0f172a;
+}
+
+[data-theme='light'] .app-settings-row {
+  background: rgba(15, 23, 42, 0.05);
+  border-color: rgba(15, 23, 42, 0.12);
+  color: #0f172a;
+}
+
+[data-theme='light'] .app-settings-row:hover {
+  background: rgba(15, 23, 42, 0.1);
 }
 
 [data-theme='light'] .home-hit:hover {
@@ -8483,15 +8528,15 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
    app's User-Agent (see IOS_CLIENT in server/index.js), so the layout is right
    on the first paint rather than after a script has run.
 
-   Two things are true there and nowhere else: a native tab bar covers the
-   bottom of the screen, and the top-right corner is under the status bar.
-   Everything else is the phone layout, because that is what it is. */
+   Two things are true there and nowhere else: the map is edge to edge under
+   the status bar, and the top-right corner is under it. Everything else is
+   the phone layout, because that is what it is. The app used to carry a tab
+   bar as well; the extra offsets that climbed over it went with it. */
 
 /* The attribution lives top-right, which inside the app is beneath the status
    bar — visible, and impossible to tap. It moves to the bottom-left, the one
-   corner nothing else is using: the tab bar is centred and the buttons are on
-   the right. It stays a link, and stays on screen, which is what the licences
-   actually ask for. */
+   corner nothing else is using: the buttons are on the right. It stays a
+   link, and stays on screen, which is what the licences actually ask for. */
 html[data-client='ios'] :is(.maplibregl-ctrl-top-right, .mapboxgl-ctrl-top-right) {
   top: auto;
   right: auto;
@@ -8503,57 +8548,23 @@ html[data-client='ios'] :is(.maplibregl-ctrl-top-right, .mapboxgl-ctrl-top-right
   margin: 0 0 calc(8px + var(--safe-b)) calc(12px + var(--safe-l));
 }
 
-/* Both of the offsets below are corrections to the *phone* stack — the one that
-   piles the controls into the bottom-right corner — so they are scoped to it.
-
-   Unscoped, they were the bug a phone held sideways had. A landscape phone is
-   wider than 560px, so it takes the wide layout at the top of this file, which
-   sets `.layers { top: …; bottom: auto }`. These rules then set `bottom` again
-   and, being later and more specific, won — leaving a fixed element with *both*
-   edges pinned, which is not a box that hugs its content but one stretched the
-   height of the screen. The column reversed inside it, so the menu button
-   landed at the bottom-left, on top of the attribution this same block has just
-   moved there. "Fully misaligned" is a fair description.
-
-   The wide layout needs no version of the first rule: it puts the cluster at
-   the top, where there is no tab bar to clear. */
-@media (max-width: 560px) {
-  /* The button cluster clears the tab bar by more than the usual margin. The
-     safe area ends exactly where the tab bar does, so a button resting on it is
-     a button you miss — you press the tab bar instead. Ten more pixels is the
-     difference between "next to" and "on top of". */
-  html[data-client='ios'] .layers {
-    bottom: calc(22px + var(--safe-b) + var(--lift, 0px));
-  }
-
-  /* The pencil rides above the cluster, so it moves with it — including when
-     the cluster steps up over an open card. */
-  html[data-client='ios'] .hud {
-    bottom: calc(127px + var(--safe-b) + var(--lift, 0px));
-  }
-}
-
-/* Inside the app there is a tab bar under the whole bottom edge. The safe area
-   ends exactly where the tab bar does, so `--safe-b` alone puts the reading
-   against it rather than above it — the same ten pixels the button cluster
-   takes, for the same reason, except that here it is legibility rather than a
-   missed press.
-
-   In a browser there is no tab bar and `--safe-b` is zero or the home
-   indicator, which the base rule already answers. `--corner-logo` is carried
-   through because sideways the wordmark is still underneath; on a phone the bar
-   is centred and gives that allowance back. */
-html[data-client='ios'] .scale {
-  bottom: calc(30px + var(--safe-b) + var(--corner-logo));
-}
-
 /* Sideways, the pencil has the bottom-left corner to itself apart from the two
-   things stacked under it, and still has a tab bar below that. The wide layout's
-   own rule is written for a browser and leaves the safe area out; inside the app
-   that is the difference between a button and a button you cannot press. */
+   things stacked under it. The wide layout's own rule is written for a browser
+   and leaves the safe area out; inside the app that is the difference between
+   a button and a button you cannot press.
+
+   Scoped to the wide layout on purpose. Unscoped, the same `bottom` reached
+   the phone stack's `.hud` as well — a landscape phone is wider than 560px, so
+   it takes the wide layout, which sets `.layers { top: …; bottom: auto }`, and
+   an unscoped iOS `bottom` then pinned both edges of the cluster, stretching
+   it the height of the screen. The column reversed inside it, so the menu
+   button landed at the bottom-left, on top of the attribution this same block
+   has just moved there. Anything that overrides a position inside the app has
+   to say which layout it is correcting; `scripts/test/card-lift.mjs` guards
+   the neighbouring version of this trap. */
 @media (min-width: 561px) {
   html[data-client='ios'] .hud {
-    bottom: calc(22px + var(--safe-b) + var(--corner-logo) + var(--corner-scale) + var(--lift, 0px));
+    bottom: calc(20px + var(--safe-b) + var(--corner-logo) + var(--corner-scale) + var(--lift, 0px));
   }
 }
 
@@ -9154,7 +9165,7 @@ html[data-client='ios'] .scale {
    padding carry the safe-area insets and have the card respect them.
 
    The insets are the whole point on a phone: without them the title sits under
-   the dynamic island and the buttons under the app's own tab bar. */
+   the dynamic island and the buttons under the home indicator. */
 #export-overlay {
   grid-template-rows: minmax(0, 1fr);
   grid-template-columns: minmax(0, 1fr);

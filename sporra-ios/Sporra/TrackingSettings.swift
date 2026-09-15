@@ -140,19 +140,6 @@ final class TrackingSettings: ObservableObject {
         }
     }
 
-    /// Whether to be wished a good flight after ten minutes at an airport.
-    ///
-    /// Off by default, like everything else here that speaks without being
-    /// asked. Switching it off cancels anything already scheduled rather than
-    /// letting one last notification arrive from a decision you have reversed.
-    @Published var notifyFlights: Bool {
-        didSet {
-            guard notifyFlights != oldValue else { return }
-            defaults.set(notifyFlights, forKey: Keys.notifyFlights)
-            if !notifyFlights { FlightWatch.shared.stop() }
-        }
-    }
-
     /// What this phone calls itself on the sync screen.
     ///
     /// Typed rather than read, because since iOS 16 `UIDevice.name` answers
@@ -174,7 +161,7 @@ final class TrackingSettings: ObservableObject {
     /// re-sent batch being counted twice.
     let deviceId: String
 
-    /// The last thing the uploader has to say for itself, for the Settings tab.
+    /// The last thing the uploader has to say for itself, for Settings.
     ///
     /// Written through to `UserDefaults` on every change. That is not caching:
     /// "Last checked" is a claim about *this phone's history*, and a value that
@@ -192,7 +179,7 @@ final class TrackingSettings: ObservableObject {
         var lastPush: Date?
         var lastError: String?
         /// The session cookie has gone. Nothing native can fix this — signing in
-        /// happens on the Map tab, in the site's own login.
+        /// happens on the map, in the site's own login.
         var signedOut = false
         var lastWorkoutScan: Date?
         var workoutsSent = 0
@@ -233,7 +220,6 @@ final class TrackingSettings: ObservableObject {
         static let precision = "tracking.precision"
         static let syncWorkouts = "tracking.syncWorkouts"
         static let syncPhotos = "tracking.syncPhotos"
-        static let notifyFlights = "tracking.notifyFlights"
         static let deviceName = "tracking.deviceName"
         static let deviceId = "tracking.deviceId"
         static let lastPush = "status.lastPush"
@@ -256,7 +242,6 @@ final class TrackingSettings: ObservableObject {
         status = SyncStatus(from: d)
         syncWorkouts = d.bool(forKey: Keys.syncWorkouts)
         syncPhotos = d.bool(forKey: Keys.syncPhotos)
-        notifyFlights = d.bool(forKey: Keys.notifyFlights)
         deviceName = d.string(forKey: Keys.deviceName) ?? UIDevice.current.name
         if let existing = d.string(forKey: Keys.deviceId), !existing.isEmpty {
             deviceId = existing

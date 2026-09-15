@@ -25,7 +25,7 @@ Four things, and only the first is a feature decision.
 | --- | --- |
 | **No Apple Health** | HealthKit does not exist on macOS. There is no framework to link and no store to read, so the section is *absent* rather than present and disabled |
 | **Location is off by default** | It is off on the phone too, but here it stays off for a second reason — see below |
-| **Settings is a window, not a tab** | ⌘, is where a Mac keeps settings. The phone's two tabs are what a phone has |
+| **Settings is a window, not a tab** | ⌘, is where a Mac keeps settings. The phone opens the same screen from Settings → Personal → App settings |
 | **One gallery window, reused** | The phone's gallery is a full-screen modal; a window is not modal, so a second click has to do something |
 | **"My location" is served by the app** | WebKit here grants the permission and then never delivers a position — see below |
 
@@ -206,9 +206,9 @@ declared to be the point.
 
 The User-Agent tag is **`SporraMac`**, deliberately not the phone's
 `SporraiOS`. `server/index.js` keys a layout on that string (`IOS_CLIENT`) —
-the button cluster clearing a tab bar, the attribution moving out from under a
-status bar. A window has neither, so this app wants the ordinary desktop page,
-and the way to ask for it is to not claim to be a phone.
+the attribution moving out from under a status bar. A window has neither, so
+this app wants the ordinary desktop page, and the way to ask for it is to not
+claim to be a phone.
 
 It is still sent, on the User-Agent and as `X-Sporra-Client`, so a server log
 can tell this app's traffic from a browser's and from the phone's.

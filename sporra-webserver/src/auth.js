@@ -117,7 +117,7 @@ export function forgetSession() {
  *   - **`version`** is what the server is running *now*. `serverBuild()` above
  *     is what this page was handed when it signed in, and the two stop agreeing
  *     the moment the server is updated under an open tab — which on a phone left
- *     on the Map tab for a fortnight is the normal case rather than the unusual
+ *     on the map for a fortnight is the normal case rather than the unusual
  *     one. Nothing said so, and the symptom is a bug report about a fix that
  *     "did not work". That one is fixed by reloading.
  *   - **`latest`** is what has been published, which the server asks GitHub (see
