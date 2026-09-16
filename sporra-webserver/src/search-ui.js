@@ -411,9 +411,9 @@ export function mountSearch({
     return wrap;
   }
 
-  function tripRow(t) {
+  function tripRow(t, hidden = false) {
     const el = document.createElement('div');
-    el.className = 'trip-row';
+    el.className = hidden ? 'trip-row is-hidden' : 'trip-row';
     const go = resultRow({
       icon: ICON.trip,
       title: t.name,
@@ -438,17 +438,18 @@ export function mountSearch({
       '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16Z"/><path d="m13.5 6.5 4 4"/></svg>';
     rename.addEventListener('click', () => startRename(el, t));
     // Putting one away is one press, because it is completely reversible — the
-    // trip is still derived, it is just skipped, and the row under the list
-    // brings every one of them back.
+    // trip is still derived, it is just skipped, and it stays in a Hidden
+    // section of this list so the same press (the other way) brings it back.
     const hide = document.createElement('button');
     hide.type = 'button';
     hide.className = 'trip-hide';
-    hide.setAttribute('aria-label', `Hide ${t.name}`);
-    hide.title = 'Hide this trip';
-    hide.innerHTML =
-      '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+    hide.setAttribute('aria-label', hidden ? `Show ${t.name}` : `Hide ${t.name}`);
+    hide.title = hidden ? 'Show this trip' : 'Hide this trip';
+    hide.innerHTML = hidden
+      ? '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>'
+      : '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
     hide.addEventListener('click', async () => {
-      await onHideTrip?.(t.id, true);
+      await onHideTrip?.(t.id, !hidden);
       render(input.value);
     });
     el.append(go, rename, hide);
@@ -677,19 +678,29 @@ export function mountSearch({
     // Scored once, here, rather than inside the comparator: the sort would ask
     // the same question of the same trip a dozen times over.
     const rank = new Map();
+    const hiddenRank = new Map();
     for (const t of trips()) {
-      if (put.has(t.id)) continue;
       const r = tripRelevance(t, q);
-      if (r < Infinity) rank.set(t, r);
+      if (r >= Infinity) continue;
+      (put.has(t.id) ? hiddenRank : rank).set(t, r);
     }
-    if (!rank.size) return false;
-    resultsEl.append(section(q ? 'Trips' : 'Your trips'));
-    // On their own line, centred. Beside the heading they had to share a row
-    // barely wide enough for one of them, and "Your trips" wrapped to two lines
-    // to make room.
-    if (!q) resultsEl.append(tripControls());
-    resultsEl.append(...tripList([...rank.keys()], rank));
-    if (!q && put.size) resultsEl.append(hiddenRow(put));
+    if (!rank.size && !hiddenRank.size) return false;
+    if (rank.size) {
+      resultsEl.append(section(q ? 'Trips' : 'Your trips'));
+      // On their own line, centred. Beside the heading they had to share a row
+      // barely wide enough for one of them, and "Your trips" wrapped to two lines
+      // to make room.
+      if (!q) resultsEl.append(tripControls());
+      resultsEl.append(...tripList([...rank.keys()], rank));
+    }
+    // Hidden ones stay in this list, or hiding the last visible trip would
+    // take the only way back with it. Each row undoes itself; "Show them"
+    // still brings the whole set back when there is more than one.
+    if (hiddenRank.size) {
+      resultsEl.append(section(hiddenRank.size === 1 ? 'Hidden trip' : 'Hidden trips'));
+      if (!q && hiddenRank.size > 1) resultsEl.append(hiddenRow(put));
+      for (const t of hiddenRank.keys()) resultsEl.append(tripRow(t, true));
+    }
     return true;
   }
 

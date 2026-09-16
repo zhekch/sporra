@@ -4067,7 +4067,7 @@ function rememberHome() {
 let introSeen = 0;
 
 // Trips you put away. They are derived, not stored, so there is nothing to
-// delete — the list skips them and can be told to stop. It follows the account
+// delete — the list keeps them under Hidden and can be told to stop. It follows the account
 // rather than the device, because a trip you decided was a commute is a
 // judgement about your history, not about this laptop. Ids are `trip-<start>`
 // and stable across rebuilds, so one stays hidden as more history arrives.
@@ -4486,37 +4486,64 @@ function setSoloRoute(id) {
 }
 
 // The chip is the only way out of isolation that doesn't mean opening a menu,
-// so it lives on the map rather than in one.
+// so it lives on the map rather than in one. While a day with activities is
+// on the chip above, it is also up *before* anything is isolated: the count
+// and *Show*, then the name and *Hide* once one of them is on the map.
+function setSoloChipText(caption, title) {
+  const el = document.getElementById('route-solo-text');
+  if (!el) return;
+  const name = document.createElement('span');
+  name.className = 'chip-name';
+  name.textContent = title;
+  if (!caption) {
+    el.replaceChildren(name);
+    return;
+  }
+  const cap = document.createElement('span');
+  cap.className = 'chip-sub-text';
+  cap.textContent = caption;
+  el.replaceChildren(cap, name);
+}
+
 function updateSoloChip() {
   const chip = document.getElementById('route-solo');
   if (!chip) return;
-  const route = soloRoute == null ? null : routeList.find((r) => r.id === soloRoute);
+  const btn = document.getElementById('route-solo-clear');
+  let route = soloRoute == null ? null : routeList.find((r) => r.id === soloRoute);
   // The isolated route can vanish under us — deleted, or the list reloaded
   // after a sync. Left set, `visibleRoutes()` would return nothing and the chip
   // that undoes it would be hidden: a map with no routes and no way back.
   if (soloRoute != null && !route) soloRoute = null;
-  chip.hidden = !route;
-  if (!route) return;
+  route = soloRoute == null ? null : routeList.find((r) => r.id === soloRoute);
+
+  const dayOwned = shownTrack?.kind === 'day' && dayRoutes.length > 0;
+  const dayRoute = dayRouteAt >= 0 ? dayRoutes[dayRouteAt] : null;
+  const showingDay = !!(dayOwned && dayRoute);
+  // The day's own list has the name before `loadRoutes` has filled `routeList`,
+  // which is the window between pressing *Show* and the file arriving.
+  const shown = route ?? (showingDay ? dayRoute : null);
+
+  chip.classList.toggle('can-swipe', showingDay && dayRoutes.length > 1);
+
+  if (dayOwned && !showingDay && !route) {
+    chip.hidden = false;
+    if (btn) btn.textContent = t('trip-chip-route.show');
+    setSoloChipText('', pluralKey(dayRoutes.length, 'tripChip.activities'));
+    return;
+  }
+
+  chip.hidden = !shown;
+  if (!shown) return;
+  if (btn) btn.textContent = showingDay ? t('route-solo-clear.hide') : t('route-solo-clear.show-all');
   // Two lines so the name is never the thing the chip runs out of room for.
   // "Showing only Frutigen → Thun" on one line is a sentence that ellipsises
   // the only word worth reading; the name on its own row, under a caption,
   // is the same fact with room to finish.
-  const el = document.getElementById('route-solo-text');
-  if (!el) return;
-  if (!route.name) {
-    const name = document.createElement('span');
-    name.className = 'chip-name';
-    name.textContent = t('route-solo-text.showing-one-route');
-    el.replaceChildren(name);
+  if (!shown.name) {
+    setSoloChipText('', t('route-solo-text.showing-one-route'));
     return;
   }
-  const caption = document.createElement('span');
-  caption.className = 'chip-sub-text';
-  caption.textContent = t('route-solo-text.showing-only');
-  const name = document.createElement('span');
-  name.className = 'chip-name';
-  name.textContent = route.name;
-  el.replaceChildren(caption, name);
+  setSoloChipText(t('route-solo-text.showing-only'), shown.name);
 }
 
 // One `match` over the feature's own `sport`, so a thousand routes are still one
@@ -5204,17 +5231,21 @@ function showTrack(what) {
       km: trackKm(what.points ?? []),
     }
     : null;
+  // The series this belongs to, worked out once here rather than per pointer
+  // event — see `dayStep`. Both are reset for a trip and for nothing at all, so
+  // the chip cannot offer a step along a series it has left.
+  //
+  // Routes before `dropChipRoute`, because dropping one calls `updateSoloChip`
+  // and that chip now names the day's activities even when none is isolated —
+  // it has to see the day we are on, not the one we just left.
+  dayStep = what?.kind === 'day' ? daysEitherSideOf(what.id) : {};
+  dayRoutes = what?.kind === 'day' ? (what.routes ?? []) : [];
+  dayRouteAt = -1;
   // Whatever the chip did to the map for the *last* thing it was showing is
   // undone before the next one is drawn: the isolated activity and the banner
   // naming it belong to a day you have stepped off. Nothing about "Monday" is
   // answered by a run from Sunday still being the only route on the map.
   dropChipRoute();
-  // The series this belongs to, worked out once here rather than per pointer
-  // event — see `dayStep`. Both are reset for a trip and for nothing at all, so
-  // the chip cannot offer a step along a series it has left.
-  dayStep = what?.kind === 'day' ? daysEitherSideOf(what.id) : {};
-  dayRoutes = what?.kind === 'day' ? (what.routes ?? []) : [];
-  dayRouteAt = -1;
   // The photographs follow the chip: while one day is on the map, the overlay
   // is that day's pictures. See `setPhotoWindow`.
   setPhotoWindow(what?.from && what?.to ? [what.from, what.to] : null);
@@ -5298,8 +5329,8 @@ function trackKm(points) {
 // frame.
 let dayStep = {};
 // The day's activities, and which of them is currently isolated. −1 is "none of
-// them yet", which is the difference between the button saying *Show* and
-// saying *Next*.
+// them yet", which is the difference between the chip below saying *Show* and
+// the day chip offering *Next*.
 let dayRoutes = [];
 let dayRouteAt = -1;
 // The map as the chip found it, while an activity of the day's is isolated.
@@ -5339,26 +5370,52 @@ function showFirstDayOfTrip() {
 }
 
 /**
- * One of the day's activities, and then the next one, and round again.
+ * One of the day's activities, by index, wrapping round the list.
  *
- * The chip says how many there are; this is what makes that a thing you can
- * act on. Isolating each in turn rather than listing them: the map already has
- * a way to say *this one, on its own* — the route chip below this one — and a
- * list on top of a map is a menu covering the answer it is offering.
+ * The chip below the day says how many there are; this is what makes that a
+ * thing you can act on. Isolating each in turn rather than listing them: the
+ * map already has a way to say *this one, on its own* — that same chip, once
+ * *Show* has been pressed — and a list on top of a map is a menu covering the
+ * answer it is offering.
  */
-async function showNextDayRoute() {
+async function showDayRoute(at) {
   if (!dayRoutes.length) return;
+  const n = dayRoutes.length;
+  const i = ((at % n) + n) % n;
   // What the map looked like before the chip touched it, taken once at the
   // start of the excursion rather than on every press — the second press would
   // otherwise record the state the first one had already changed.
   if (!chipRouteWas) chipRouteWas = { on: routesOn, solo: soloRoute };
-  dayRouteAt = (dayRouteAt + 1) % dayRoutes.length;
-  const route = dayRoutes[dayRouteAt];
+  dayRouteAt = i;
+  const route = dayRoutes[i];
   updateTrackChip(); // *Show* becomes *Next* before anything is fetched
   if (!routesOn) setRoutesOn(true);
   if (!routeGeom) await loadRoutes(true);
   setSoloRoute(route.id);
   zoomToRoute(route);
+}
+
+/** The next one, and round again — *Show* from none, *Next* from one already on. */
+function showNextDayRoute() {
+  return showDayRoute(dayRouteAt + 1);
+}
+
+/**
+ * Put the day's activities away, back to "2 activities · Show".
+ *
+ * Isolation is a detour, not a setting: it turned the overlay on if it was off
+ * and narrowed it to a single line. *Hide* undoes both, and does not put back
+ * a previous isolation — the chip below the day is the day's, and going back
+ * to *Show* is the whole of the press.
+ */
+function hideDayRoutes() {
+  const was = chipRouteWas;
+  chipRouteWas = null;
+  dayRouteAt = -1;
+  setSoloRoute(null);
+  routeInfo?.setSolo(false);
+  if (was && !was.on) setRoutesOn(false);
+  updateTrackChip();
 }
 
 /**
@@ -5423,12 +5480,12 @@ function dayChipDistance(track) {
 
 /**
  * The chip's contents: what is being shown, and — for a day — a second line
- * carrying what is on it and the button that walks through the activities.
+ * carrying what is on it and, once an activity is isolated, *Next*.
  *
- * The button is *in* that line rather than beside the date, and that is the
- * whole point of the line existing. "Show", sitting at the end of a chip that
- * says a date, is a button with no visible object; "3 activities · Show" says
- * what it will show. It is moved rather than rebuilt — the element from the
+ * *Show* lives on the chip below, beside the count it acts on. *Next* is *in*
+ * this line rather than beside the date, because that is where the count is
+ * and a Next sitting at the end of a chip that says a date is a button with
+ * no visible object. It is moved rather than rebuilt — the element from the
  * markup, with its listener, put where it belongs — because a button rebuilt on
  * every step is a listener re-attached on every step, or forgotten on one.
  */
@@ -5476,20 +5533,28 @@ function updateTrackChip() {
   prev.hidden = !day || !dayStep[-1];
   next.hidden = !day || !dayStep[1];
   down.hidden = !trip || !shownTrack.first;
-  route.hidden = !dayRoutes.length;
-  // *Show* until one of them is on the map, then *Next* — which is only a
-  // different word when there is somewhere else to go.
-  route.textContent = dayRouteAt < 0 || dayRoutes.length < 2 ? t('trip-chip-route.show') : t('tripChip.next');
+  // *Next* only, and only once one of the day's activities is on the map —
+  // *Show* is on the chip below, beside the count it acts on. A Next with
+  // nowhere else to go is worse than the absence of one.
+  route.hidden = !(day && dayRouteAt >= 0 && dayRoutes.length >= 2);
+  route.textContent = t('tripChip.next');
   chip.classList.toggle('can-swipe', !(prev.hidden && next.hidden && down.hidden));
-  if (!shownTrack) return;
-  // Every count, including one. It used to start at two, on the grounds that a
-  // single activity was announced by the button existing — which is true of the
-  // button and not of the line it now sits in: "Show" on its own says nothing
-  // about what there is, and a day with one ride on it should say it has one.
+  if (!shownTrack) {
+    updateSoloChip();
+    return;
+  }
+  // The count lives on the chip below until one of them is isolated — that
+  // chip is "2 activities · Show". Once it is naming a ride, the count comes
+  // back up here so the day still says how many there are. Including one: a
+  // day with one ride on it should say it has one.
   const parts = day
-    ? [dayChipDistance(shownTrack), dayRoutes.length ? pluralKey(dayRoutes.length, 'tripChip.activities') : '']
+    ? [
+      dayChipDistance(shownTrack),
+      dayRoutes.length && dayRouteAt >= 0 ? pluralKey(dayRoutes.length, 'tripChip.activities') : '',
+    ]
     : [];
   setChipText(shownTrack.label, parts.filter(Boolean).join(' · '));
+  updateSoloChip();
 }
 
 // Any edit or a new look at the map drops it — it marks one answer to one
@@ -9264,6 +9329,15 @@ function wireLayersControl() {
   document.getElementById('intro-pick-cancel').addEventListener('click', () => endHomePick(false));
   document.getElementById('intro-pick-ok').addEventListener('click', () => endHomePick(true));
   document.getElementById('route-solo-clear').addEventListener('click', () => {
+    // The day's chip: *Show* isolates the first activity, *Hide* puts them
+    // away. Isolation from the routes list is a different press — *Show all*
+    // — and must not be taken for a day's Hide, or a route you picked out of
+    // eighty-two would collapse into a day you were not looking at.
+    if (shownTrack?.kind === 'day' && dayRoutes.length && (dayRouteAt >= 0 || soloRoute == null)) {
+      if (dayRouteAt < 0) showNextDayRoute();
+      else hideDayRoutes();
+      return;
+    }
     setSoloRoute(null);
     routeInfo?.setSolo(false);
   });
@@ -9281,6 +9355,14 @@ function wireLayersControl() {
     can: (step, axis) =>
       (axis === 'x' ? !!dayStep[step] : step < 0 && shownTrack?.kind === 'trip' && !!shownTrack.first),
     onStep: (step, axis) => (axis === 'x' ? showAdjacentDay(step) : showFirstDayOfTrip()),
+  });
+  // The chip below, once *Show* has been pressed: sideways is the next
+  // activity, wrapping the same way *Next* does. Collapsed it does not
+  // answer — a swipe that showed the first activity would skip the press
+  // that says you meant to.
+  mountSwipe(document.getElementById('route-solo'), {
+    can: (step, axis) => axis === 'x' && dayRouteAt >= 0 && dayRoutes.length > 1,
+    onStep: (step) => { void showDayRoute(dayRouteAt + step); },
   });
   // The arrows are the same three steps for a hand that has neither a
   // touchscreen nor a trackpad, and they go through the gesture's own path so a

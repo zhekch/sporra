@@ -1,9 +1,11 @@
-// Swiping along a series: the chip that names the day, and the month grid.
+// Swiping along a series: the chip that names the day, the chip that names
+// one of that day's activities, and the month grid.
 //
-// Two places in this app show you one of a run of things — the day on the map
-// and the month in the calendar — and in both the next question is always the
-// one either side. Answering it used to mean the search palette, a grid, and a
-// day picked out of it: four moves to step one day.
+// Three places in this app show you one of a run of things — the day on the
+// map, one activity of that day, and the month in the calendar — and in each
+// the next question is always the one either side. Answering it used to mean
+// the search palette, a grid, and a day picked out of it: four moves to step
+// one day.
 //
 // So both take a horizontal swipe, which is what a series is for. It is the
 // same gesture the photograph card takes (src/photo-info.js), deliberately:

@@ -2584,10 +2584,12 @@ it isn't a row, it's a reading of the rows — see
   derived rule should overrule it. `familiarTrips: 0` turns the whole thing off.
 - **A trip you put away stays away.** They are derived, so there is no row to
   delete; the list skips a set of ids kept in the account preferences
-  (`hiddenTrips`), and one press on the row does it. Reversible in one press
-  from the row under the list, which is why it doesn't ask twice — a confirm
-  step for something undoable is just a second press. Ids are `trip-<start>` and
-  stable across rebuilds, so one stays hidden as more history arrives.
+  (`hiddenTrips`), and one press on the row does it. Reversible from the
+  **Hidden** section of the same list — each row has an eye that brings that
+  one back, and "Show them" brings the whole set back when there is more than
+  one. That is why it doesn't ask twice: a confirm step for something undoable
+  is just a second press. Ids are `trip-<start>` and stable across rebuilds, so
+  one stays hidden as more history arrives.
 - **…and a trip you named stays named**, by exactly the same mechanism — see
   [Calling one something else](#calling-one-something-else).
 - **Named after where it mostly was, not after its middle.** Naming is a
@@ -2747,8 +2749,8 @@ those cells were first seen (`showTrack`/`trackFC` in `src/main.js`,
 - **The chip names it** (`#trip-chip`, sharing `.route-solo`'s styling), and
   stays up until you stop it. A toast couldn't: the name is not an event that
   happened two seconds ago, it is what you are currently looking at. Both chips
-  live in one `.map-chips` column so an isolated route inside a shown trip
-  stacks under it rather than landing on top of it.
+  live in one `.map-chips` column so a day's activities — or an isolated route
+  inside a shown trip — stack under it rather than landing on top of it.
 - **A day is shown the same way** — `dayCells()` places and dates the cells one
   calendar day recorded, and the map draws them with the same code. Until then
   a dot in the calendar was the end of the road: it said the day had ground on
@@ -2775,34 +2777,36 @@ the palette, the month grid, and a day picked out of it — four moves to step o
 day. So the chip is the thing you step with, and it says enough to be worth
 stepping to.
 
-**What it says.** `Jul 6, 2026 · ≈ 28 km · 3 activities`, and no longer
-"Showing" — a word explaining the chip's own existence, on a chip that sits on
-the map over the thing it is naming. The distance is the length of the thread
-actually drawn (`trackKm`, measured off `trackFC` so the cuts a gap or a shared
-timestamp make are cuts here too — otherwise the flight home is a straight line
-across a country and counted). It is a distance between the centres of
-mile-wide hexagons, so it is rounded to whole kilometres over ten and carries an
-`≈`, the same admission the scale bar makes. The count of activities appears
-only when there is more than one; a single one is announced by the button beside
-it.
+**What it says.** `Jul 6, 2026 · ≈ 28 km`, and no longer "Showing" — a word
+explaining the chip's own existence, on a chip that sits on the map over the
+thing it is naming. The distance is the length of the thread actually drawn
+(`trackKm`, measured off `trackFC` so the cuts a gap or a shared timestamp make
+are cuts here too — otherwise the flight home is a straight line across a
+country and counted). It is a distance between the centres of mile-wide
+hexagons, so it is rounded to whole kilometres over ten and carries an `≈`, the
+same admission the scale bar makes. The count of activities lives on the chip
+below until one of them is isolated, then it comes back up here (`· 3
+activities`) so the day still says how many there are, including one.
 
-**And the activities are a thing you can act on.** *Show* isolates the day's
-first activity and becomes *Next*, which walks round them and back to the first
-— `showNextDayRoute`, one press per activity. Isolating rather than listing:
-the map already has a way to say *this one, on its own*, and the route chip that
-appears under this one names it, where a list on top of a map is a menu covering
-the answer it is offering.
+**And the activities are a thing you can act on, on their own chip.** While a
+day with activities is up, `#route-solo` is up too, from the start: `2
+activities` and *Show*. *Show* isolates the first (`showDayRoute`) and the chip
+becomes the name of that one, with *Hide* to put them away — back to `2
+activities · Show`, which is the whole of the press. Isolating rather than
+listing: the map already has a way to say *this one, on its own*, and a list on
+top of a map is a menu covering the answer it is offering.
 
-The button lives **in the second line, beside the count it acts on**, and is
-the same size as *Clear* — they are the same kind of thing, a press that does
-something to what the chip is showing, and a smaller one read as less finished
-rather than as smaller in scope. "Show", at the end of a chip that says a date,
-is a button with no visible object; "3
-activities · Show" says what it will show. It is *moved* into that line rather
-than rebuilt in it (`setChipText`), because a button rebuilt on every step is a
-listener re-attached on every step — and parked back on the chip before the line
-is rewritten, or `replaceChildren` takes it away for good, which is exactly what
+Once one is isolated, *Next* appears on the day chip — walks round them and
+back to the first — and the activity chip itself can be swiped, the same
+sideways gesture the day chip takes along the days (`mountSwipe` on
+`#route-solo`). *Next* is *moved* into the day's second line rather than rebuilt
+in it (`setChipText`), because a button rebuilt on every step is a listener
+re-attached on every step — and parked back on the chip before the line is
+rewritten, or `replaceChildren` takes it away for good, which is exactly what
 happened the first time a trip was shown after a day.
+
+*Hide* undoes what *Show* did to the overlay and does not restore a previous
+isolation: the chip below the day is the day's.
 
 **Stepping off a day undoes what showing an activity did.** Isolating one is a
 detour, not a setting: it turned the routes overlay on if it was off and
@@ -2810,7 +2814,7 @@ narrowed it to a single line, and both belong to the day that was on the chip.
 `dropChipRoute` puts back what it found — including the overlay being off — so
 the next day does not arrive with yesterday's run as the only route on the map
 and a banner naming it, which is a sentence about a day you are no longer
-looking at.
+looking at. *Hide* is the same undoing without leaving the day.
 
 **And the photographs follow the chip.** While a day or a trip is being shown,
 the photo overlay is narrowed to the pictures taken inside it (`setPhotoWindow`
@@ -2884,12 +2888,13 @@ reached. `none` rather than `contain` — contain still allows the overscroll
 *effect*, and it is the whole page sliding sideways under a swipe meant for a
 chip that reads as the app coming apart.
 
-**The chip is two lines.**, less two arrows and two
-buttons, leaves about 150 px for the text and one line of all of it is closer to
-220. So the day is the first line and what is true about it is the second
-(`.chip-sub`) — on every width, not only on a phone, because that is also where
-the activities button belongs. The date is what is being named and stays whole;
-the numbers under it are what the pill was widened to carry.
+**The chip is two lines.**, less two arrows and *Clear* (and *Next*, once an
+activity is isolated), leaves about 150 px for the text and one line of all of
+it is closer to 220. So the day is the first line and what is true about it is
+the second (`.chip-sub`) — on every width, not only on a phone, because that is
+also where *Next* belongs. The date is what is being named and stays whole; the
+numbers under it are what the pill was widened to carry. *Show* is on the chip
+below, beside the count it acts on.
 
 #### One flick is one step
 

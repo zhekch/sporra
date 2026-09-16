@@ -6327,7 +6327,11 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: min(460px, calc(100vw - 28px));
+  /* max-content so the chip is as wide as the name, not as wide as the
+     longest *word* — flex + wrapping text otherwise shrinks to "Afternoon"
+     and puts "paddle" on the next line, on a screen that had the room. */
+  width: max-content;
+  max-width: min(720px, calc(100vw - 24px));
   padding: 7px 8px 7px 14px;
   border-radius: 999px;
   background: rgba(28, 28, 28, 0.92);
@@ -6419,12 +6423,10 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 }
 
 /* What the chip says, in two lines: what is being shown, and — for a day —
-   what is on it, with the button that walks through the activities sitting in
-   that second line rather than out at the end of the chip. "Show" beside a date
-   is a button with no visible object; "3 activities · Show" says what it will
-   show. See `setChipText` in src/main.js. */
-#trip-chip-text,
-#route-solo-text {
+   what is on it, with *Next* sitting in that second line once an activity is
+   isolated. *Show* lives on the chip below, beside the count it acts on.
+   See `setChipText` in src/main.js. */
+#trip-chip-text {
   display: flex;
   min-width: 0;
   flex: 1;
@@ -6436,14 +6438,27 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   text-overflow: unset;
 }
 
-/* The isolated-route chip's name is the one line that used to vanish into
-   an ellipsis. It wraps rather than truncating, so "Frutigen → Thun" is
-   still "Frutigen → Thun" on a phone. */
-#route-solo-text .chip-name {
+#route-solo-text {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  overflow: visible;
   white-space: normal;
+  text-overflow: unset;
+}
+
+/* Unwrapped while the chip still has room (its width is max-content).
+   Wrap only once max-width is holding it, so a long name is still the
+   whole name rather than an ellipsis. */
+#route-solo-text .chip-name {
+  min-width: auto;
+  max-width: none;
+  white-space: nowrap;
   overflow: visible;
   text-overflow: unset;
-  overflow-wrap: break-word;
 }
 
 #route-solo-text .chip-sub-text {
@@ -7566,6 +7581,19 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
     opacity: 1;
     pointer-events: auto;
   }
+}
+
+/* A trip you put away is still a trip, just quieter, and the eye that
+   brings it back has to be visible without hovering or it is as gone as
+   the trip. */
+.trip-row.is-hidden .trip-go {
+  opacity: 0.55;
+}
+
+.trip-row.is-hidden .trip-hide,
+.trip-row.is-hidden .trip-rename {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* A trip row's right-hand column is empty now — the distance moved to the

@@ -376,6 +376,7 @@ export default {
   "route-info-name.route": "Route",
   "route-more.more-info": "More info",
   "route-only.only-this": "Only this",
+  "route-solo-clear.hide": "Hide",
   "route-solo-clear.show-all": "Show all",
   "route-solo-text.showing-one-route": "Showing one route",
   "route-solo-text.showing-only": "Showing only",

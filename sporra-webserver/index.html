@@ -559,9 +559,9 @@
       </div>
     </div>
 
-    <!-- What the map is currently narrowed to, and the way back out. Both
-         chips can be up at once — an isolated route inside a shown trip — so
-         they stack rather than share a corner. -->
+    <!-- What the map is currently narrowed to, and the way back out. A day
+         with activities, or an isolated route inside a shown trip, puts two
+         chips up at once — they stack rather than share a corner. -->
     <div class="map-chips" id="map-chips">
       <!-- Somebody else's map, opened by an admin from Settings → Admin.
            It is the same glass chip as the two below because it is the same kind
@@ -595,14 +595,20 @@
         <button data-i18n-aria-label="trip-chip-next.the-day-after" class="chip-arrow chip-arrow-r" type="button" id="trip-chip-next" hidden>
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 6l6 6-6 6"/></svg>
         </button>
-        <!-- Moved into the second line of the text by `setChipText`, beside the
-             count it acts on: "3 activities · Show" says what Show shows, and a
-             Show sitting on its own next to a date does not. It lives here in
-             the markup so it can be keyed and found by id like everything
-             else. -->
-        <button data-i18n="trip-chip-route.show" type="button" id="trip-chip-route" hidden>Show</button>
+        <!-- *Next* only, and only once an activity is isolated. *Show* lives
+             on the chip below, beside the count it acts on — a Show sitting
+             next to a date does not say what it will show. Moved into the
+             second line of the text by `setChipText`. It lives here in the
+             markup so it can be keyed and found by id like everything else. -->
+        <button data-i18n="tripChip.next" type="button" id="trip-chip-route" hidden>Next</button>
         <button data-i18n="trip-chip-clear.clear" type="button" id="trip-chip-clear">Clear</button>
       </div>
+      <!-- A day's activities, or one route isolated from the list. While a
+           day with activities is on the chip above, this one is up from the
+           start: "2 activities · Show", then the name of the one on the map
+           and *Hide* once Show has been pressed. Sideways over it is the
+           next activity, the same gesture the day chip takes along the days.
+           See `updateSoloChip` in src/main.js. -->
       <div class="route-solo" id="route-solo" hidden>
         <span data-i18n="route-solo-text.showing-one-route" id="route-solo-text">Showing one route</span>
         <button data-i18n="route-solo-clear.show-all" type="button" id="route-solo-clear">Show all</button>
