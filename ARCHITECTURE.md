@@ -2796,14 +2796,11 @@ activities · Show`, which is the whole of the press. Isolating rather than
 listing: the map already has a way to say *this one, on its own*, and a list on
 top of a map is a menu covering the answer it is offering.
 
-Once one is isolated, *Next* appears on the day chip — walks round them and
-back to the first — and the activity chip itself can be swiped, the same
-sideways gesture the day chip takes along the days (`mountSwipe` on
-`#route-solo`). *Next* is *moved* into the day's second line rather than rebuilt
-in it (`setChipText`), because a button rebuilt on every step is a listener
-re-attached on every step — and parked back on the chip before the line is
-rewritten, or `replaceChildren` takes it away for good, which is exactly what
-happened the first time a trip was shown after a day.
+Once one is isolated, the activity chip can be swiped — the same sideways
+gesture the day chip takes along the days (`mountSwipe` on `#route-solo`) —
+and the arrows on it are the same hint, and the way through for a mouse. The
+ends stop rather than wrapping: an arrow that is not there is the honest
+answer, the same as the first day of a history.
 
 *Hide* undoes what *Show* did to the overlay and does not restore a previous
 isolation: the chip below the day is the day's.
@@ -2888,13 +2885,12 @@ reached. `none` rather than `contain` — contain still allows the overscroll
 *effect*, and it is the whole page sliding sideways under a swipe meant for a
 chip that reads as the app coming apart.
 
-**The chip is two lines.**, less two arrows and *Clear* (and *Next*, once an
-activity is isolated), leaves about 150 px for the text and one line of all of
-it is closer to 220. So the day is the first line and what is true about it is
-the second (`.chip-sub`) — on every width, not only on a phone, because that is
-also where *Next* belongs. The date is what is being named and stays whole; the
-numbers under it are what the pill was widened to carry. *Show* is on the chip
-below, beside the count it acts on.
+**The chip is two lines.**, less two arrows and *Clear*, leaves about 150 px
+for the text and one line of all of it is closer to 220. So the day is the
+first line and what is true about it is the second (`.chip-sub`) — on every
+width, not only on a phone. The date is what is being named and stays whole;
+the numbers under it are what the pill was widened to carry. *Show* is on the
+chip below, beside the count it acts on.
 
 #### One flick is one step
 

@@ -4509,6 +4509,8 @@ function updateSoloChip() {
   const chip = document.getElementById('route-solo');
   if (!chip) return;
   const btn = document.getElementById('route-solo-clear');
+  const prev = document.getElementById('route-solo-prev');
+  const next = document.getElementById('route-solo-next');
   let route = soloRoute == null ? null : routeList.find((r) => r.id === soloRoute);
   // The isolated route can vanish under us — deleted, or the list reloaded
   // after a sync. Left set, `visibleRoutes()` would return nothing and the chip
@@ -4522,8 +4524,13 @@ function updateSoloChip() {
   // The day's own list has the name before `loadRoutes` has filled `routeList`,
   // which is the window between pressing *Show* and the file arriving.
   const shown = route ?? (showingDay ? dayRoute : null);
+  const canStep = showingDay && dayRoutes.length > 1;
 
-  chip.classList.toggle('can-swipe', showingDay && dayRoutes.length > 1);
+  chip.classList.toggle('can-swipe', canStep);
+  // Each arrow stands for a direction there is something in, same as the day
+  // chip. The first activity has no arrow backwards.
+  if (prev) prev.hidden = !canStep || dayRouteAt <= 0;
+  if (next) next.hidden = !canStep || dayRouteAt >= dayRoutes.length - 1;
 
   if (dayOwned && !showingDay && !route) {
     chip.hidden = false;
@@ -5330,7 +5337,7 @@ function trackKm(points) {
 let dayStep = {};
 // The day's activities, and which of them is currently isolated. −1 is "none of
 // them yet", which is the difference between the chip below saying *Show* and
-// the day chip offering *Next*.
+// naming one of them.
 let dayRoutes = [];
 let dayRouteAt = -1;
 // The map as the chip found it, while an activity of the day's is isolated.
@@ -5370,34 +5377,28 @@ function showFirstDayOfTrip() {
 }
 
 /**
- * One of the day's activities, by index, wrapping round the list.
+ * One of the day's activities, by index.
  *
  * The chip below the day says how many there are; this is what makes that a
  * thing you can act on. Isolating each in turn rather than listing them: the
  * map already has a way to say *this one, on its own* — that same chip, once
  * *Show* has been pressed — and a list on top of a map is a menu covering the
- * answer it is offering.
+ * answer it is offering. The ends stop, the same as the days: an arrow that
+ * wraps is an arrow that does not mean what it is pointing at.
  */
 async function showDayRoute(at) {
-  if (!dayRoutes.length) return;
-  const n = dayRoutes.length;
-  const i = ((at % n) + n) % n;
+  if (at < 0 || at >= dayRoutes.length) return;
   // What the map looked like before the chip touched it, taken once at the
   // start of the excursion rather than on every press — the second press would
   // otherwise record the state the first one had already changed.
   if (!chipRouteWas) chipRouteWas = { on: routesOn, solo: soloRoute };
-  dayRouteAt = i;
-  const route = dayRoutes[i];
-  updateTrackChip(); // *Show* becomes *Next* before anything is fetched
+  dayRouteAt = at;
+  const route = dayRoutes[at];
+  updateTrackChip();
   if (!routesOn) setRoutesOn(true);
   if (!routeGeom) await loadRoutes(true);
   setSoloRoute(route.id);
   zoomToRoute(route);
-}
-
-/** The next one, and round again — *Show* from none, *Next* from one already on. */
-function showNextDayRoute() {
-  return showDayRoute(dayRouteAt + 1);
 }
 
 /**
@@ -5480,38 +5481,24 @@ function dayChipDistance(track) {
 
 /**
  * The chip's contents: what is being shown, and — for a day — a second line
- * carrying what is on it and, once an activity is isolated, *Next*.
+ * carrying what is on it.
  *
- * *Show* lives on the chip below, beside the count it acts on. *Next* is *in*
- * this line rather than beside the date, because that is where the count is
- * and a Next sitting at the end of a chip that says a date is a button with
- * no visible object. It is moved rather than rebuilt — the element from the
- * markup, with its listener, put where it belongs — because a button rebuilt on
- * every step is a listener re-attached on every step, or forgotten on one.
+ * *Show* lives on the chip below, beside the count it acts on. A Show sitting
+ * at the end of a chip that says a date is a button with no visible object.
  */
 function setChipText(label, sub) {
   const el = document.getElementById('trip-chip-text');
-  const route = document.getElementById('trip-chip-route');
-  // Parked back on the chip before the line is rebuilt. The button lives inside
-  // a line that is thrown away and rewritten on every step, and `replaceChildren`
-  // takes whatever is in there with it — which cost the button, permanently, the
-  // first time a trip was shown after a day. Before *Clear*, so the parked
-  // position is also the sensible one if it is ever seen.
-  document.getElementById('trip-chip').insertBefore(route, document.getElementById('trip-chip-clear'));
   const name = document.createElement('span');
   name.className = 'chip-name';
   name.textContent = label;
   el.replaceChildren(name);
-  if (!sub && route.hidden) return;
+  if (!sub) return;
   const line = document.createElement('span');
   line.className = 'chip-sub';
-  if (sub) {
-    const what = document.createElement('span');
-    what.className = 'chip-sub-text';
-    what.textContent = sub;
-    line.append(what);
-  }
-  line.append(route);
+  const what = document.createElement('span');
+  what.className = 'chip-sub-text';
+  what.textContent = sub;
+  line.append(what);
   el.append(line);
 }
 
@@ -5526,18 +5513,12 @@ function updateTrackChip() {
   const prev = document.getElementById('trip-chip-prev');
   const next = document.getElementById('trip-chip-next');
   const down = document.getElementById('trip-chip-down');
-  const route = document.getElementById('trip-chip-route');
   // Each arrow stands for a direction there is something in. The day at the
   // near end of a history has no arrow backwards, because there is no such day
   // — an arrow that does nothing is worse than the absence of one.
   prev.hidden = !day || !dayStep[-1];
   next.hidden = !day || !dayStep[1];
   down.hidden = !trip || !shownTrack.first;
-  // *Next* only, and only once one of the day's activities is on the map —
-  // *Show* is on the chip below, beside the count it acts on. A Next with
-  // nowhere else to go is worse than the absence of one.
-  route.hidden = !(day && dayRouteAt >= 0 && dayRoutes.length >= 2);
-  route.textContent = t('tripChip.next');
   chip.classList.toggle('can-swipe', !(prev.hidden && next.hidden && down.hidden));
   if (!shownTrack) {
     updateSoloChip();
@@ -9334,7 +9315,7 @@ function wireLayersControl() {
     // — and must not be taken for a day's Hide, or a route you picked out of
     // eighty-two would collapse into a day you were not looking at.
     if (shownTrack?.kind === 'day' && dayRoutes.length && (dayRouteAt >= 0 || soloRoute == null)) {
-      if (dayRouteAt < 0) showNextDayRoute();
+      if (dayRouteAt < 0) showDayRoute(0);
       else hideDayRoutes();
       return;
     }
@@ -9342,7 +9323,6 @@ function wireLayersControl() {
     routeInfo?.setSolo(false);
   });
   document.getElementById('trip-chip-clear').addEventListener('click', () => showTrack(null));
-  document.getElementById('trip-chip-route').addEventListener('click', showNextDayRoute);
   // Sideways on the chip is the day either side of it; downwards on a trip is
   // into its days. The series is already worked out (see `showTrack`), so this
   // asks a lookup rather than a sweep of the history on every pointer event.
@@ -9357,11 +9337,11 @@ function wireLayersControl() {
     onStep: (step, axis) => (axis === 'x' ? showAdjacentDay(step) : showFirstDayOfTrip()),
   });
   // The chip below, once *Show* has been pressed: sideways is the next
-  // activity, wrapping the same way *Next* does. Collapsed it does not
+  // activity. The ends resist, the same as the days. Collapsed it does not
   // answer — a swipe that showed the first activity would skip the press
   // that says you meant to.
-  mountSwipe(document.getElementById('route-solo'), {
-    can: (step, axis) => axis === 'x' && dayRouteAt >= 0 && dayRoutes.length > 1,
+  const routeSwipe = mountSwipe(document.getElementById('route-solo'), {
+    can: (step, axis) => axis === 'x' && dayRouteAt >= 0 && !!dayRoutes[dayRouteAt + step],
     onStep: (step) => { void showDayRoute(dayRouteAt + step); },
   });
   // The arrows are the same three steps for a hand that has neither a
@@ -9370,6 +9350,8 @@ function wireLayersControl() {
   document.getElementById('trip-chip-prev').addEventListener('click', () => chipSwipe.step(-1, 'x'));
   document.getElementById('trip-chip-next').addEventListener('click', () => chipSwipe.step(1, 'x'));
   document.getElementById('trip-chip-down').addEventListener('click', () => chipSwipe.step(-1, 'y'));
+  document.getElementById('route-solo-prev').addEventListener('click', () => routeSwipe.step(-1, 'x'));
+  document.getElementById('route-solo-next').addEventListener('click', () => routeSwipe.step(1, 'x'));
 
   // …and the same three without a hand on anything.
   //

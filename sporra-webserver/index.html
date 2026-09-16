@@ -595,22 +595,23 @@
         <button data-i18n-aria-label="trip-chip-next.the-day-after" class="chip-arrow chip-arrow-r" type="button" id="trip-chip-next" hidden>
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 6l6 6-6 6"/></svg>
         </button>
-        <!-- *Next* only, and only once an activity is isolated. *Show* lives
-             on the chip below, beside the count it acts on — a Show sitting
-             next to a date does not say what it will show. Moved into the
-             second line of the text by `setChipText`. It lives here in the
-             markup so it can be keyed and found by id like everything else. -->
-        <button data-i18n="tripChip.next" type="button" id="trip-chip-route" hidden>Next</button>
         <button data-i18n="trip-chip-clear.clear" type="button" id="trip-chip-clear">Clear</button>
       </div>
       <!-- A day's activities, or one route isolated from the list. While a
            day with activities is on the chip above, this one is up from the
            start: "2 activities · Show", then the name of the one on the map
            and *Hide* once Show has been pressed. Sideways over it is the
-           next activity, the same gesture the day chip takes along the days.
+           next activity, the same gesture the day chip takes along the days,
+           and the arrows are the same hint — and the way through for a mouse.
            See `updateSoloChip` in src/main.js. -->
       <div class="route-solo" id="route-solo" hidden>
+        <button data-i18n-aria-label="route-solo-prev.the-activity-before" class="chip-arrow chip-arrow-l" type="button" id="route-solo-prev" hidden>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 6l-6 6 6 6"/></svg>
+        </button>
         <span data-i18n="route-solo-text.showing-one-route" id="route-solo-text">Showing one route</span>
+        <button data-i18n-aria-label="route-solo-next.the-activity-after" class="chip-arrow chip-arrow-r" type="button" id="route-solo-next" hidden>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 6l6 6-6 6"/></svg>
+        </button>
         <button data-i18n="route-solo-clear.show-all" type="button" id="route-solo-clear">Show all</button>
       </div>
       <!-- Dropping the home pin. Same glass chip as the others, because it is

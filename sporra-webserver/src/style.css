@@ -6423,8 +6423,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 }
 
 /* What the chip says, in two lines: what is being shown, and — for a day —
-   what is on it, with *Next* sitting in that second line once an activity is
-   isolated. *Show* lives on the chip below, beside the count it acts on.
+   what is on it. *Show* lives on the chip below, beside the count it acts on.
    See `setChipText` in src/main.js. */
 #trip-chip-text {
   display: flex;
@@ -6487,43 +6486,6 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 
 .chip-sub-text {
   opacity: 0.62;
-}
-
-/* The same button as *Clear*, in the same size, because they are the same kind
-   of thing — a press that does something to what the chip is showing. It was
-   smaller for a while on the argument that one ends the chip and the other is a
-   step inside it, which is a distinction the eye reads as "this one is less
-   finished" rather than "this one is smaller in scope". */
-.route-solo > #trip-chip-text .chip-sub > button {
-  appearance: none;
-  flex: none;
-  padding: 4px 11px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.route-solo > #trip-chip-text .chip-sub > button:hover {
-  background: rgba(255, 255, 255, 0.22);
-}
-
-.route-solo > #trip-chip-text .chip-sub > button[hidden] {
-  display: none;
-}
-
-:is([data-theme='light'], [data-chrome='light']) .route-solo > #trip-chip-text .chip-sub > button {
-  border-color: rgba(15, 23, 42, 0.18);
-  background: rgba(15, 23, 42, 0.08);
-  color: #0f172a;
-}
-
-:is([data-theme='light'], [data-chrome='light']) .route-solo > #trip-chip-text .chip-sub > button:hover {
-  background: rgba(15, 23, 42, 0.16);
 }
 
 /* The arrows.
