@@ -104,11 +104,9 @@ struct BlobRendererTests {
     /// point of cutting at a fixed alpha level rather than simply blurring:
     /// "the cells never grow, the outline just relaxes".
     ///
-    /// Measured on a cluster rather than on one cell, deliberately. The blur
-    /// sigma is a whole cell radius and it runs twice, so a *lone* disc comes
-    /// out genuinely faint — by hand, about 116/255 at its peak — and the
-    /// JavaScript does the same thing to it. Testing inflation on that case
-    /// would be testing two properties at once and blaming the wrong one.
+    /// Measured on a cluster rather than on one cell. A lone disc is a different
+    /// question — whether the cut erases it — and that one has its own test.
+    /// Inflation is about the outline of a shape that already has a solid core.
     @Test("a softer edge does not inflate the blob")
     func softEdgeDoesNotInflate() throws {
         guard let renderer = try makeRenderer() else { return }
@@ -145,9 +143,8 @@ struct BlobRendererTests {
         #expect(Double(soft) < Double(tight) * 1.6, "soft: \(soft), tight: \(tight)")
     }
 
-    /// The companion to the above: a single cell must still leave a mark, even
-    /// though two rounds of blurring by a whole cell radius take it well below
-    /// full strength. Faint is correct here; invisible would not be.
+    /// A single cell has to leave a mark. The cut used to erase one, back when
+    /// the blur was a whole cell radius; it must not start doing that again.
     @Test("one lone cell still draws something")
     func loneCellSurvives() throws {
         guard let renderer = try makeRenderer() else { return }

@@ -100,6 +100,40 @@ export function cellCenter(L, col, row) {
   return [1.5 * R * col, SQRT3 * R * (row + (col & 1 ? 0.5 : 0))];
 }
 
+/**
+ * Every cell within `reach` hex steps of `(col, row)`, that cell included.
+ *
+ * `reach` 0 is the one cell. The result is in the same odd-q coordinates
+ * `pointToCell` returns — columns are *not* wrapped, so a brush sitting on
+ * the prime meridian stays a continuous patch (column −1, not column N−1,
+ * which is the same cell only after `normCol` and a world away in Mercator).
+ * Callers wrap when they build an id. The disk does not depend on the level:
+ * every level is this same lattice, scaled.
+ *
+ * @param {number} col odd-q column, unwrapped
+ * @param {number} row
+ * @param {number} reach hex steps, ≥ 0
+ * @returns {Array<[number, number]>}
+ */
+export function cellsWithin(col, row, reach) {
+  // Odd-q → axial. The inverse of the last line of pointToCell, so a disk
+  // built here is a disk of the cells that function would name.
+  const q = col;
+  const r = row - (q - (q & 1)) / 2;
+  const lim = reach > 0 ? reach | 0 : 0;
+  const out = [];
+  for (let dq = -lim; dq <= lim; dq++) {
+    // Cube distance |dq| + |dr| + |dq+dr| ≤ 2·lim, written as the dr range.
+    const drMin = Math.max(-lim, -dq - lim);
+    const drMax = Math.min(lim, -dq + lim);
+    for (let dr = drMin; dr <= drMax; dr++) {
+      const nq = q + dq;
+      out.push([nq, r + dr + (nq - (nq & 1)) / 2]);
+    }
+  }
+  return out;
+}
+
 // Point → containing cell, via axial coords + cube rounding.
 export function pointToCell(L, x, y) {
   const R = radiusOf(L);

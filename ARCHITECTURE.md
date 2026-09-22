@@ -24,18 +24,22 @@ glass look. Click hexagons to mark places you've visited.
   in production. The map attribution sits top right, out of its way.
 - **The map turns, and tilts.** Ctrl-drag (or right-drag) turns it sideways and
   leans it up and down — one gesture, because they are one camera — and two
-  fingers do both on a touch screen. A **compass** appears in the button cluster
-  while it is turned or tilted and puts both back; there is nothing there while
-  north is up and the view is level. The lean is capped at 60°, which is where
-  the horizon stops being a question. See [Turning the map](#turning-the-map).
+  fingers do both on a touch screen. In edit mode that Ctrl-drag is the brush
+  instead, and a right-drag is what still turns the map. A **compass** appears
+  in the button cluster while it is turned or tilted and puts both back; there
+  is nothing there while north is up and the view is level. The lean is capped
+  at 60°, which is where the horizon stops being a question. See [Turning the
+  map](#turning-the-map).
 - **Modes**: the map is view-only until you switch **Editing** on in the menu,
   which reveals the glass **pencil button**; tapping that expands the edit panel
   and enters edit mode, where a glass tile **spotlight around the cursor** shows
   the grid — tiles render only near the pointer and fade out toward the rim
   (`SPOT_PX`, `SPOT_MAX_CELLS`), so even a zoomed-out map never builds more
-  than a couple thousand cells. In view mode a tap opens the **info card** for
-  that area instead. Set `EDIT_ENABLED = false` in `src/main.js` to ship a
-  fully view-only build (no pencil, no editing, at all).
+  than a couple thousand cells. The panel's **size** steps the brush
+  (`BRUSH_MIN`…`BRUSH_MAX`, remembered on this browser): a tap toggles that
+  disk, Ctrl paints it and Option erases it. In view mode a tap opens the
+  **info card** for that area instead. Set `EDIT_ENABLED = false` in
+  `src/main.js` to ship a fully view-only build (no pencil, no editing, at all).
 - **Menu**: one glass button opens three sections — *Appearance* (which basemap,
   how it is lit, how fine the grid is, what colours it), *Your map* (whether the
   ground answers a tap, your activities, your photographs) and, under those, the
@@ -138,6 +142,14 @@ glass look. Click hexagons to mark places you've visited.
   point is measured in cells, and a cell's on-screen size swings 3× within a
   zoom level — so a last **`BLOB_FEATHER_PX`** blur, measured in screen pixels,
   gives the same softness at every zoom instead of crisp edges when zoomed out.
+  **The pour is half a cell, cut at 0.4.** A sigma of one cell radius cut at
+  0.3 was the right softness when a cell was most of a kilometre. On the 50 m
+  grid it paints a one-cell line about 100–130 m across, and two such lines
+  with a cell of gap between them run together. Half a radius is as fine as
+  the sheet can resolve where those cells first appear — the canvas radius
+  there is only a few pixels, and the box blur will not go below one — and 0.4
+  is as high as the cut goes while the line's core stays solid. A one-cell
+  line then comes out around 70–85 m, the cell plus its rim.
   **Edge softness is tuned per coloring mode**: `BLOB_EDGE`/`BLOB_FEATHER_PX`
   apply to the single-color wash, `BLOB_HEAT_EDGE`/`BLOB_HEAT_FEATHER_PX` to the
   heat maps, which want a tighter rim — there every pixel of ramp is also a fade
@@ -157,25 +169,20 @@ glass look. Click hexagons to mark places you've visited.
   ladder is for), so a 5px feather was wider than the cell it was feathering, and
   it runs *after* the last cut with nothing left to re-firm it. Both are now what
   the paragraph above always claimed: 0.2 and 1px, tighter than the wash.
-  **A cell with nothing around it is a special case, and it used to be erased.**
-  The level-set cut cannot keep a feature narrower than the blur, and one cell is
-  narrower than the blur: a disc of `CELL_RADIUS`·R blurred by a sigma of
-  `BLOB_BLUR`·R peaks at about a third of full alpha, which is barely over
-  `BLOB_LEVEL`, and the second round then finishes it off. Measured over the
-  whole zoom ladder and every display density, a lone cell came out between alpha
-  0.00 and 0.08 while *any* cluster came out at 1.00 — so an isolated cell was
-  never faint, it was gone, at every zoom, and tuning the cut does not rescue it:
-  lowering `BLOB_LEVEL` enough to save one cell inflates every blob on the map.
-  It is the *ratio* of disc to blur that decides it, which is why the failure did
-  not change with zoom.
-  So cells the blur would eat are drawn at the size the cut can hold rather than
-  at their own — `SPARSE_GROW` cell radii, floored at `SPARSE_MIN_PX` for the
-  coarse sheets where a multiple of almost nothing is still almost nothing. What
-  keeps that from being a global inflation is the test for *which* cells:
-  **at most `SPARSE_NEIGHBOURS` lit neighbours**, and every cell along the edge of
-  a real blob has at least two, so no blob anywhere changes shape. What grows is
-  a cell on its own, both halves of a pair, and the tip of a one-cell-wide trail,
-  where a rounder cap is the whole of the difference. It is the bargain
+  **A cell with nothing around it used to be erased, and the fix for that is
+  now only a pixel floor.** The cut cannot keep a feature narrower than the
+  blur. With the blur at a whole cell radius, a disc of `CELL_RADIUS`·R peaked
+  at about a third of full alpha and the second round finished it off: a lone
+  cell came out between alpha 0.00 and 0.08 while any cluster came out at 1.00,
+  at every zoom, and lowering the level enough to save it would have inflated
+  every blob. Those cells were drawn at 1.9×, the size that cut could hold.
+  Half a radius no longer eats a cell — a lone disc comes out solid, about as
+  wide as one cell of a line — so `SPARSE_GROW` is 1. Growing them again would
+  put the fat tips back on every trail. What remains is `SPARSE_MIN_PX`, for a
+  sheet where a cell is barely a pixel and the rasterizer would hand the cut a
+  fraction of full alpha. The test for *which* cells is unchanged: **at most
+  `SPARSE_NEIGHBOURS` lit neighbours**, and every cell along the edge of a real
+  blob has at least two, so the floor never moves a blob. It is the bargain
   `MIN_CELL_PX` already makes: past the point where a thing is too small to draw
   honestly, drawing it slightly too big beats drawing nothing.
   The neighbour test needs the lattice, so it lives in the paint loop rather than
@@ -3991,7 +3998,9 @@ So the question is asked once now, in `src/view.js`, from the camera itself
 rather than from the shape of its bounding box. Nothing downstream changed —
 `groundBox()` still returns `{xMin, xMax, yMin, yMax}` in Mercator metres, and
 every renderer still consumes one. `ROTATE_ENABLED` in `src/main.js` is
-therefore a switch rather than a rewrite.
+therefore a switch rather than a rewrite. Edit mode borrows Ctrl for the
+brush, so the turn there is the right button — the gesture Ctrl-drag is
+everywhere else.
 
 **At bearing 0 and pitch 0 it returns precisely the box the old code did**, and
 `scripts/test/view.mjs` opens by reimplementing the old four lines and

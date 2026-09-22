@@ -23,7 +23,12 @@ public enum BlobShaping {
 
     /// Blur sigma as a fraction of a cell's on-screen radius. The knob that
     /// decides "cells with soft corners" against "one poured shape".
-    public static let blur = 1.0
+    ///
+    /// Half a radius. One whole radius was the pour when a cell was most of a
+    /// kilometre; on a 50 m cell it paints a one-cell line about 100–130 m
+    /// across. Smaller than this does not get narrower at the zoom where those
+    /// cells first appear — the sheet there is only a few pixels per cell.
+    public static let blur = 0.5
 
     /// How many blur → re-cut rounds. Two is enough to lose the lattice.
     public static let rounds = 2
@@ -54,7 +59,11 @@ public enum BlobShaping {
     /// The alpha taken as the blob's edge. Cutting near half alpha is what keeps
     /// the smoothed shape the same size as the cells underneath: lower inflates
     /// it, higher eats thin ribbons.
-    public static let level = 0.3
+    ///
+    /// 0.4, not 0.5. With the blur at half a radius a one-cell line still peaks
+    /// above this, so the core stays solid and the contour sits on the cell.
+    /// The old 0.3 was the inflation; 0.5 starts shaving the line.
+    public static let level = 0.4
 
     /// The band's low end can never reach zero. Without the floor a wide band
     /// starts below zero and lifts *every* pixel — including the empty ones — to
@@ -106,25 +115,20 @@ public enum BlobShaping {
 
     // MARK: - Cells with nothing around them
 
-    /// The cut cannot keep a feature narrower than the blur, and one cell is
-    /// narrower than the blur: a disc of 0.9·R blurred by a sigma of 1·R peaks
-    /// at about a third of full alpha, barely over ``level``, and the second
-    /// round finishes it off. Measured across the zoom ladder, a lone cell came
-    /// out between alpha 0.00 and 0.08 where any cluster came out at 1.00 — so
-    /// an isolated cell was not faint, it was erased, and lowering the level to
-    /// rescue it would inflate every blob on the map instead.
+    /// A lone cell used to be erased. With the blur at a whole cell radius a
+    /// disc of 0.9·R peaked at about a third of full alpha, and the second
+    /// round finished it off — alpha 0.00 to 0.08, where any cluster came out
+    /// at 1. Those cells were drawn at 1.9×, the size the cut could hold.
     ///
-    /// So a cell the blur would eat is drawn at the size the cut can hold: this
-    /// many cell radii, floored at ``sparseMinPx`` for the coarse sheets where a
-    /// multiple of almost nothing is still almost nothing.
-    ///
-    /// The caller decides which discs these apply to, because it is the only
-    /// side that knows the lattice. Only cells with at most
-    /// ``sparseNeighbours`` lit neighbours qualify, which is what keeps this
-    /// from being a global inflation: every cell along the edge of a real blob
-    /// has at least two, so no blob changes shape.
+    /// At half a radius a lone disc survives at its own size, about as wide as
+    /// one cell of a line. Growing it would put the fat tips back, so
+    /// ``sparseGrow`` stays at 1. What remains is ``sparseMinPx``: on a sheet
+    /// where a cell is barely a pixel, a cell with nothing beside it is the one
+    /// the cut erases, and drawing it at a couple of pixels beats drawing
+    /// nothing. Every cell on the edge of a real blob has at least two
+    /// neighbours, so the floor never moves a blob.
     public static let sparseNeighbours = 1
-    public static let sparseGrow = 1.9
+    public static let sparseGrow = 1.0
     public static let sparseMinPx = 2.0
 
     // MARK: - The cut

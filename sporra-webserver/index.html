@@ -96,7 +96,15 @@
         <div class="hud-row"><span data-i18n="hud.cell-size">Cell size</span><b id="hud-size">–</b></div>
         <div class="hud-row"><span data-i18n="hud.level">Level</span><b id="hud-res">–</b></div>
         <div class="hud-row"><span data-i18n="hud.visited">Visited</span><b id="hud-visited">0</b></div>
-        <div data-i18n="hud-hint.tap-a-hexagon-to-mark" class="hud-hint" id="hud-hint">Tap a hexagon to mark it visited · tap again to clear</div>
+        <div class="hud-row">
+          <span data-i18n="hud.size">Size</span>
+          <span class="hud-step">
+            <button type="button" id="hud-brush-dec" data-i18n-aria-label="hud-brush.smaller" aria-label="Smaller brush">−</button>
+            <b id="hud-brush">1</b>
+            <button type="button" id="hud-brush-inc" data-i18n-aria-label="hud-brush.larger" aria-label="Larger brush">+</button>
+          </span>
+        </div>
+        <div data-i18n="hud-hint.tap-toggles-ctrl-paints" class="hud-hint" id="hud-hint">Tap toggles · Ctrl paints · Option clears</div>
       </div>
     </div>
 

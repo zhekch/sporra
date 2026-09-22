@@ -259,7 +259,7 @@ public final class BlobRenderer {
     ) {
         // A real Gaussian rather than three box passes — see the note at the top
         // of BlobShaders.metal. MPS picks its own tap strategy per sigma, which
-        // is the part that keeps a blur of a whole cell affordable.
+        // is the part that keeps a blur of half a cell affordable.
         let gaussian = MPSImageGaussianBlur(device: device, sigma: Float(sigma))
         gaussian.edgeMode = .clamp
         gaussian.encode(commandBuffer: commands, sourceTexture: source, destinationTexture: destination)

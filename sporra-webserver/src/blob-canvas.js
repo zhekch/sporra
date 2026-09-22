@@ -94,14 +94,26 @@ const MOVING_MAX_PX = 120_000;
 // than this — dents between cells, corners, kinks along a road — is smoothed
 // away, so this is the knob that decides "cells with soft corners" vs "one
 // poured shape".
-export const BLOB_BLUR = 1;
+//
+// Half a radius. A sigma of one whole radius was the pour when a cell was most
+// of a kilometre, and on a 50 m cell it is the width: a one-cell line came out
+// about 100–130 m across, and two of them with a cell of gap between them ran
+// together. Smaller than this stops changing the zoom where those cells first
+// appear — the sheet there is only a few pixels per cell, and the box blur
+// will not go below a pixel — and it starts pinching the join between cells.
+export const BLOB_BLUR = 0.5;
 // How many blur → re-cut rounds. Each one relaxes the outline further without
 // growing it; two is enough to lose every trace of the lattice.
 export const BLOB_ROUNDS = 2;
-// Alpha level taken as the blob's edge. Cutting at roughly half alpha is what
-// keeps the smoothed shape the same size as the cells underneath — lower
-// inflates it, higher eats thin ribbons.
-export const BLOB_LEVEL = 0.3;
+// Alpha level taken as the blob's edge. Cutting near half alpha keeps the
+// smoothed shape the size of the cells underneath — lower inflates it, higher
+// eats thin ribbons.
+//
+// 0.4, not 0.5. With the blur at half a radius a one-cell line still peaks
+// well above this, so the core stays solid, and the contour sits on the cell
+// instead of a cell outside it. The old 0.3 was that inflation. All the way to
+// 0.5 starts shaving the line.
+export const BLOB_LEVEL = 0.4;
 // --- Edge softness ------------------------------------------------------------
 // Two knobs, and the single-color and heat maps get their own of each, because
 // the edge is doing a different job in the two modes. A flat wash is a hint you
@@ -160,31 +172,25 @@ export const BLOB_HEAT_FEATHER_PX = 1; // visits / recent / first seen
 const CELL_RADIUS = 0.9;
 
 // --- Cells with nothing around them ---------------------------------------------
-// The level-set cut cannot keep a feature narrower than the blur, and one cell
-// is narrower than the blur: a disc of 0.9·R blurred by a sigma of 1·R peaks at
-// about a third of full alpha, which is barely over BLOB_LEVEL, and the second
-// round then finishes it off. Measured over the whole zoom ladder, a lone cell
-// came out between alpha 0.00 and 0.08 while *any* cluster came out at 1.00. So
-// an isolated cell was never faint — it was erased, at every zoom and on every
-// display, and no amount of tuning the cut brings it back: lowering the level to
-// save it inflates every blob on the map instead.
+// A lone cell used to be erased. The cut cannot keep a feature narrower than
+// the blur, and with the blur at a whole cell radius a disc of 0.9·R peaked at
+// about a third of full alpha — barely over the level the cut sat at then —
+// and the second round finished it off. Measured over the zoom ladder, that
+// cell came out between alpha 0.00 and 0.08 while any cluster came out at 1.
+// Those cells were drawn at 1.9×, which is the size the cut could hold.
 //
-// The ratio is what decides it, so the fix is to draw those cells at the size
-// the cut can hold rather than at their own. `SPARSE_GROW` is that size in cells
-// and `SPARSE_MIN_PX` is the floor underneath it, for the coarse sheets where a
-// cell is barely one pixel across and a multiple of nothing is still nothing.
-//
-// Applied only to cells with at most `SPARSE_NEIGHBOURS` lit neighbours, and
-// that is the part that makes it safe rather than a global inflation: every cell
-// along the edge of a real blob has at least two, so no blob anywhere changes
-// shape. What grows is a cell on its own, both halves of a pair, and the tip of
-// a one-cell-wide trail — where a rounder cap is the whole of the difference.
-//
-// It is the bargain MIN_CELL_PX already makes, and the one any map makes to keep
-// a city dot on screen: past the point where a thing is too small to draw
+// The blur is half a radius now, and that ratio no longer eats a cell: a lone
+// disc comes out solid, and about as wide as one cell of a line. Growing it
+// would put the fat tips back on every trail. `SPARSE_GROW` stays at 1 for
+// that reason. What is left is `SPARSE_MIN_PX`, for a sheet where a cell is
+// barely a pixel and the rasterizer would hand the cut a fraction of full
+// alpha. A cell with nothing beside it is the one that fails first, because
+// nothing adds any ink, so those few cells are drawn at a couple of pixels.
+// Every cell along the edge of a real blob has at least two neighbours, so the
+// floor never moves a blob. Past the point where a thing is too small to draw
 // honestly, drawing it slightly too big beats drawing nothing at all.
 const SPARSE_NEIGHBOURS = 1;
-const SPARSE_GROW = 1.9;
+const SPARSE_GROW = 1;
 const SPARSE_MIN_PX = 2;
 
 // The six neighbours of a cell, by column parity. Flat-top, odd-q: odd columns

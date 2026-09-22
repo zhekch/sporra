@@ -9,6 +9,7 @@ import {
   colsOf,
   normCol,
   cellCenter,
+  cellsWithin,
   pointToCell,
   parentOf,
   parseCellId,
@@ -291,6 +292,25 @@ const SHOW_REGION_BORDERS = false;
 const SPOT_PX = 300; // spotlight radius in screen px
 const SPOT_FADE_START = 0.5; // fraction of the radius where the fade begins
 const SPOT_MAX_CELLS = 2200; // shrink the spotlight when cells get tiny
+// Brush radius on the edit panel, counted in cells. 1 is the cell under the
+// pointer; each step adds a ring. Eight is 169 cells — about 700 m across near
+// 47°, which is as wide as the spotlight you are aiming with still shows the
+// edge of. Past that a single Option-drag erases ground you cannot see.
+const BRUSH_MIN = 1;
+const BRUSH_MAX = 8;
+const BRUSH_KEY = 'visited-map:brush:v1';
+
+function savedBrush() {
+  try {
+    const n = Number(localStorage.getItem(BRUSH_KEY));
+    if (Number.isInteger(n) && n >= BRUSH_MIN && n <= BRUSH_MAX) return n;
+  } catch {
+    /* private mode — the size lasts for this visit */
+  }
+  return BRUSH_MIN;
+}
+
+let brushSize = savedBrush();
 
 // Level changes cross-dissolve rather than cut. Long enough to read as one
 // shape relaxing into another, short enough not to lag behind a zoom gesture.
@@ -1734,15 +1754,16 @@ new ResizeObserver(() => map.resize()).observe(map.getContainer());
 // ----------------------------------------------------------------------------
 // false → view-only map: the pencil button is hidden and clicks can never
 //         modify cells (visited cells come from your imported history).
-// true  → the pencil button appears; entering edit mode lets you click/paint
-//         cells to mark them visited.
+// true  → the pencil button appears; entering edit mode lets you mark and
+//         clear cells. Ctrl paints the brush, Option erases it.
 // The "Visited color" picker lives in the base-map menu regardless of this.
 // ============================================================================
 const EDIT_ENABLED = true;
 
 // --- Mode & accent color -----------------------------------------------------
 // 'view' (default): a normal map with only the colored regions visible.
-// 'edit': a tile spotlight follows the cursor and clicks toggle cells.
+// 'edit': a tile spotlight follows the cursor. A tap toggles the brush, Ctrl
+// paints it and Option erases it. Ctrl-drag turns the map only in view mode.
 const MODE_KEY = 'visited-map:mode:v1';
 // One colour for both basemaps — what this was before the two were told apart.
 // Still written, so rolling back to a build that only reads this one doesn't
@@ -2696,6 +2717,32 @@ function rollUpPainted(id) {
   return true;
 }
 
+// The other direction of rollUpPainted, for an erase sweep.
+//
+// Membership is what the picture needs, and it does compose backwards: take
+// this cell's visits back off every ancestor and drop the key when it was the
+// last one. Dates and the ids arrays do not — a parent can hold every cell in
+// a country, and splicing one id out of that on every cell of a sweep is the
+// pass this shortcut exists to avoid. `storedUnder` is not asked again until
+// the gesture's closing recomputeLit() rebuilds them. Called before
+// unmarkCell, which is what deletes the provenance this reads.
+function rollDownCleared(id) {
+  let [L, col, row] = parseCellId(id);
+  if (!(L <= MAX_LEVEL)) return;
+  const { hits } = cellStatsOf(id, false);
+  for (let l = L; l <= MAX_LEVEL; l++) {
+    if (l > L) [col, row] = parentOf(l - 1, col, row);
+    const key = `${col}/${row}`;
+    const e = litSets[l].get(key);
+    if (!e) continue;
+    e.cells -= 1;
+    e.hits -= hits;
+    if (e.cells <= 0) litSets[l].delete(key);
+  }
+  typeRollUpStale = true;
+  markAreasDirty();
+}
+
 // --- Area levels: which countries (or regions) are lit, merged into one shape --
 // The three coarsest steps of the map are not hexagons at all. Zoom out past the
 // finest levels and the grid gives way to the shapes people actually think in:
@@ -3382,7 +3429,54 @@ function toggleCell(id) {
   recomputeLit();
   updateGrid(true);
   updateTiles();
+  updateHud(currentLevel);
 }
+
+// A tap in edit mode, at the brush size. The centre cell decides which way:
+// lit clears the disk, empty paints it. Size 1 is the single-cell toggle this
+// replaced, including the one-cell history phrase.
+function editClick(lngLat) {
+  if (currentLevel == null) return;
+  clearTripHighlight();
+  const center = cellAt(lngLat);
+  const [L, col, row] = parseCellId(center.id);
+  const clearing = !!litSets[L]?.has(`${col}/${row}`);
+  const ids = brushIds(lngLat);
+  if (clearing) {
+    const seen = new Set();
+    const stored = [];
+    for (const id of ids) {
+      for (const vid of idsUnder(id)) {
+        if (seen.has(vid)) continue;
+        seen.add(vid);
+        stored.push(vid);
+      }
+    }
+    if (!stored.length) return;
+    const snapshot = snapshotCells(stored);
+    for (const id of stored) unmarkCell(id);
+    history.push(
+      `clearing ${plural(stored.length, 'cell')}`,
+      () => restoreCells(snapshot),
+      () => clearCells(stored),
+    );
+  } else {
+    const marked = ids.filter((id) => !visited.has(id));
+    if (!marked.length) return;
+    for (const id of marked) markCell(id);
+    const snapshot = snapshotCells(marked);
+    history.push(
+      marked.length === 1 ? 'marking a cell' : `painting ${plural(marked.length, 'cell')}`,
+      () => clearCells(marked),
+      () => remarkCells(snapshot),
+    );
+  }
+  recomputeLit();
+  updateGrid(true);
+  updateTiles();
+  updateHud(currentLevel);
+}
+
 // Debug hooks — handy in devtools for poking at cells and their provenance.
 window.visitedMap = {
   toggle: toggleCell,
@@ -6261,24 +6355,81 @@ function repaintRouteColors() {
   }
 }
 
-// --- Ctrl-paint: hold Ctrl and sweep the cursor to mark cells ----------------
-// Purely additive (never erases), so sweeping back over a cell is a no-op —
-// use single-click to clear. Panning is suspended while Ctrl is held so a
-// drag paints instead of moving the map. Cells are added immediately but the
-// (heavier) relight + re-render is batched to one per frame.
-let ctrlPaint = false;
-let paintDirty = false;
+// --- Brush: Ctrl paints, Option erases ---------------------------------------
+//
+// View mode gives Ctrl-drag to turning the map. Edit mode takes it back: hold
+// Ctrl (or Cmd) and sweep to paint, hold Option to clear. The button does not
+// have to be down — the modifier is the gesture — but a bare keypress does not
+// stamp the cell under the pointer. That press is usually the start of a
+// shortcut (Ctrl-Z), and the cell gets painted on the first move or the click.
+//
+// Option wins when both are down, so adding it to a paint sweep changes your
+// mind without letting go of Ctrl.
+//
+// One sweep is one history entry. Painting folds cells in incrementally
+// (rollUpPainted); erasing takes them back off the same way (rollDownCleared)
+// and rebuilds the roll-up once, on release. A rebuild per cell is what made
+// a sweep miss its frames.
+let gesture = null; // 'paint' | 'erase' | null
+// Set when a modifier press takes the mousedown. The click that follows would
+// toggle the same cells, and it can arrive after the key is already up — so
+// the click handler can no longer see the modifier. Cleared on the turn after
+// mouseup, once that click has had its chance to notice.
+let swallowClick = false;
+let gestureRaf = 0;
+let eraseVisual = false;
+let sweptCells = [];
+let sweptSet = new Set();
+let erasedSnap = [];
 
-// Sweeping with Ctrl held paints a cell per frame, and re-deriving all five
-// levels from all ~20k stored cells each time was more work than a frame has.
-// Fold the new cells in instead, and only fall back to the full pass when the
-// shortcut can't be exact (see rollUpPainted).
-function flushPaint() {
-  paintDirty = false;
+function cellAt(lngLat) {
+  const L = currentLevel;
+  const [col, row] = pointToCell(L, mercX(lngLat.lng), mercY(lngLat.lat));
+  return { L, col, row, id: `${L}/${normCol(col, colsOf(L))}/${row}` };
+}
+
+function brushIds(lngLat) {
+  const { L, col, row } = cellAt(lngLat);
+  const N = colsOf(L);
+  const seen = new Set();
+  const ids = [];
+  for (const [c, r] of cellsWithin(col, row, brushSize - 1)) {
+    const id = `${L}/${normCol(c, N)}/${r}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+// Stored rows under a brush cell. Copied, because clearing mutates the array
+// litSets is holding. A lit key with no rows falls back to the id itself —
+// edit mode paints at the stored level, so the two are the same cell.
+function idsUnder(id) {
+  const [L, col, row] = parseCellId(id);
+  const under = litSets[L]?.has(`${col}/${row}`) ? [...storedUnder(L, col, row)] : [];
+  if (under.length) return under;
+  return visited.has(id) ? [id] : [];
+}
+
+function scheduleFlush() {
+  if (gestureRaf) return;
+  gestureRaf = requestAnimationFrame(() => {
+    gestureRaf = 0;
+    flushGesture();
+  });
+}
+
+function flushGesture() {
   const ids = paintQueue.splice(0);
-  // Type mode re-ranks the sources and reassigns palette slots on every add, so
-  // it always takes the full pass.
-  let incremental = !HEAT_MODES[heatMode]?.categorical;
+  const erased = eraseVisual;
+  eraseVisual = false;
+  if (!ids.length && !erased) return;
+  // Type mode re-ranks the sources and reassigns palette slots on every add,
+  // so it always takes the full pass. An empty queue must not: erasing has
+  // already taken the cells off the roll-up, and a rebuild here would throw
+  // away the only reason the sweep can keep up.
+  let incremental = ids.length > 0 && !HEAT_MODES[heatMode]?.categorical;
   if (incremental) {
     for (const id of ids) {
       if (!rollUpPainted(id)) {
@@ -6287,68 +6438,142 @@ function flushPaint() {
       }
     }
   }
-  if (!incremental) recomputeLit(); // discards the partial roll-up and redoes it
+  if (ids.length && !incremental) recomputeLit();
   updateGrid(true);
   updateTiles();
+  updateHud(currentLevel);
 }
 
-// Every cell a single Ctrl-sweep lit. One drag is one thing you did, so it's
-// one entry in the history — undoing a sweep across half a canton should not
-// mean four hundred presses of Ctrl-Z.
-let sweptCells = [];
+function paintDisk(lngLat) {
+  let added = false;
+  for (const id of brushIds(lngLat)) {
+    if (visited.has(id) || sweptSet.has(id)) continue;
+    if (!sweptCells.length) clearTripHighlight();
+    markCell(id);
+    sweptSet.add(id);
+    sweptCells.push(id);
+    paintQueue.push(id);
+    added = true;
+  }
+  if (added) scheduleFlush();
+}
 
-function paintAt(lngLat) {
-  if (currentLevel == null) return;
-  const id = cellIdAt(lngLat);
-  if (visited.has(id)) return; // already lit — nothing to do
-  markCell(id);
-  sweptCells.push(id);
-  paintQueue.push(id);
-  if (!paintDirty) {
-    paintDirty = true;
-    requestAnimationFrame(flushPaint);
+function eraseDisk(lngLat) {
+  let removed = false;
+  for (const id of brushIds(lngLat)) {
+    for (const vid of idsUnder(id)) {
+      if (!visited.has(vid) || sweptSet.has(vid)) continue;
+      if (!sweptCells.length) clearTripHighlight();
+      erasedSnap.push([vid, (cellMeta.get(vid) ?? []).map((e) => ({ ...e }))]);
+      rollDownCleared(vid);
+      unmarkCell(vid);
+      if (visibleCells !== visited) visibleCells.delete(vid);
+      sweptSet.add(vid);
+      sweptCells.push(vid);
+      removed = true;
+    }
+  }
+  if (removed) {
+    eraseVisual = true;
+    scheduleFlush();
   }
 }
 
-function startPaint() {
-  if (ctrlPaint || mode !== 'edit') return;
-  ctrlPaint = true;
+function applyGesture(lngLat) {
+  if (!gesture || currentLevel == null || !lngLat) return;
+  if (gesture === 'erase') eraseDisk(lngLat);
+  else paintDisk(lngLat);
+}
+
+function gestureWanted(e) {
+  if (mode !== 'edit' || !e) return null;
+  if (e.altKey) return 'erase';
+  if (e.ctrlKey || e.metaKey) return 'paint';
+  return null;
+}
+
+function startGesture(kind, stamp) {
+  if (gesture || mode !== 'edit' || currentLevel == null) return;
+  gesture = kind;
   sweptCells = [];
+  sweptSet = new Set();
+  erasedSnap = [];
   setHover(null);
-  // Disabling dragPan drops the handler but not MapLibre's inertia buffer: a
-  // pan that was already under way still gets its fling, so the map carries on
-  // coasting underneath the sweep and paints a smear of cells the cursor never
-  // passed over. Only reachable when the button went down before the modifier.
+  // Disabling dragPan drops the handler but not the inertia buffer: a pan
+  // already under way still gets its fling, so the map coasts under the sweep
+  // and paints cells the cursor never passed over. dragRotate goes too:
+  // MapLibre turns on Ctrl+left, which is this gesture, and leaving it on
+  // spins the map in the same drag. It comes back on release, which is when
+  // a right-drag can turn the map again.
   const wasMoving = map.isMoving() || map.isEasing();
   map.dragPan.disable();
+  if (ROTATE_ENABLED) map.dragRotate?.disable();
   if (wasMoving) {
     map.stop();
     // map.stop() suppresses the moveend it would otherwise have fired, so the
-    // work that handler does has to happen here instead or the grid and the
-    // tiles are left showing the camera we just cancelled.
+    // work that handler does has to happen here or the grid is left on the
+    // camera we just cancelled.
     updateGrid();
     updateTiles();
   }
-  if (lastLngLat) paintAt(lastLngLat); // catch the cell already under the cursor
+  if (stamp && pointerOnMap && lastLngLat) applyGesture(lastLngLat);
 }
 
-function stopPaint() {
-  if (!ctrlPaint) return;
-  ctrlPaint = false;
+function stopGesture() {
+  if (!gesture) {
+    if (gestureRaf) {
+      cancelAnimationFrame(gestureRaf);
+      gestureRaf = 0;
+      flushGesture();
+    }
+    return;
+  }
+  const kind = gesture;
+  gesture = null;
+  if (gestureRaf) {
+    cancelAnimationFrame(gestureRaf);
+    gestureRaf = 0;
+    flushGesture();
+  }
   map.dragPan.enable();
-  // The gesture is over, so now it's one edit with a size. A sweep that lit
-  // nothing new (dragging back over cells already on the map) isn't an edit at
-  // all and doesn't go on the stack.
-  if (sweptCells.length) {
+  if (ROTATE_ENABLED) map.dragRotate?.enable();
+  // A sweep that changed nothing (back over ground already in that state)
+  // is not an edit and does not go on the stack.
+  if (kind === 'paint' && sweptCells.length) {
     const ids = sweptCells;
     const snapshot = snapshotCells(ids);
-    sweptCells = [];
     history.push(
       `painting ${plural(ids.length, 'cell')}`,
       () => clearCells(ids),
       () => remarkCells(snapshot),
     );
+  } else if (kind === 'erase' && sweptCells.length) {
+    const ids = sweptCells;
+    const snapshot = erasedSnap;
+    history.push(
+      `clearing ${plural(ids.length, 'cell')}`,
+      () => restoreCells(snapshot),
+      () => clearCells(ids),
+    );
+    recomputeLit();
+    updateGrid(true);
+    updateTiles();
+    updateHud(currentLevel);
   }
+  sweptCells = [];
+  sweptSet = new Set();
+  erasedSnap = [];
+  eraseVisual = false;
+}
+
+function syncGesture(e, stamp) {
+  const want = gestureWanted(e);
+  if (want === gesture) {
+    if (stamp && want) applyGesture(lastLngLat);
+    return;
+  }
+  stopGesture();
+  if (want) startGesture(want, stamp);
 }
 
 let lastLngLat = null;
@@ -6722,6 +6947,7 @@ function buildGrid(bb, L) {
 
 // --- Edit-mode tile spotlight ------------------------------------------------
 let cursorPx = null; // last pointer position in screen px
+let pointerOnMap = false;
 
 function buildTiles() {
   if (currentLevel == null || !cursorPx) return EMPTY;
@@ -6791,7 +7017,61 @@ function updateTiles() {
   // the mode tween lands.
   if (mode !== 'edit' && tileVis === 0) return;
   map.getSource('tiles')?.setData(mode === 'edit' ? buildTiles() : EMPTY);
+  updateBrush();
 }
+
+// The disk the brush will touch, as one polygon. Raw columns, not wrapped
+// ids: a brush on the prime meridian has to stay one shape, and the wrapped
+// column is a world away. Shown whenever the pointer is on the map in edit
+// mode, so the size stepper has something to change.
+function brushShape(L, col, row, reach) {
+  const cells = cellsWithin(col, row, reach);
+  const have = new Set(cells.map(([c, r]) => `${c}/${r}`));
+  const R = radiusOf(L);
+  const hexOffs = fullHexOffsets(R);
+  const boundary = [];
+  for (const [c, r] of cells) {
+    const p = c & 1;
+    const [cx, cy] = cellCenter(L, c, r);
+    for (const e of EDGES) {
+      if (have.has(`${c + e.dc}/${r + e.dr(p)}`)) continue;
+      const [ax, ay] = hexOffs[e.a];
+      const [bx, by] = hexOffs[e.b];
+      boundary.push([[cx + ax, cy + ay], [cx + bx, cy + by]]);
+    }
+  }
+  const loops = chainSegments(boundary).filter((pts) => pts.length > 3);
+  if (!loops.length) return EMPTY;
+  loops.sort((a, b) => b.length - a.length);
+  const loop = loops[0];
+  const first = loop[0];
+  const last = loop[loop.length - 1];
+  if (first[0] !== last[0] || first[1] !== last[1]) loop.push(first);
+  return {
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      properties: {},
+      geometry: { type: 'Polygon', coordinates: [loop.map((p) => project(p))] },
+    }],
+  };
+}
+
+function updateBrush() {
+  const src = map.getSource('brush');
+  if (!src) return;
+  // Size 1 is the cell the spotlight already highlights. The disk is only
+  // there once the brush is bigger than that, so the stepper has an edge to
+  // move and the default edit mode looks like it always did.
+  if (mode !== 'edit' || !pointerOnMap || currentLevel == null || !lastLngLat || brushSize < 2) {
+    src.setData(EMPTY);
+    return;
+  }
+  const { col, row } = cellAt(lastLngLat);
+  src.setData(brushShape(currentLevel, col, row, brushSize - 1));
+}
+
+
 
 // --- Crossfade -------------------------------------------------------------
 const fade = { cur: 1, prev: 0, raf: null, timeout: null };
@@ -7446,7 +7726,7 @@ function setMode(next) {
   } catch {
     /* fine */
   }
-  if (mode !== 'edit') stopPaint();
+  if (mode !== 'edit') stopGesture();
   setHover(null);
   // Edit mode never asks which route is under the pointer, so one lit on the way
   // in would stay lit until something else happened to clear it.
@@ -7459,6 +7739,7 @@ function setMode(next) {
   // view mode returns to the zoom-appropriate level. Crossfades either way.
   updateGrid(true);
   if (mode === 'edit') updateTiles();
+  else updateBrush();
 
   // Tween the tile spotlight in/out.
   if (modeRaf) cancelAnimationFrame(modeRaf);
@@ -7536,6 +7817,31 @@ function updateHud(level) {
   // source is switched off in the Type legend. See hiddenSources.
   hudVisited.textContent = String(visibleCells.size);
   updateDetailNow(level);
+}
+
+function setBrushSize(next) {
+  const size = Math.max(BRUSH_MIN, Math.min(BRUSH_MAX, next | 0));
+  if (size === brushSize) return;
+  brushSize = size;
+  try {
+    localStorage.setItem(BRUSH_KEY, String(size));
+  } catch {
+    /* private mode — the size lasts for this visit */
+  }
+  paintBrushUi();
+  updateBrush();
+}
+
+function paintBrushUi() {
+  const label = document.getElementById('hud-brush');
+  const dec = document.getElementById('hud-brush-dec');
+  const inc = document.getElementById('hud-brush-inc');
+  if (!label || !dec || !inc) return;
+  label.textContent = String(brushSize);
+  const reach = brushSize - 1;
+  label.title = plural(3 * reach * (reach + 1) + 1, 'cell');
+  dec.disabled = brushSize <= BRUSH_MIN;
+  inc.disabled = brushSize >= BRUSH_MAX;
 }
 
 // The Detail buttons are bare numbers, and a cell's ground size depends on the
@@ -10204,6 +10510,31 @@ function installGrid() {
   if (shownTrack) showTrack(shownTrack);
   if (placePin) showPlacePin(placePin);
 
+  // The brush disk, above the photographs — otherwise a dot you are aiming
+  // past would hide the cells you are about to change. White over a dark
+  // casing, same as the selection ring: it has to read on the wash, on a pale
+  // field and on a photograph, and the accent is the colour that disappears
+  // into the wash.
+  map.addSource('brush', { type: 'geojson', data: EMPTY, tolerance: 0 });
+  map.addLayer({
+    id: 'brush-fill', type: 'fill', source: 'brush',
+    paint: { 'fill-color': SEL_COLOR, 'fill-opacity': 0.14 },
+  });
+  map.addLayer({
+    id: 'brush-halo', type: 'line', source: 'brush', layout: lineLayout,
+    paint: {
+      'line-color': SEL_CASING,
+      'line-width': ['interpolate', ['linear'], ['zoom'], 2, 3.2, 17, 5],
+    },
+  });
+  map.addLayer({
+    id: 'brush-line', type: 'line', source: 'brush', layout: lineLayout,
+    paint: {
+      'line-color': SEL_COLOR,
+      'line-width': ['interpolate', ['linear'], ['zoom'], 2, 1.4, 17, 2.2],
+    },
+  });
+
   // Repopulate geometry for the new style and restore the current opacities.
   applyColors();
   applyTileVis();
@@ -10343,14 +10674,21 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         else { closeCellInfo(); closeRouteInfo(); closePhotoInfo(); }
         return;
       }
-      if (isCtrl(e.originalEvent)) return; // Ctrl gesture is handled as painting
-      toggleCell(cellIdAt(e.lngLat));
+      // Ctrl/Cmd paints and Option erases; the click would toggle the same
+      // cells a second time on the way up. swallowClick covers the release
+      // that happens before mouseup, when the click no longer carries the key.
+      if (swallowClick || isCtrl(e.originalEvent) || e.originalEvent.altKey) {
+        swallowClick = false;
+        return;
+      }
+      editClick(e.lngLat);
     }));
 
   let hoverPending = false;
   onMapBuilt(() => map.on('mousemove', (e) => {
       cursorPx = [e.point.x, e.point.y];
       lastLngLat = e.lngLat;
+      pointerOnMap = true;
       // View mode: show that the line under the cursor is tappable. Skipped
       // mid-gesture, where a hit test would be both wasted and misleading.
       if (mode !== 'edit' && !map.isMoving()) {
@@ -10378,21 +10716,20 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         }
       }
       if (mode !== 'edit' || currentLevel == null) return;
-      // Keep the paint gesture in sync with the live modifier state (covers the
-      // case where Ctrl is pressed/released without a separate key event, e.g.
-      // after an OS shortcut stole focus).
-      if (isCtrl(e.originalEvent)) startPaint();
-      else stopPaint();
-      if (ctrlPaint) {
-        paintAt(e.lngLat); // painting schedules its own re-render
-        return;
-      }
+      // The modifier state on the move itself, not only on keydown. A keyup
+      // never arrives when a shortcut stole focus, and once a pan has started
+      // MapLibre stops emitting mousemove — which is why the mousedown below
+      // has to win before that pan exists.
+      if (e.originalEvent) syncGesture(e.originalEvent, true);
       // While the map is panning/zooming, leave the spotlight where it is: it's
       // anchored to the map, so it rides along and stays under the cursor (the
       // grabbed point follows the cursor during a drag). Rebuilding here would
-      // use a mid-drag camera and make it swim. moveend re-anchors it.
+      // use a mid-drag camera and make it swim. moveend re-anchors it. A brush
+      // sweep has panning disabled, so it still refreshes — the disk has to
+      // follow the pointer even when every cell under it is already painted
+      // and the sweep itself schedules nothing.
       if (map.isMoving()) return;
-      setHover(cellIdAt(e.lngLat));
+      if (!gesture) setHover(cellIdAt(e.lngLat));
       if (hoverPending) return;
       hoverPending = true;
       requestAnimationFrame(() => {
@@ -10400,49 +10737,63 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         updateTiles();
       });
     }));
-  map.getCanvas().addEventListener('mouseleave', () => {
-    setHover(null);
-    clearRailHover();
-    setHoveredRoute(null);
+  onMapBuilt(() => {
+    map.getCanvas().addEventListener('mouseleave', () => {
+      pointerOnMap = false;
+      setHover(null);
+      clearRailHover();
+      setHoveredRoute(null);
+      updateBrush();
+    });
+
+    // Capture phase, on the container MapLibre listens to. Ctrl+left is how
+    // the map turns; in edit mode that chord is the brush, and so is Option,
+    // which would otherwise pan. The right button is left alone so the map
+    // can still be turned from here. A ctrl-click on a Mac also opens the
+    // context menu, which would take the gesture with it.
+    map.getCanvasContainer().addEventListener('contextmenu', (e) => {
+      if (mode === 'edit') e.preventDefault();
+    }, true);
+    map.getCanvasContainer().addEventListener('mousedown', (e) => {
+      if (mode !== 'edit' || e.button !== 0) return;
+      if (!e.altKey && !e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      swallowClick = true;
+      const box = map.getCanvasContainer().getBoundingClientRect();
+      const x = e.clientX - box.left;
+      const y = e.clientY - box.top;
+      cursorPx = [x, y];
+      lastLngLat = map.unproject([x, y]);
+      pointerOnMap = true;
+      syncGesture(e, true);
+    }, true);
   });
 
-  // The modifier state carried on the button-press itself, checked before
-  // MapLibre sees it.
-  //
-  // Everything else here learns about Ctrl/Cmd from a keydown or from a later
-  // mousemove, and both can miss: the page only gets a keydown if it had focus
-  // when the key went down — Cmd-Tabbing back into the window and dragging
-  // straight away never produces one — and once MapLibre has started a pan it
-  // stops emitting `mousemove`, so the check in that handler never runs again.
-  // The gesture then panned the map instead of painting, which read as the map
-  // jerking sideways before a single cell finally got colored on release.
-  //
-  // Capture phase, because MapLibre's own mousedown listener is on this element
-  // and starting the pan is exactly what has to be pre-empted.
-  map.getCanvasContainer().addEventListener(
-    'mousedown',
-    (e) => {
-      if (mode !== 'edit' || !isCtrl(e)) return;
-      // Paint from where the button actually went down rather than wherever the
-      // pointer was last seen moving, which may be stale or somewhere else.
-      const box = map.getCanvasContainer().getBoundingClientRect();
-      lastLngLat = map.unproject([e.clientX - box.left, e.clientY - box.top]);
-      startPaint();
-    },
-    true,
-  );
-
-  // Ctrl held while stationary should still start/stop the paint gesture.
+  // Arm on the modifier, but do not stamp until the pointer moves or the
+  // button is down. The keydown of Ctrl is usually the start of Ctrl-Z, and
+  // the cell under the pointer is not what that chord means.
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Control' || e.key === 'Meta') startPaint();
+    if (e.key !== 'Control' && e.key !== 'Meta' && e.key !== 'Alt') return;
+    if (isTypingIn(e.target) || mode !== 'edit') return;
+    if ((e.key === 'Alt' || e.key === 'Control') && !e.metaKey && !e.repeat) e.preventDefault();
+    syncGesture(e, (e.buttons & 1) !== 0);
   });
   window.addEventListener('keyup', (e) => {
-    if (e.key === 'Control' || e.key === 'Meta') stopPaint();
+    if (e.key !== 'Control' && e.key !== 'Meta' && e.key !== 'Alt') return;
+    syncGesture(e, false);
   });
-  window.addEventListener('blur', stopPaint);
+  window.addEventListener('blur', () => stopGesture());
+  window.addEventListener('mouseup', () => {
+    if (!swallowClick) return;
+    setTimeout(() => { swallowClick = false; }, 0);
+  });
 
   hudPencil.addEventListener('click', () => setMode('edit'));
   hudDone.addEventListener('click', () => setMode('view'));
+  document.getElementById('hud-brush-dec').addEventListener('click', () => setBrushSize(brushSize - 1));
+  document.getElementById('hud-brush-inc').addEventListener('click', () => setBrushSize(brushSize + 1));
+  paintBrushUi();
   // The accent picker. Repainting on every drag frame is the point — you pick
   // the color against the map itself, not against a swatch.
   colorPicker = mountColorPicker({
