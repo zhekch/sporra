@@ -268,7 +268,20 @@ glass look. Click hexagons to mark places you've visited.
   stop changing rather than paused and replayed per frame (`pause()` runs
   `prepare()`, so the old shape uploaded the whole texture twice a frame), and
   the composite canvas is cleared in place instead of being resized to the size
-  it already was. The country geometry is also
+  it already was. A settled repaint keeps one extra pixel of width, permanently,
+  because a size change is the other way a paused source re-reads and taking
+  that pixel back off on the next frame moves the east edge. The frame where
+  the previous texture is still shown on the new rectangle shifts every disc
+  toward the west anchor — the colour flashes left — and for that frame the
+  sheet is scaled, so the miss is nothing at the left of the screen and a
+  pixel at the right. A brush used to do this on every move.
+  The brush does not repaint the sheet either. The discs from the last full
+  paint are still right everywhere the pointer did not touch, so the cells it
+  added or cleared are drawn into that buffer and only their neighbourhood is
+  re-blurred (`patchBlobSheet`). Repainting every cell on the map, on every
+  sample, is what left the stroke a frame behind the cursor — and at the edge
+  of the screen, where the pointer stops, a frame behind is the wrong cell.
+  The country geometry is also
   **pre-warmed**: ~800 KB of boundaries takes a MapLibre worker ~60 ms to parse
   and tile, and feeding it to the source at the moment the fade starts means the
   countries simply aren't drawable for the first chunk of it — the blob is

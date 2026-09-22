@@ -467,7 +467,10 @@ export function createBlobBuffers() {
     sheet,
     work,
     latestCtx: latest.getContext('2d', { willReadFrequently: true }),
-    sheetCtx: sheet.getContext('2d'),
+    // Read back by the brush patch, which copies a neighbourhood out of the
+    // disc buffer. willReadFrequently keeps that from reallocating the
+    // backing store on every stroke.
+    sheetCtx: sheet.getContext('2d', { willReadFrequently: true }),
     workCtx: work.getContext('2d', { willReadFrequently: true }),
   };
 }
@@ -680,11 +683,7 @@ export function paintBlobSheet({
   // a shrinking one would save, and it removes the question of whether round two
   // can see everything round one wrote.
   const feather = Math.min(featherPx * featherScale, unit * maxFeatherCells);
-  let reach = inkR + 2;
-  for (let round = 0; round < BLOB_ROUNDS; round++) {
-    reach += 3 * boxRadius(clampSigma(unit * BLOB_BLUR * (round === 0 ? 1 : 0.62)));
-  }
-  if (feather > 0.5) reach += 3 * boxRadius(clampSigma(feather));
+  const reach = spreadReach(unit, inkR, feather);
   const box = {
     x: Math.max(0, Math.floor(inkX0 - reach)),
     y: Math.max(0, Math.floor(inkY0 - reach)),
@@ -699,6 +698,27 @@ export function paintBlobSheet({
   // than the blur rounds off. Repeating it rounds harder without inflating
   // anything, which is the whole trick: the cells never grow, the outline just
   // relaxes.
+  pour(buffers, w, h, box, unit, edge, feather);
+
+  return { w, h, xMax };
+}
+
+// How far a disc's ink can travel before the pipeline is done with it.
+// Shared with the brush patch, which has to inset its result by the same
+// distance or the edge-clamped margin of a small blur would show up as a seam.
+function spreadReach(unit, inkR, feather) {
+  let reach = inkR + 2;
+  for (let round = 0; round < BLOB_ROUNDS; round++) {
+    reach += 3 * boxRadius(clampSigma(unit * BLOB_BLUR * (round === 0 ? 1 : 0.62)));
+  }
+  if (feather > 0.5) reach += 3 * boxRadius(clampSigma(feather));
+  return reach;
+}
+
+// The blur rounds, into `buffers.latest`. `box` is the only rectangle that
+// can hold ink; everything outside it is left transparent.
+function pour(buffers, w, h, box, unit, edge, feather) {
+  const { latest, latestCtx, sheet, work, workCtx } = buffers;
   let src = sheet;
   let dst = latest;
   for (let round = 0; round < BLOB_ROUNDS; round++) {
@@ -728,8 +748,201 @@ export function paintBlobSheet({
     latestCtx.clearRect(0, 0, w, h);
     latestCtx.drawImage(work, 0, 0);
   }
+}
 
-  return { w, h, xMax };
+// Scratch canvases for a brush patch. Grown, never shrunk — a stroke is a
+// neighbourhood, and allocating three canvases the size of that neighbourhood
+// on every move is the cost the patch exists to avoid paying.
+let patchBuffers = null;
+function patchScratch(w, h) {
+  if (!patchBuffers) patchBuffers = createBlobBuffers();
+  const fit = (canvas, ctx) => {
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    } else if (ctx) {
+      ctx.clearRect(0, 0, w, h);
+    }
+  };
+  fit(patchBuffers.sheet, patchBuffers.sheetCtx);
+  fit(patchBuffers.latest, patchBuffers.latestCtx);
+  fit(patchBuffers.work, null);
+  return patchBuffers;
+}
+
+/**
+ * Repaint the neighbourhood of `changed` cells into a sheet that already
+ * holds this view, instead of redrawing every lit cell.
+ *
+ * A brush used to repaint the whole viewport on every move. The sheet is
+ * every cell the map has, and on a machine without a native blur that is
+ * the stroke falling behind the cursor. The discs already on `buffers.sheet`
+ * are still right everywhere the brush did not touch, so this clears that
+ * neighbourhood, redraws whatever cells are there now, and re-blurs only
+ * the rectangle their ink can reach.
+ *
+ * Returns false when the patch cannot be exact — the caller paints the
+ * whole sheet. A false return changes nothing.
+ *
+ * @param {object} o
+ * @param {ReturnType<createBlobBuffers>} o.buffers the sheet a full paint left
+ * @param {{bb:object, level:number, heat:boolean, k:number, w:number, h:number}} o.stamp
+ * @param {Map} o.cells current "col/row" → stats, already including the edit
+ * @param {(stat:object)=>string} o.colorOf
+ * @param {string[]} o.changed keys whose membership changed
+ * @param {number} o.featherScale
+ * @returns {boolean}
+ */
+export function patchBlobSheet({ buffers, stamp, cells, colorOf, changed, featherScale }) {
+  const { bb, level, heat, k, w, h } = stamp;
+  if (!(k > 0) || buffers.sheet.width !== w || buffers.sheet.height !== h) return false;
+  if (buffers.latest.width !== w || buffers.latest.height !== h) return false;
+
+  const R = radiusOf(level);
+  const colSp = 1.5 * R;
+  const rowSp = SQRT3 * R;
+  const N = colsOf(level);
+  const unit = Math.max(R * k, MIN_CELL_PX);
+  const rPx = unit * CELL_RADIUS;
+  const sparsePx = Math.max(rPx * SPARSE_GROW, SPARSE_MIN_PX);
+  const px = (x) => (x - bb.xMin) * k;
+  const py = (y) => (bb.yMax - y) * k;
+  const edge = heat ? BLOB_HEAT_EDGE : BLOB_EDGE;
+  const featherPx = heat ? BLOB_HEAT_FEATHER_PX : BLOB_FEATHER_PX;
+  // The map passes no feather cap. Same value paintBlobSheet computes when
+  // `maxFeatherCells` is left at its default.
+  const feather = featherPx * featherScale;
+  const reach = spreadReach(unit, sparsePx, feather);
+
+  // Every world copy of a changed cell that actually lands on this sheet.
+  // The key is canonical; the disc is not, and a copy off the sheet has
+  // nothing to redraw.
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  const colLo = Math.floor((bb.xMin - R) / colSp);
+  const colHi = Math.ceil((bb.xMin + w / k + R) / colSp);
+  for (const key of changed) {
+    const sep = key.indexOf('/');
+    if (sep < 0) return false;
+    const nc = +key.slice(0, sep);
+    const row = +key.slice(sep + 1);
+    if (!Number.isFinite(nc) || !Number.isFinite(row)) return false;
+    const wc0 = Math.ceil((colLo - nc) / N);
+    const wc1 = Math.floor((colHi - nc) / N);
+    for (let wc = wc0; wc <= wc1; wc++) {
+      const col = nc + wc * N;
+      const cx = px(col * colSp);
+      const cy = py(row * rowSp + ((col & 1) ? 0.5 * rowSp : 0));
+      if (cx < -sparsePx || cy < -sparsePx || cx > w + sparsePx || cy > h + sparsePx) continue;
+      if (cx < x0) x0 = cx;
+      if (cy < y0) y0 = cy;
+      if (cx > x1) x1 = cx;
+      if (cy > y1) y1 = cy;
+    }
+  }
+  if (!(x1 >= x0)) return true; // nothing on this sheet changed
+
+  // The discs overlap their neighbours, so the rectangle that has to be
+  // cleared and redrawn is a disc-width past the centres. The blur then
+  // spreads `reach` past that, and it needs another `reach` of real discs
+  // around the pixels it writes — edge clamping inside that margin is what
+  // would leave a seam. The written rectangle is the inner one.
+  const disc = sparsePx + 2;
+  const read = {
+    x: Math.max(0, Math.floor(x0 - disc - 2 * reach)),
+    y: Math.max(0, Math.floor(y0 - disc - 2 * reach)),
+  };
+  read.w = Math.min(w, Math.ceil(x1 + disc + 2 * reach)) - read.x;
+  read.h = Math.min(h, Math.ceil(y1 + disc + 2 * reach)) - read.y;
+  if (read.w < 1 || read.h < 1) return true;
+  // One pixel inside the distance the blur can be wrong, so the seam is
+  // written from pixels the clamp cannot have touched.
+  const inset = Math.ceil(reach) + 1;
+  if (read.w <= inset * 2 + 1 || read.h <= inset * 2 + 1) return false;
+
+  const { sheetCtx, latestCtx } = buffers;
+  const clear = {
+    x: Math.max(0, Math.floor(x0 - disc)),
+    y: Math.max(0, Math.floor(y0 - disc)),
+  };
+  clear.w = Math.min(w, Math.ceil(x1 + disc)) - clear.x;
+  clear.h = Math.min(h, Math.ceil(y1 + disc)) - clear.y;
+  sheetCtx.clearRect(clear.x, clear.y, clear.w, clear.h);
+
+  // Redraw every disc that intersects the cleared rectangle, at the radius
+  // the full paint would have chosen. Clipped to the clear: the part of a
+  // neighbour that was not erased is still the original disc, and painting
+  // it again would composite the antialiased rim onto itself.
+  const sparse = (nc, row) => {
+    let n = 0;
+    for (const [dc, dr] of (nc & 1) ? NEIGHBOURS_ODD : NEIGHBOURS_EVEN) {
+      if (cells.has(`${normCol(nc + dc, N)}/${row + dr}`) && ++n > SPARSE_NEIGHBOURS) return false;
+    }
+    return true;
+  };
+  const mercX0 = bb.xMin + (clear.x - sparsePx) / k;
+  const mercX1 = bb.xMin + (clear.x + clear.w + sparsePx) / k;
+  const mercY1 = bb.yMax - (clear.y - sparsePx) / k;
+  const mercY0 = bb.yMax - (clear.y + clear.h + sparsePx) / k;
+  const c0 = Math.floor((mercX0 - R) / colSp);
+  const c1 = Math.ceil((mercX1 + R) / colSp);
+  const paths = new Map();
+  sheetCtx.save();
+  try {
+    sheetCtx.beginPath();
+    sheetCtx.rect(clear.x, clear.y, clear.w, clear.h);
+    sheetCtx.clip();
+    for (let col = c0; col <= c1; col++) {
+      const nc = normCol(col, N);
+      const off = (col & 1) ? 0.5 : 0;
+      const rowLo = Math.floor(mercY0 / rowSp - off) - 1;
+      const rowHi = Math.ceil(mercY1 / rowSp - off) + 1;
+      for (let row = rowLo; row <= rowHi; row++) {
+        const stat = cells.get(`${nc}/${row}`);
+        if (!stat) continue;
+        const cx = px(col * colSp);
+        const cy = py((row + off) * rowSp);
+        const rad = sparse(nc, row) ? sparsePx : rPx;
+        const color = colorOf(stat);
+        let path = paths.get(color);
+        if (!path) paths.set(color, (path = new Path2D()));
+        path.moveTo(cx + rad, cy);
+        path.arc(cx, cy, rad, 0, Math.PI * 2);
+      }
+    }
+    for (const [color, path] of paths) {
+      sheetCtx.fillStyle = color;
+      sheetCtx.fill(path);
+    }
+  } finally {
+    sheetCtx.restore();
+  }
+
+  const scratch = patchScratch(read.w, read.h);
+  // A drawImage of a sub-rectangle filters even at 1:1 and shifts the patch
+  // by a fraction of a pixel. The copy has to be the same pixels.
+  scratch.sheetCtx.putImageData(sheetCtx.getImageData(read.x, read.y, read.w, read.h), 0, 0);
+  pour(
+    scratch,
+    read.w,
+    read.h,
+    { x: 0, y: 0, w: read.w, h: read.h },
+    unit,
+    edge,
+    feather,
+  );
+  const img = scratch.latestCtx.getImageData(inset, inset, read.w - inset * 2, read.h - inset * 2);
+  latestCtx.putImageData(img, read.x + inset, read.y + inset);
+  return true;
+}
+
+function sameBox(a, b) {
+  return Math.abs(a.xMin - b.xMin) < 0.01
+    && Math.abs(a.xMax - b.xMax) < 0.01
+    && Math.abs(a.yMin - b.yMin) < 0.01
+    && Math.abs(a.yMax - b.yMax) < 0.01;
 }
 
 /**
@@ -754,6 +967,10 @@ export function createBlobLayer(map, id) {
   let latestRect = null;
   let outRect = null;
   let fadeT = 1; // 0 = only the outgoing level, 1 = only the newest
+  // What the disc buffer was painted for. A brush patch is only exact while
+  // this is still the view on screen; a pan, a zoom or a level change throws
+  // it away and paints the sheet again.
+  let sheetStamp = null;
 
   // Somewhere harmless until the first paint replaces it.
   let coords = [
@@ -846,10 +1063,13 @@ export function createBlobLayer(map, id) {
    *                              picks which pair of edge knobs applies
    * @param {boolean} [o.moving]  the camera is still under the gesture, so paint
    *                              to MOVING_MAX_PX and expect to be called again
+   * @param {string[]} [o.changed] "col/row" keys a brush just added or removed.
+   *   When the sheet already shows this view, only that neighbourhood is
+   *   repainted. Anything else paints the whole sheet.
    * @returns {boolean} whether the sheet was painted to the reduced budget, and
    *   therefore still owes a full-resolution repaint
    */
-  function paint({ bb, level, cells, colorOf, heat = false, moving = false }) {
+  function paint({ bb, level, cells, colorOf, heat = false, moving = false, changed = null }) {
     // Screen scale straight from the zoom (MapLibre's world is 512·2^z px).
     // The feather takes the same scale, so a width measured in CSS pixels stays
     // the same on screen whatever the display density.
@@ -857,6 +1077,28 @@ export function createBlobLayer(map, id) {
     // Only where the blur is ours. A browser with a native blur pays one GPU
     // pass per pixel and was never the browser that stuttered.
     const coarse = moving && !nativeBlur();
+    const pxPerMerc = ((512 * 2 ** map.getZoom()) / WORLD) * scale;
+    if (
+      !coarse &&
+      fadeT >= 1 &&
+      changed?.length &&
+      sheetStamp &&
+      sheetStamp.level === level &&
+      sheetStamp.heat === heat &&
+      sameBox(sheetStamp.bb, bb) &&
+      Math.abs(sheetStamp.pxPerMerc - pxPerMerc) <= pxPerMerc * 1e-9 &&
+      patchBlobSheet({
+        buffers,
+        stamp: sheetStamp,
+        cells,
+        colorOf,
+        changed,
+        featherScale: scale,
+      })
+    ) {
+      compose();
+      return false;
+    }
     const out = paintBlobSheet({
       buffers,
       bb,
@@ -864,13 +1106,40 @@ export function createBlobLayer(map, id) {
       cells,
       colorOf,
       heat,
-      pxPerMerc: ((512 * 2 ** map.getZoom()) / WORLD) * scale,
+      pxPerMerc,
       featherScale: scale,
       maxPixels: coarse ? MOVING_MAX_PX : undefined,
     });
-    if (!out) return false;
+    if (!out) {
+      sheetStamp = null;
+      return false;
+    }
 
-    latestRect = { xMin: bb.xMin, xMax: out.xMax, yMin: bb.yMin, yMax: bb.yMax };
+    const k = out.w / (out.xMax - bb.xMin);
+    // Copied: `bb` is also what coverage remembers, and a later write to that
+    // object must not quietly change which view this stamp claims to be.
+    sheetStamp = coarse
+      ? null
+      : {
+          bb: { xMin: bb.xMin, xMax: bb.xMax, yMin: bb.yMin, yMax: bb.yMax },
+          level,
+          heat,
+          k,
+          w: out.w,
+          h: out.h,
+          pxPerMerc,
+        };
+    // The bitmap is a whole number of pixels, so it is not exactly `bb` tall.
+    // Pinning the south edge to the pixel the discs were drawn against, the
+    // same way `xMax` already pins the east edge, keeps a cell at the bottom
+    // of the screen on the cursor. Leaving `bb.yMin` there stretched the
+    // sheet by up to half a pixel, all of it at the south edge.
+    latestRect = {
+      xMin: bb.xMin,
+      xMax: out.xMax,
+      yMin: bb.yMax - out.h / k,
+      yMax: bb.yMax,
+    };
     compose();
     return coarse;
   }
@@ -884,12 +1153,23 @@ export function createBlobLayer(map, id) {
     const w = latest.width;
     const h = latest.height;
     // A canvas source re-reads its pixels when it is playing OR when the canvas
-    // changes size, and the size path is the reliable one. Nudging the width by
-    // a pixel guarantees it for a settled repaint; mid-dissolve the map is
-    // already rendering every frame, and nudging there would visibly jitter the
-    // rectangle. The extra pixel is paid back by widening the mapped rectangle
-    // to match, so the projection stays exact either way.
-    const nudge = fadeT >= 1 && canvas.width === w ? 1 : 0;
+    // changes size, and the size path is the reliable one. One extra pixel
+    // forces that read the first time the sheet settles. It used to be taken
+    // back off on the next repaint — width `w`, then `w+1`, then `w` again —
+    // because only a *change* of size is noticed once the source has paused.
+    //
+    // That alternation is a jump. The west edge stays put and the east edge
+    // steps out and back, and the frame where the previous texture is still
+    // on the new rectangle shifts every disc toward the west anchor. A brush
+    // repaints on every move, so the colour flashed left for a frame, and for
+    // that frame the sheet was scaled: no error at the left of it, a full
+    // pixel at the right, which is the cell missing the cursor near the edge
+    // of the screen. A dissolve is already rendering every frame, and a brush
+    // keeps the source playing, so neither needs the size to change again.
+    // The extra pixel stays for as long as the sheet is settled, and the
+    // mapped rectangle is widened by the same pixel — the projection stays
+    // exact, and it stays still.
+    const nudge = fadeT >= 1 ? 1 : 0;
     // Assigning a dimension is what clears the canvas, but it also throws the
     // backing store away and builds a new one — which is the wrong trade on the
     // frames of a dissolve, where the size never changes and only the contents
@@ -978,6 +1258,7 @@ export function createBlobLayer(map, id) {
       latestRect = null;
       outRect = null;
       fadeT = 1;
+      sheetStamp = null;
       latest.width = latest.height = 1;
       canvas.width = canvas.height = 1;
       upload();

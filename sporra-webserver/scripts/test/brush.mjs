@@ -10,7 +10,9 @@
 //
 //   node scripts/test/brush.mjs
 
-import { cellCenter, cellsWithin, colsOf, normCol, pointToCell, radiusOf, SQRT3 } from '../../src/hexgrid.js';
+import {
+  cellCenter, cellsWithin, colsOf, normCol, pointToCell, radiusOf, segmentSamples, SQRT3,
+} from '../../src/hexgrid.js';
 
 let pass = 0;
 let fail = 0;
@@ -73,6 +75,37 @@ console.log('\nA brush is a disk of the cells it claims');
   const xs = west.map(([c, r]) => cellCenter(0, c, r)[0]);
   check(Math.max(...xs) - Math.min(...xs) < step(0) * 3,
     'the disk stays on one side of the world');
+}
+
+console.log('\nA stroke fills the cells between two samples');
+{
+  const end = segmentSamples(0, 0, 10, 0, 100);
+  check(end.length === 1 && end[0][0] === 10 && end[0][1] === 0,
+    'shorter than a step is just the end');
+
+  const line = segmentSamples(0, 0, 100, 0, 30);
+  check(line.length === 4, 'three gaps and the end', String(line.length));
+  check(line[line.length - 1][0] === 100 && line[line.length - 1][1] === 0, 'it lands on the end');
+  check(line[0][0] !== 0, 'and does not repeat the start');
+  let spaced = true;
+  let prev = 0;
+  for (const [x] of line) {
+    if (x - prev > 30 + 1e-9) spaced = false;
+    prev = x;
+  }
+  check(spaced, 'no gap larger than the step');
+
+  const diag = segmentSamples(0, 0, 30, 40, 1000);
+  check(diag.length === 1 && diag[0][0] === 30 && diag[0][1] === 40,
+    'a diagonal shorter than a step is the end');
+
+  const leap = segmentSamples(0, 0, 5000, 0, 10, 1000);
+  check(leap.length === 1 && leap[0][0] === 5000,
+    'a leap past maxDist is not filled in', String(leap.length));
+
+  const along = segmentSamples(0, 0, 0, 90, 40);
+  check(along.every(([, y], i) => Math.abs(y - (i + 1) * 30) < 1e-9),
+    'the samples sit on the segment');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

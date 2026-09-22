@@ -14,6 +14,9 @@ import {
   parentOf,
   parseCellId,
   wrapLng,
+  lngOf,
+  latOf,
+  segmentSamples,
 } from './hexgrid.js';
 import {
   loadCountries,
@@ -2456,6 +2459,9 @@ let litSets = [];
 // (see rollUpPainted). Declared here because recomputeLit() below runs at module
 // load, before anything further down has been initialized.
 const paintQueue = [];
+// Cells a brush has cleared since the last flush. The picture takes them
+// off the sheet directly; the roll-up is already updated (rollDownCleared).
+const eraseQueue = [];
 // Per-level ranges, so a heat map's colors mean the same thing while you pan.
 let litRange = [];
 // Sources present on the map, most cells first — the order the Type mode hands
@@ -2544,6 +2550,7 @@ const cellStatsOf = (id, byType) => cellStats(cellMeta.get(id) ?? [], byType);
 function recomputeLit(byType = HEAT_MODES[heatMode]?.categorical) {
   // A full rebuild already accounts for anything sitting in the queue.
   paintQueue.length = 0;
+  eraseQueue.length = 0;
   litSets = Array.from({ length: MAX_LEVEL + 1 }, () => new Map());
   const sourceCells = new Map();
   // Which source speaks for a cell is normally only worth working out for the
@@ -6369,8 +6376,18 @@ function repaintRouteColors() {
 // One sweep is one history entry. Painting folds cells in incrementally
 // (rollUpPainted); erasing takes them back off the same way (rollDownCleared)
 // and rebuilds the roll-up once, on release. A rebuild per cell is what made
-// a sweep miss its frames.
+// a sweep miss its frames. The picture is patched the same way: the cells
+// this flush added or cleared are drawn into the sheet already on screen,
+// and only that neighbourhood is re-blurred. Repainting every cell the map
+// holds, on every move, is what left the stroke a frame behind the cursor.
 let gesture = null; // 'paint' | 'erase' | null
+// The last pointer position a stroke accepted, in Mercator metres and in
+// screen pixels. The next sample fills every cell between the two, and a
+// sample that leaps away from it without the device having moved is dropped
+// — that is the one-frame dab a modifier key can report.
+let strokeMerc = null;
+let strokePx = null;
+let rejectedJump = null;
 // Set when a modifier press takes the mousedown. The click that follows would
 // toggle the same cells, and it can arrive after the key is already up — so
 // the click handler can no longer see the modifier. Cleared on the turn after
@@ -6420,26 +6437,56 @@ function scheduleFlush() {
   });
 }
 
+// "col/row" at the level on screen, or null when the id is some other level
+// and a patch would draw the wrong hex.
+function litKeyOf(id) {
+  const [L, col, row] = parseCellId(id);
+  if (L !== currentLevel || !Number.isFinite(col) || !Number.isFinite(row)) return null;
+  return `${col}/${row}`;
+}
+
+// What a heat ramp was normalised against. A hand-painted cell does not move
+// it; a patch that assumed it hadn't, and was wrong, would recolour the
+// whole sheet except the one cell it redrew.
+function rangeStamp() {
+  const r = litRange[currentLevel];
+  if (!r) return '';
+  return [r.maxHits, r.hotHits, r.minTime, r.maxTime, r.minAge, r.maxAge].join('|');
+}
+
 function flushGesture() {
-  const ids = paintQueue.splice(0);
-  const erased = eraseVisual;
+  const painted = paintQueue.splice(0);
+  const removed = eraseQueue.splice(0);
   eraseVisual = false;
-  if (!ids.length && !erased) return;
+  if (!painted.length && !removed.length) return;
+  const before = rangeStamp();
   // Type mode re-ranks the sources and reassigns palette slots on every add,
-  // so it always takes the full pass. An empty queue must not: erasing has
-  // already taken the cells off the roll-up, and a rebuild here would throw
-  // away the only reason the sweep can keep up.
-  let incremental = ids.length > 0 && !HEAT_MODES[heatMode]?.categorical;
-  if (incremental) {
-    for (const id of ids) {
+  // so it always takes the full pass. An erase must not: the cells are
+  // already off the roll-up, and a rebuild here would throw away the only
+  // reason the sweep can keep up.
+  let rollupOk = !painted.length || (!HEAT_MODES[heatMode]?.categorical && !hiddenSources.size);
+  if (rollupOk) {
+    for (const id of painted) {
       if (!rollUpPainted(id)) {
-        incremental = false;
+        rollupOk = false;
         break;
       }
     }
   }
-  if (ids.length && !incremental) recomputeLit();
-  updateGrid(true);
+  if (painted.length && !rollupOk) recomputeLit();
+  let changed = null;
+  if (rollupOk && rangeStamp() === before) {
+    changed = [];
+    for (const id of [...painted, ...removed]) {
+      const key = litKeyOf(id);
+      if (!key) {
+        changed = null;
+        break;
+      }
+      changed.push(key);
+    }
+  }
+  updateGrid(true, changed);
   updateTiles();
   updateHud(currentLevel);
 }
@@ -6470,6 +6517,7 @@ function eraseDisk(lngLat) {
       if (visibleCells !== visited) visibleCells.delete(vid);
       sweptSet.add(vid);
       sweptCells.push(vid);
+      eraseQueue.push(vid);
       removed = true;
     }
   }
@@ -6483,6 +6531,91 @@ function applyGesture(lngLat) {
   if (!gesture || currentLevel == null || !lngLat) return;
   if (gesture === 'erase') eraseDisk(lngLat);
   else paintDisk(lngLat);
+}
+
+function rememberStroke(lngLat, px) {
+  if (!lngLat) return;
+  strokeMerc = [mercX(lngLat.lng), mercY(lngLat.lat)];
+  strokePx = px ? [px[0], px[1]] : strokePx;
+}
+
+function forgetStroke() {
+  strokeMerc = null;
+  strokePx = null;
+  rejectedJump = null;
+}
+
+// Fill the cells the pointer crossed between the last accepted sample and
+// this one. A frame that runs long otherwise leaves a gap, which at the
+// edge of the screen — where the pointer stops and the last sample is the
+// one that was missed — is a cell that never got painted.
+function applyStroke(lngLat) {
+  if (!strokeMerc || currentLevel == null) {
+    applyGesture(lngLat);
+    return;
+  }
+  const x = mercX(lngLat.lng);
+  const y = mercY(lngLat.lat);
+  const step = SQRT3 * radiusOf(currentLevel) * 0.45;
+  // A screen and a half. Further than that in one sample is not a stroke;
+  // segmentSamples then returns only the end, so a leap cannot paint a stripe.
+  const maxDist = 1600 * mercPerPixel(map.getZoom());
+  for (const [sx, sy] of segmentSamples(strokeMerc[0], strokeMerc[1], x, y, step, maxDist)) {
+    applyGesture({ lng: lngOf(sx), lat: latOf(sy) });
+  }
+}
+
+// Screen position of a pointer event, in the same space MapLibre unprojects.
+//
+// `clientX - rect.left` is only that space while the canvas is not scaled.
+// A browser zoom, or a backing store that does not match the CSS box, makes
+// `getBoundingClientRect` and `offsetWidth` disagree, and the error is zero
+// at the left of the canvas and the whole discrepancy at the right. The
+// mousedown path used to skip the division. It is the same arithmetic
+// MapLibre's own mouse handler uses, so a press and a move name one cell.
+function canvasPoint(e) {
+  const el = map?.getCanvas?.();
+  if (!el || !e || !Number.isFinite(e.clientX)) return null;
+  const rect = el.getBoundingClientRect();
+  const sx = (rect.width / el.offsetWidth) || 1;
+  const sy = (rect.height / el.offsetHeight) || 1;
+  const x = (e.clientX - rect.left) / sx - el.clientLeft;
+  const y = (e.clientY - rect.top) / sy - el.clientTop;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { px: [x, y], lngLat: map.unproject([x, y]) };
+}
+
+function nearCanvas(px, slop) {
+  const el = map.getCanvas();
+  return px[0] >= -slop && px[1] >= -slop
+    && px[0] <= el.clientWidth + slop && px[1] <= el.clientHeight + slop;
+}
+
+// A modifier-key mousemove can carry one position the pointer never
+// occupied. `movementX` is how far the device says it moved; a client
+// position that leapt much further than that is the event, and painting it
+// is a cell off to the side for a single sample. A second sample that is
+// still out there is the pointer having actually arrived.
+function plausibleSample(e, px) {
+  if (!strokePx) return true;
+  const dist = Math.hypot(px[0] - strokePx[0], px[1] - strokePx[1]);
+  if (dist <= 48) {
+    rejectedJump = null;
+    return true;
+  }
+  if (e && typeof e.movementX === 'number') {
+    const moved = Math.hypot(e.movementX, e.movementY);
+    if (moved + 4 < dist * 0.35) {
+      if (rejectedJump && Math.hypot(px[0] - rejectedJump[0], px[1] - rejectedJump[1]) < 48) {
+        rejectedJump = null;
+        return true;
+      }
+      rejectedJump = [px[0], px[1]];
+      return false;
+    }
+  }
+  rejectedJump = null;
+  return true;
 }
 
 function gestureWanted(e) {
@@ -6516,7 +6649,10 @@ function startGesture(kind, stamp) {
     updateGrid();
     updateTiles();
   }
-  if (stamp && pointerOnMap && lastLngLat) applyGesture(lastLngLat);
+  if (stamp && pointerOnMap && lastLngLat) {
+    applyGesture(lastLngLat);
+    rememberStroke(lastLngLat, cursorPx);
+  }
 }
 
 function stopGesture() {
@@ -6564,6 +6700,14 @@ function stopGesture() {
   sweptSet = new Set();
   erasedSnap = [];
   eraseVisual = false;
+  forgetStroke();
+  // The stroke may have ended past the canvas, which is where mouseleave
+  // deliberately did not drop the pointer. The ring should not stay there
+  // once the key is up.
+  if (cursorPx && !nearCanvas(cursorPx, 0)) {
+    pointerOnMap = false;
+    updateBrush();
+  }
 }
 
 function syncGesture(e, stamp) {
@@ -7465,7 +7609,7 @@ const levelName = (L) => (isVectorLevel(L) ? vectorKindOf(L) : `L${L}`);
 // in a `finally`, so a preferences fetch that throws still ends with a map.
 let paintHeldForPrefs = false;
 
-function updateGrid(force = false) {
+function updateGrid(force = false, changed = null) {
   // The hex sources briefly don't exist while a new basemap style loads.
   if (!map.getSource('hex')) return;
   if (paintHeldForPrefs) return;
@@ -7562,6 +7706,7 @@ function updateGrid(force = false) {
       colorOf: blobColorOf(level),
       heat: isHeatMode(),
       moving: map.isMoving(),
+      changed,
     });
   };
 
@@ -10685,60 +10830,117 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     }));
 
   let hoverPending = false;
+  // pointermove and the mousemove that follows it describe one sample.
+  // Handling both paints the cell twice and, worse, lets a coalesced batch
+  // and its summary disagree about where the pointer was.
+  let brushEventKey = '';
+  const scheduleTiles = () => {
+    // While the map is panning/zooming, leave the spotlight where it is: it's
+    // anchored to the map, so it rides along and stays under the cursor.
+    // Rebuilding here would use a mid-drag camera and make it swim. moveend
+    // re-anchors it. A brush sweep has panning disabled, so it still refreshes.
+    if (map.isMoving()) return;
+    if (!gesture && lastLngLat) setHover(cellIdAt(lastLngLat));
+    if (hoverPending) return;
+    hoverPending = true;
+    requestAnimationFrame(() => {
+      hoverPending = false;
+      updateTiles();
+    });
+  };
+  // The brush. Lives on the window rather than on the map: MapLibre stops
+  // emitting mousemove once a pan owns the pointer, and the canvas stops
+  // being the target a pixel before the edge of the screen. Either one is a
+  // cell that paints short of the cursor. A control still wins — holding
+  // Command over the menu is not a stroke.
+  const onBrushPointer = (e) => {
+    if (mode !== 'edit' || currentLevel == null || !e || e.pointerType === 'touch') return;
+    const key = `${e.timeStamp}|${e.clientX}|${e.clientY}`;
+    if (key === brushEventKey) return;
+    brushEventKey = key;
+    const onCanvas = e.target === map.getCanvas();
+    if (!onCanvas) {
+      if (!gesture) return;
+      if (e.target instanceof Element && e.target.closest('button, a, input, textarea, select, label, #hud, #layers-menu, #layers-btn')) return;
+    }
+    const batched = e.getCoalescedEvents?.();
+    const events = batched && batched.length ? batched : [e];
+    // Modifiers are read off the event itself. A coalesced sample is only
+    // a position — some browsers leave ctrl/meta/alt off it, and trusting
+    // that would end the stroke on the first sample of every move.
+    const want = gestureWanted(e);
+    let any = false;
+    for (const ev of events) {
+      const pos = canvasPoint(ev);
+      if (!pos || !nearCanvas(pos.px, gesture ? 16 : 0)) continue;
+      if (!plausibleSample(ev, pos.px)) continue;
+      cursorPx = pos.px;
+      lastLngLat = pos.lngLat;
+      const el = map.getCanvas();
+      pointerOnMap = pos.px[0] >= 0 && pos.px[1] >= 0
+        && pos.px[0] <= el.clientWidth && pos.px[1] <= el.clientHeight;
+      if (want !== gesture) {
+        // Starting, stopping, or paint becoming erase. syncGesture stamps
+        // the cell when a gesture begins; the samples after this one fill
+        // onward from there.
+        syncGesture(e, true);
+        if (gesture) rememberStroke(lastLngLat, cursorPx);
+        else forgetStroke();
+      } else if (gesture) {
+        applyStroke(pos.lngLat);
+        rememberStroke(pos.lngLat, cursorPx);
+      }
+      any = true;
+    }
+    if (any) scheduleTiles();
+  };
+  window.addEventListener('pointermove', onBrushPointer);
   onMapBuilt(() => map.on('mousemove', (e) => {
-      cursorPx = [e.point.x, e.point.y];
-      lastLngLat = e.lngLat;
-      pointerOnMap = true;
       // View mode: show that the line under the cursor is tappable. Skipped
       // mid-gesture, where a hit test would be both wasted and misleading.
-      if (mode !== 'edit' && !map.isMoving()) {
-        if (routesOn && routeGeom) {
-          const under = routeAt(e.point);
-          pointerOnRoute = !!under;
-          // The hit test was already being paid for, for the cursor. The glow
-          // is the same answer said in the picture instead of on the pointer.
-          setHoveredRoute(under?.id ?? null);
-          syncPointer();
+      if (mode !== 'edit') {
+        cursorPx = [e.point.x, e.point.y];
+        lastLngLat = e.lngLat;
+        pointerOnMap = true;
+        if (!map.isMoving()) {
+          if (routesOn && routeGeom) {
+            const under = routeAt(e.point);
+            pointerOnRoute = !!under;
+            // The hit test was already being paid for, for the cursor. The glow
+            // is the same answer said in the picture instead of on the pointer.
+            setHoveredRoute(under?.id ?? null);
+            syncPointer();
+          }
+          // And the railway under it, if the overlay has been asked to answer. A
+          // frame behind, and its own half of the cursor — see railHoverAt.
+          railHoverAt(e.point);
+          // And an airport, answered here and now: six layers over a point source is
+          // the same order of work as the route test above it, not the railway's.
+          if (airportsOn && styleReady) {
+            pointerOnAirport = !!airportFeatureAt(e.point);
+            syncPointer();
+          }
+          // And a photograph, on the same terms and for the same money.
+          if (photosOn && styleReady) {
+            pointerOnPhoto = !!photoFeatureAt(e.point);
+            syncPointer();
+          }
         }
-        // And the railway under it, if the overlay has been asked to answer. A
-        // frame behind, and its own half of the cursor — see railHoverAt.
-        railHoverAt(e.point);
-        // And an airport, answered here and now: six layers over a point source is
-        // the same order of work as the route test above it, not the railway's.
-        if (airportsOn && styleReady) {
-          pointerOnAirport = !!airportFeatureAt(e.point);
-          syncPointer();
-        }
-        // And a photograph, on the same terms and for the same money.
-        if (photosOn && styleReady) {
-          pointerOnPhoto = !!photoFeatureAt(e.point);
-          syncPointer();
-        }
+        return;
       }
-      if (mode !== 'edit' || currentLevel == null) return;
       // The modifier state on the move itself, not only on keydown. A keyup
       // never arrives when a shortcut stole focus, and once a pan has started
       // MapLibre stops emitting mousemove — which is why the mousedown below
-      // has to win before that pan exists.
-      if (e.originalEvent) syncGesture(e.originalEvent, true);
-      // While the map is panning/zooming, leave the spotlight where it is: it's
-      // anchored to the map, so it rides along and stays under the cursor (the
-      // grabbed point follows the cursor during a drag). Rebuilding here would
-      // use a mid-drag camera and make it swim. moveend re-anchors it. A brush
-      // sweep has panning disabled, so it still refreshes — the disk has to
-      // follow the pointer even when every cell under it is already painted
-      // and the sweep itself schedules nothing.
-      if (map.isMoving()) return;
-      if (!gesture) setHover(cellIdAt(e.lngLat));
-      if (hoverPending) return;
-      hoverPending = true;
-      requestAnimationFrame(() => {
-        hoverPending = false;
-        updateTiles();
-      });
+      // has to win before that pan exists. pointermove normally got here
+      // first; this is the same sample when it didn't.
+      if (e.originalEvent) onBrushPointer(e.originalEvent);
     }));
   onMapBuilt(() => {
     map.getCanvas().addEventListener('mouseleave', () => {
+      // A stroke that has reached the edge of the canvas is still a stroke.
+      // Dropping the pointer here is what parked the last cell a pixel
+      // inside the screen.
+      if (gesture) return;
       pointerOnMap = false;
       setHover(null);
       clearRailHover();
@@ -10760,12 +10962,12 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       e.preventDefault();
       e.stopPropagation();
       swallowClick = true;
-      const box = map.getCanvasContainer().getBoundingClientRect();
-      const x = e.clientX - box.left;
-      const y = e.clientY - box.top;
-      cursorPx = [x, y];
-      lastLngLat = map.unproject([x, y]);
-      pointerOnMap = true;
+      const pos = canvasPoint(e);
+      if (pos) {
+        cursorPx = pos.px;
+        lastLngLat = pos.lngLat;
+        pointerOnMap = true;
+      }
       syncGesture(e, true);
     }, true);
   });

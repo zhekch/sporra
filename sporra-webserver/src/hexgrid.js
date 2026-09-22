@@ -134,6 +134,44 @@ export function cellsWithin(col, row, reach) {
   return out;
 }
 
+/**
+ * Points along the Mercator segment from `a` to `b`, at most `step` apart,
+ * including `b` and not `a`.
+ *
+ * A brush hears the pointer in samples. Between two samples the cells that
+ * were crossed are still cells the pointer was on, and a stroke that only
+ * stamps the samples leaves gaps the moment a frame runs long. `maxDist`
+ * is the other bound: one event that leaps across the window is not a
+ * stroke, and filling it would paint a stripe the pointer never travelled.
+ * Past it, only the end point comes back.
+ *
+ * @param {number} ax
+ * @param {number} ay
+ * @param {number} bx
+ * @param {number} by
+ * @param {number} step metres, > 0
+ * @param {number} [maxDist] metres; larger gaps are not interpolated
+ * @returns {Array<[number, number]>}
+ */
+export function segmentSamples(ax, ay, bx, by, step, maxDist = Infinity) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const dist = Math.hypot(dx, dy);
+  if (!(step > 0) || !(dist > step)) return [[bx, by]];
+  if (dist > maxDist) return [[bx, by]];
+  // Capped so a pathological step (a cell smaller than a pixel, a long
+  // flick) cannot turn one event into tens of thousands of stamps. Widening
+  // the step still lands on `b`; the cap is only reached once the segment is
+  // hundreds of cells long.
+  const n = Math.min(400, Math.ceil(dist / step));
+  const out = new Array(n);
+  for (let i = 1; i <= n; i++) {
+    const t = i / n;
+    out[i - 1] = [ax + dx * t, ay + dy * t];
+  }
+  return out;
+}
+
 // Point → containing cell, via axial coords + cube rounding.
 export function pointToCell(L, x, y) {
   const R = radiusOf(L);
