@@ -35,9 +35,11 @@ glass look. Click hexagons to mark places you've visited.
   and enters edit mode, where a glass tile **spotlight around the cursor** shows
   the grid — tiles render only near the pointer and fade out toward the rim
   (`SPOT_PX`, `SPOT_MAX_CELLS`), so even a zoomed-out map never builds more
-  than a couple thousand cells. The panel's **size** steps the brush
-  (`BRUSH_MIN`…`BRUSH_MAX`, remembered on this browser): a tap toggles that
-  disk, Ctrl paints it and Option erases it. In view mode a tap opens the
+  than a couple thousand cells. The panel's **paint** and **erase** sizes
+  step those brushes apart (`BRUSH_MIN`…`BRUSH_MAX`, each remembered on this
+  browser). A tap uses whichever the cell under the pointer calls for, and
+  Ctrl paints and Option erases at their own sizes for the whole sweep. In
+  view mode a tap opens the
   **info card** for that area instead. Set `EDIT_ENABLED = false` in
   `src/main.js` to ship a fully view-only build (no pencil, no editing, at all).
 - **Menu**: one glass button opens three sections — *Appearance* (which basemap,
@@ -288,6 +290,18 @@ glass look. Click hexagons to mark places you've visited.
   the same miss seen from the other side. Coalesced samples are used only to
   fill a stroke, and only when they sit on the segment between the previous
   point and this one.
+  The dispatched position goes wrong too: with Command or Option held, one move
+  in a while lands a long way to the left, and the sample after it is back under
+  the cursor. Filled in, that is a line painted across the map by a hand that
+  did not move, and an undo to be rid of. A step longer than `LEAP_PX` is
+  therefore not refused but **held** (`holdPointerSample`), because a twitch and
+  a flick are the same number in one sample — what tells them apart is the one
+  after. Landing out there too, the pointer really did move: leap and answer are
+  believed together and the stroke fills the whole way, a frame late. Landing
+  back where the pointer was, the leap goes unused. A leap nothing follows at
+  all moves the pointer after `LEAP_SETTLE_MS` and paints nothing on the way —
+  a highlight parked where the cursor is not is the other half of this bug, and
+  a sample nothing confirms is exactly the one not to paint by.
   The country geometry is also
   **pre-warmed**: ~800 KB of boundaries takes a MapLibre worker ~60 ms to parse
   and tile, and feeding it to the source at the moment the fade starts means the

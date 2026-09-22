@@ -18,6 +18,7 @@ import {
   latOf,
   segmentSamples,
   sampleOnSegment,
+  holdPointerSample,
 } from './hexgrid.js';
 import {
   loadCountries,
@@ -296,25 +297,64 @@ const SHOW_REGION_BORDERS = false;
 const SPOT_PX = 300; // spotlight radius in screen px
 const SPOT_FADE_START = 0.5; // fraction of the radius where the fade begins
 const SPOT_MAX_CELLS = 2200; // shrink the spotlight when cells get tiny
-// Brush radius on the edit panel, counted in cells. 1 is the cell under the
-// pointer; each step adds a ring. Eight is 169 cells — about 700 m across near
-// 47°, which is as wide as the spotlight you are aiming with still shows the
-// edge of. Past that a single Option-drag erases ground you cannot see.
+// A pointer sample can name a place the pointer never was. Holding Command or
+// Option, one move in a while reports a client position a long way off — on
+// this machine, off to the left of the cursor every time — and the sample after
+// it is back where the pointer actually is. Painting that is a line drawn across the map by a hand that
+// never moved, and an undo to get rid of. A step longer than LEAP_PX is held
+// back until the next sample says whether the pointer really is out there: one
+// that agrees pays a frame of lag and the stroke fills the whole way, one that
+// does not throws the leap away. LEAP_SETTLE_MS is how long a leap waits for an
+// answer that never comes, after which the pointer is moved there without the
+// ground between being painted — a highlight left behind is the other half of
+// this bug, and a flick nobody followed up is not evidence enough to paint by.
+// The distance is well past a real flick's step: samples land about a frame
+// apart, so 120 px in one is a pointer crossing the screen in a fifth of a
+// second, which a hand does perhaps once a session and a bad reading does not.
+const LEAP_PX = 120;
+const LEAP_SETTLE_MS = 60;
+
+// Brush radii on the edit panel, counted in cells. 1 is the cell under the
+// pointer; each step adds a ring. Paint and erase each keep their own — the
+// disk a sweep lays down and the disk it takes away are different gestures,
+// and one stepper used to force them to the same reach. Eight is 169 cells —
+// about 700 m across near 47°, which is as wide as the spotlight you are
+// aiming with still shows the edge of. Past that a single Option-drag erases
+// ground you cannot see.
 const BRUSH_MIN = 1;
 const BRUSH_MAX = 8;
+// The one size, from before the two were split. Still written with the paint
+// size, so a build that only reads it does not forget the brush entirely.
 const BRUSH_KEY = 'visited-map:brush:v1';
+const BRUSH_SIZES_KEY = 'visited-map:brushes:v1';
 
-function savedBrush() {
-  try {
-    const n = Number(localStorage.getItem(BRUSH_KEY));
-    if (Number.isInteger(n) && n >= BRUSH_MIN && n <= BRUSH_MAX) return n;
-  } catch {
-    /* private mode — the size lasts for this visit */
-  }
-  return BRUSH_MIN;
+function brushInRange(n) {
+  return Number.isInteger(n) && n >= BRUSH_MIN && n <= BRUSH_MAX ? n : null;
 }
 
-let brushSize = savedBrush();
+function savedBrushes() {
+  let legacy = null;
+  try {
+    legacy = brushInRange(Number(localStorage.getItem(BRUSH_KEY)));
+  } catch {
+    /* private mode — the sizes last for this visit */
+  }
+  const fallback = legacy ?? BRUSH_MIN;
+  try {
+    const stored = JSON.parse(localStorage.getItem(BRUSH_SIZES_KEY) ?? 'null');
+    if (stored && typeof stored === 'object') {
+      return {
+        paint: brushInRange(stored.paint) ?? fallback,
+        erase: brushInRange(stored.erase) ?? fallback,
+      };
+    }
+  } catch {
+    /* the one size, from before paint and erase were split */
+  }
+  return { paint: fallback, erase: fallback };
+}
+
+let brushSizes = savedBrushes();
 
 // Level changes cross-dissolve rather than cut. Long enough to read as one
 // shape relaxing into another, short enough not to lag behind a zoom gesture.
@@ -1766,8 +1806,9 @@ const EDIT_ENABLED = true;
 
 // --- Mode & accent color -----------------------------------------------------
 // 'view' (default): a normal map with only the colored regions visible.
-// 'edit': a tile spotlight follows the cursor. A tap toggles the brush, Ctrl
-// paints it and Option erases it. Ctrl-drag turns the map only in view mode.
+// 'edit': a tile spotlight follows the cursor. A tap uses whichever brush the
+// cell under the pointer calls for, Ctrl paints and Option erases, each at
+// its own size. Ctrl-drag turns the map only in view mode.
 const MODE_KEY = 'visited-map:mode:v1';
 // One colour for both basemaps — what this was before the two were told apart.
 // Still written, so rolling back to a build that only reads this one doesn't
@@ -3440,16 +3481,16 @@ function toggleCell(id) {
   updateHud(currentLevel);
 }
 
-// A tap in edit mode, at the brush size. The centre cell decides which way:
-// lit clears the disk, empty paints it. Size 1 is the single-cell toggle this
-// replaced, including the one-cell history phrase.
+// A tap in edit mode. The centre cell decides which brush: lit ground erases
+// at the erase size, empty ground paints at the paint size. Size 1 is the
+// single-cell toggle this replaced, including the one-cell history phrase.
 function editClick(lngLat) {
   if (currentLevel == null) return;
   clearTripHighlight();
   const center = cellAt(lngLat);
   const [L, col, row] = parseCellId(center.id);
   const clearing = !!litSets[L]?.has(`${col}/${row}`);
-  const ids = brushIds(lngLat);
+  const ids = brushIds(lngLat, brushSizes[clearing ? 'erase' : 'paint']);
   if (clearing) {
     const seen = new Set();
     const stored = [];
@@ -6403,12 +6444,12 @@ function cellAt(lngLat) {
   return { L, col, row, id: `${L}/${normCol(col, colsOf(L))}/${row}` };
 }
 
-function brushIds(lngLat) {
+function brushIds(lngLat, size) {
   const { L, col, row } = cellAt(lngLat);
   const N = colsOf(L);
   const seen = new Set();
   const ids = [];
-  for (const [c, r] of cellsWithin(col, row, brushSize - 1)) {
+  for (const [c, r] of cellsWithin(col, row, size - 1)) {
     const id = `${L}/${normCol(c, N)}/${r}`;
     if (seen.has(id)) continue;
     seen.add(id);
@@ -6491,7 +6532,7 @@ function flushGesture() {
 
 function paintDisk(lngLat) {
   let added = false;
-  for (const id of brushIds(lngLat)) {
+  for (const id of brushIds(lngLat, brushSizes.paint)) {
     if (visited.has(id) || sweptSet.has(id)) continue;
     if (!sweptCells.length) clearTripHighlight();
     markCell(id);
@@ -6505,7 +6546,7 @@ function paintDisk(lngLat) {
 
 function eraseDisk(lngLat) {
   let removed = false;
-  for (const id of brushIds(lngLat)) {
+  for (const id of brushIds(lngLat, brushSizes.erase)) {
     for (const vid of idsUnder(id)) {
       if (!visited.has(vid) || sweptSet.has(vid)) continue;
       if (!sweptCells.length) clearTripHighlight();
@@ -6688,6 +6729,9 @@ function syncGesture(e, stamp) {
   }
   stopGesture();
   if (want) startGesture(want, stamp);
+  // The outline is the disk the key just armed. Waiting for the next move
+  // left it showing the other brush until the pointer budged.
+  updateBrush();
 }
 
 let lastLngLat = null;
@@ -7141,7 +7185,8 @@ function updateTiles() {
 // The disk the brush will touch, as one polygon. Raw columns, not wrapped
 // ids: a brush on the prime meridian has to stay one shape, and the wrapped
 // column is a world away. Shown whenever the pointer is on the map in edit
-// mode, so the size stepper has something to change.
+// mode and the brush about to be used is bigger than one cell, so each
+// stepper has an edge to move.
 function brushShape(L, col, row, reach) {
   const cells = cellsWithin(col, row, reach);
   const have = new Set(cells.map(([c, r]) => `${c}/${r}`));
@@ -7175,21 +7220,40 @@ function brushShape(L, col, row, reach) {
   };
 }
 
+// Which disk the pointer is about to lay down. A sweep already chose, and
+// that choice holds for the whole stroke: the cells it paints become lit, and
+// asking the ground again would swap sizes under the cursor. With no key
+// down, a tap asks the centre cell, so the outline asks the same one.
+function brushKindNow() {
+  if (gesture === 'paint' || gesture === 'erase') return gesture;
+  if (!lastLngLat || currentLevel == null) return 'paint';
+  const { id } = cellAt(lastLngLat);
+  const [L, col, row] = parseCellId(id);
+  return litSets[L]?.has(`${col}/${row}`) ? 'erase' : 'paint';
+}
+
+function markLiveBrush(kind) {
+  for (const k of ['paint', 'erase']) {
+    document.getElementById(`hud-${k}-row`)?.classList.toggle('is-live', k === kind);
+  }
+}
+
 function updateBrush() {
+  const kind = mode === 'edit' ? brushKindNow() : null;
+  markLiveBrush(kind);
   const src = map.getSource('brush');
   if (!src) return;
+  const size = kind ? brushSizes[kind] : 1;
   // Size 1 is the cell the spotlight already highlights. The disk is only
   // there once the brush is bigger than that, so the stepper has an edge to
-  // move and the default edit mode looks like it always did.
-  if (mode !== 'edit' || !pointerOnMap || currentLevel == null || !lastLngLat || brushSize < 2) {
+  // move and a one-cell brush looks like edit mode always did.
+  if (!kind || !pointerOnMap || currentLevel == null || !lastLngLat || size < 2) {
     src.setData(EMPTY);
     return;
   }
   const { col, row } = cellAt(lastLngLat);
-  src.setData(brushShape(currentLevel, col, row, brushSize - 1));
+  src.setData(brushShape(currentLevel, col, row, size - 1));
 }
-
-
 
 // --- Crossfade -------------------------------------------------------------
 const fade = { cur: 1, prev: 0, raf: null, timeout: null };
@@ -7940,29 +8004,34 @@ function updateHud(level) {
   updateDetailNow(level);
 }
 
-function setBrushSize(next) {
+function setBrushSize(kind, next) {
   const size = Math.max(BRUSH_MIN, Math.min(BRUSH_MAX, next | 0));
-  if (size === brushSize) return;
-  brushSize = size;
+  if (size === brushSizes[kind]) return;
+  brushSizes[kind] = size;
   try {
-    localStorage.setItem(BRUSH_KEY, String(size));
+    localStorage.setItem(BRUSH_SIZES_KEY, JSON.stringify(brushSizes));
+    localStorage.setItem(BRUSH_KEY, String(brushSizes.paint));
   } catch {
-    /* private mode — the size lasts for this visit */
+    /* private mode — the sizes last for this visit */
   }
   paintBrushUi();
   updateBrush();
 }
 
 function paintBrushUi() {
-  const label = document.getElementById('hud-brush');
-  const dec = document.getElementById('hud-brush-dec');
-  const inc = document.getElementById('hud-brush-inc');
-  if (!label || !dec || !inc) return;
-  label.textContent = String(brushSize);
-  const reach = brushSize - 1;
-  label.title = plural(3 * reach * (reach + 1) + 1, 'cell');
-  dec.disabled = brushSize <= BRUSH_MIN;
-  inc.disabled = brushSize >= BRUSH_MAX;
+  for (const kind of ['paint', 'erase']) {
+    const size = brushSizes[kind];
+    const label = document.getElementById(`hud-${kind}`);
+    const dec = document.getElementById(`hud-${kind}-dec`);
+    const inc = document.getElementById(`hud-${kind}-inc`);
+    if (!label || !dec || !inc) return;
+    label.textContent = String(size);
+    const reach = size - 1;
+    label.title = plural(3 * reach * (reach + 1) + 1, 'cell');
+    dec.disabled = size <= BRUSH_MIN;
+    inc.disabled = size >= BRUSH_MAX;
+  }
+  markLiveBrush(mode === 'edit' ? brushKindNow() : null);
 }
 
 // The Detail buttons are bare numbers, and a cell's ground size depends on the
@@ -10833,29 +10902,10 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       updateTiles();
     });
   };
-  // The brush. Lives on the window rather than on the map: MapLibre stops
-  // emitting mousemove once a pan owns the pointer, and the canvas stops
-  // being the target a pixel before the edge of the screen. Either one is a
-  // cell that paints short of the cursor. A control still wins — holding
-  // Command over the menu is not a stroke.
-  const onBrushPointer = (e) => {
-    if (mode !== 'edit' || currentLevel == null || !e || e.pointerType === 'touch') return;
-    const key = `${e.timeStamp}|${e.clientX}|${e.clientY}`;
-    if (key === brushEventKey) return;
-    brushEventKey = key;
-    const onCanvas = e.target === map.getCanvas();
-    if (!onCanvas) {
-      if (!gesture) return;
-      if (e.target instanceof Element && e.target.closest('button, a, input, textarea, select, label, #hud, #layers-menu, #layers-btn')) return;
-    }
-    // The dispatched event is where the pointer is. A coalesced sample is only
-    // a position along the way, and on this machine it can sit a long way to
-    // the left of the event it belongs to. Taking it as the pointer is how
-    // the highlight left the cursor.
-    const pos = canvasPoint(e);
-    if (!pos || !nearCanvas(pos.px, gesture ? 16 : 0)) return;
+  // Where the pointer went, once it is believed. Split out because a held
+  // leap arrives here a sample late — see LEAP_PX.
+  const useBrushSample = (e, pos, want) => {
     const el = map.getCanvas();
-    const want = gestureWanted(e);
     if (gesture && pointerTracked && cursorPx) {
       const batch = e.getCoalescedEvents?.();
       // Modifiers are read off the event itself. A coalesced sample is only
@@ -10886,6 +10936,69 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       rememberStroke(pos.lngLat, cursorPx);
     }
     scheduleTiles();
+  };
+  // A sample that leapt, waiting for the one after it to say whether the
+  // pointer is really out there. See LEAP_PX.
+  let heldLeap = null;
+  let leapTimer = 0;
+  const takeLeap = () => {
+    if (leapTimer) clearTimeout(leapTimer);
+    leapTimer = 0;
+    const held = heldLeap;
+    heldLeap = null;
+    return held;
+  };
+  // Nothing came after the leap to agree or disagree with it. The pointer is
+  // moved there — a highlight parked where the cursor no longer is was the
+  // first half of this bug, and it is the worse half — but the ground between
+  // is not painted, because an unconfirmed leap is the very sample that draws
+  // the line. A flick that really did end there paints from the next move on.
+  const settleLeap = () => {
+    const held = takeLeap();
+    if (!held || mode !== 'edit' || currentLevel == null) return;
+    const el = map.getCanvas();
+    cursorPx = held.px;
+    lastLngLat = held.lngLat;
+    pointerTracked = true;
+    pointerOnMap = held.px[0] >= 0 && held.px[1] >= 0
+      && held.px[0] <= el.clientWidth && held.px[1] <= el.clientHeight;
+    if (gesture) rememberStroke(held.lngLat, held.px);
+    scheduleTiles();
+  };
+  // The brush. Lives on the window rather than on the map: MapLibre stops
+  // emitting mousemove once a pan owns the pointer, and the canvas stops
+  // being the target a pixel before the edge of the screen. Either one is a
+  // cell that paints short of the cursor. A control still wins — holding
+  // Command over the menu is not a stroke.
+  const onBrushPointer = (e) => {
+    if (mode !== 'edit' || currentLevel == null || !e || e.pointerType === 'touch') return;
+    const key = `${e.timeStamp}|${e.clientX}|${e.clientY}`;
+    if (key === brushEventKey) return;
+    brushEventKey = key;
+    const onCanvas = e.target === map.getCanvas();
+    if (!onCanvas) {
+      if (!gesture) return;
+      if (e.target instanceof Element && e.target.closest('button, a, input, textarea, select, label, #hud, #layers-menu, #layers-btn')) return;
+    }
+    // The dispatched event is where the pointer is. A coalesced sample is only
+    // a position along the way, and on this machine it can sit a long way to
+    // the left of the event it belongs to. Taking it as the pointer is how
+    // the highlight left the cursor.
+    const pos = canvasPoint(e);
+    if (!pos || !nearCanvas(pos.px, gesture ? 16 : 0)) return;
+    const want = gestureWanted(e);
+    // This sample also answers the leap before it, if there was one — see
+    // holdPointerSample. Only while the brush is live: a highlight that blinks
+    // and comes back costs nothing, and a frame of lag on an ordinary hover is
+    // not worth spending to save it.
+    const held = takeLeap();
+    if ((gesture || want) && pointerTracked
+      && holdPointerSample(cursorPx, held?.px ?? null, pos.px, LEAP_PX)) {
+      heldLeap = { px: pos.px, lngLat: pos.lngLat };
+      leapTimer = setTimeout(settleLeap, LEAP_SETTLE_MS);
+      return;
+    }
+    useBrushSample(e, pos, want);
   };
   window.addEventListener('pointermove', onBrushPointer);
   onMapBuilt(() => map.on('mousemove', (e) => {
@@ -10940,6 +11053,7 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       // left. Comparing the two is what froze the highlight off to the left
       // after it had gone and come back.
       pointerTracked = false;
+      takeLeap();
       setHover(null);
       clearRailHover();
       setHoveredRoute(null);
@@ -10960,6 +11074,8 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       e.preventDefault();
       e.stopPropagation();
       swallowClick = true;
+      // A press is where the pointer is, whatever the move before it claimed.
+      takeLeap();
       const pos = canvasPoint(e);
       if (pos) {
         cursorPx = pos.px;
@@ -10989,6 +11105,8 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     // The pointer can be anywhere when the window is focused again. The next
     // sample is an arrival, not a leap from the position it left at.
     pointerTracked = false;
+    takeLeap();
+    updateBrush();
   });
   window.addEventListener('mouseup', () => {
     if (!swallowClick) return;
@@ -10997,8 +11115,10 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
 
   hudPencil.addEventListener('click', () => setMode('edit'));
   hudDone.addEventListener('click', () => setMode('view'));
-  document.getElementById('hud-brush-dec').addEventListener('click', () => setBrushSize(brushSize - 1));
-  document.getElementById('hud-brush-inc').addEventListener('click', () => setBrushSize(brushSize + 1));
+  for (const kind of ['paint', 'erase']) {
+    document.getElementById(`hud-${kind}-dec`).addEventListener('click', () => setBrushSize(kind, brushSizes[kind] - 1));
+    document.getElementById(`hud-${kind}-inc`).addEventListener('click', () => setBrushSize(kind, brushSizes[kind] + 1));
+  }
   paintBrushUi();
   // The accent picker. Repainting on every drag frame is the point — you pick
   // the color against the map itself, not against a swatch.

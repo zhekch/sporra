@@ -191,6 +191,36 @@ export function sampleOnSegment(ax, ay, bx, by, px, py, slack = 24) {
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy)) <= slack;
 }
 
+// Samples arrive about a frame apart, so even a thrown flick is tens of pixels
+// of client position. A step of hundreds is either a genuine flick or a reading
+// that landed off to the side of the cursor, and in one sample the two are the
+// same number.
+const leapt = (ax, ay, bx, by, limit) => Math.hypot(bx - ax, by - ay) > limit;
+
+/**
+ * Whether to hold this sample back rather than believe it.
+ *
+ * A pointer that leaps and comes straight back never went anywhere, and the
+ * difference between that and a flick is not in the leap — it is in the sample
+ * after it. So a leap is held, and the next sample answers it: out there with
+ * it, the pointer really did move, and both are believed at once; anywhere
+ * else, the leap was a place the pointer never was and is dropped unused.
+ *
+ * Holding costs a frame of lag on a genuine flick. Believing costs a painted
+ * line across the map, drawn by a hand that did not move, and an undo to get
+ * rid of it.
+ *
+ * @param {number[]|null} from last believed position, null before there is one
+ * @param {number[]|null} held the leap waiting for an answer, if there is one
+ * @param {number[]} to this sample
+ * @param {number} limit pixels one sample may cover without being questioned
+ */
+export function holdPointerSample(from, held, to, limit) {
+  if (held && !leapt(held[0], held[1], to[0], to[1], limit)) return false;
+  if (!from) return false;
+  return leapt(from[0], from[1], to[0], to[1], limit);
+}
+
 // Point → containing cell, via axial coords + cube rounding.
 export function pointToCell(L, x, y) {
   const R = radiusOf(L);

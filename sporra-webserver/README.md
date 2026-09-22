@@ -205,7 +205,7 @@ workout recording counts once, a morning and an evening in the same place count
 once, and a week living there counts once. Going back next month counts again.
 
 **No files at all?** Turn on editing in the menu and paint cells by hand.
-Ctrl-drag sweeps.
+Ctrl-drag paints and Option-drag erases, each at its own size on the panel.
 
 **Changed your mind about a whole source?** Menu → Settings →
 **Sources** lists everything that has put something on your map and takes one
