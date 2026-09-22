@@ -17,6 +17,8 @@ import {
   lngOf,
   latOf,
   segmentSamples,
+  acceptPointerSample,
+  sampleOnSegment,
 } from './hexgrid.js';
 import {
   loadCountries,
@@ -6382,12 +6384,9 @@ function repaintRouteColors() {
 // holds, on every move, is what left the stroke a frame behind the cursor.
 let gesture = null; // 'paint' | 'erase' | null
 // The last pointer position a stroke accepted, in Mercator metres and in
-// screen pixels. The next sample fills every cell between the two, and a
-// sample that leaps away from it without the device having moved is dropped
-// — that is the one-frame dab a modifier key can report.
+// screen pixels. The next sample fills every cell between the two.
 let strokeMerc = null;
 let strokePx = null;
-let rejectedJump = null;
 // Set when a modifier press takes the mousedown. The click that follows would
 // toggle the same cells, and it can arrive after the key is already up — so
 // the click handler can no longer see the modifier. Cleared on the turn after
@@ -6542,7 +6541,6 @@ function rememberStroke(lngLat, px) {
 function forgetStroke() {
   strokeMerc = null;
   strokePx = null;
-  rejectedJump = null;
 }
 
 // Fill the cells the pointer crossed between the last accepted sample and
@@ -6589,33 +6587,6 @@ function nearCanvas(px, slop) {
   const el = map.getCanvas();
   return px[0] >= -slop && px[1] >= -slop
     && px[0] <= el.clientWidth + slop && px[1] <= el.clientHeight + slop;
-}
-
-// A modifier-key mousemove can carry one position the pointer never
-// occupied. `movementX` is how far the device says it moved; a client
-// position that leapt much further than that is the event, and painting it
-// is a cell off to the side for a single sample. A second sample that is
-// still out there is the pointer having actually arrived.
-function plausibleSample(e, px) {
-  if (!strokePx) return true;
-  const dist = Math.hypot(px[0] - strokePx[0], px[1] - strokePx[1]);
-  if (dist <= 48) {
-    rejectedJump = null;
-    return true;
-  }
-  if (e && typeof e.movementX === 'number') {
-    const moved = Math.hypot(e.movementX, e.movementY);
-    if (moved + 4 < dist * 0.35) {
-      if (rejectedJump && Math.hypot(px[0] - rejectedJump[0], px[1] - rejectedJump[1]) < 48) {
-        rejectedJump = null;
-        return true;
-      }
-      rejectedJump = [px[0], px[1]];
-      return false;
-    }
-  }
-  rejectedJump = null;
-  return true;
 }
 
 function gestureWanted(e) {
@@ -7092,6 +7063,10 @@ function buildGrid(bb, L) {
 // --- Edit-mode tile spotlight ------------------------------------------------
 let cursorPx = null; // last pointer position in screen px
 let pointerOnMap = false;
+// False until a real event has set cursorPx. The value it holds before that
+// is the viewport centre, which is not where the pointer is, and comparing a
+// move against it would throw the first drag away.
+let pointerTracked = false;
 
 function buildTiles() {
   if (currentLevel == null || !cursorPx) return EMPTY;
@@ -7941,11 +7916,13 @@ function updateModeUi() {
   document.body.classList.toggle('editing', editing);
   const box = document.getElementById('edit-toggle');
   if (box) box.checked = editUi;
-  // One cursor for the whole of edit mode. It used to swap to a crosshair while
-  // a paint sweep was armed, and macOS draws the pointing hand from its
-  // fingertip but the crosshair from its centre — so arming and disarming
-  // shifted the visible pointer by several pixels and back, without anything
-  // having actually moved.
+  // One cursor for the whole of edit mode, on the container as well as the
+  // canvas. The library's rule is an open hand, and `:active` swaps it for
+  // the closed one the moment a drag starts. macOS draws those from different
+  // points of the glyph, so the pointer jumps — left, by about the width of
+  // the hand — on every drag and every time a modifier arms the brush. The
+  // class outranks that rule. A crosshair is drawn from its centre throughout.
+  map.getCanvasContainer()?.classList.toggle('sporra-editing', editing);
   map.getCanvas().style.cursor = editing ? 'crosshair' : '';
 }
 
@@ -8283,6 +8260,9 @@ async function switchEngine(key) {
     blobRole = 'none';
     fedFine = false;
     rewireMap();
+    // The new canvas has the library's hand again. Edit mode's crosshair
+    // lives on the container that was just thrown away.
+    updateModeUi();
     // The new map's control is a new control, in its off state. See
     // restoreGeolocate — the blue dot is not something a basemap switch decides.
     restoreGeolocate(tracking);
@@ -9244,6 +9224,13 @@ let pointerOnAirport = false;
 // almost never, and costing nothing is what makes that fine.
 let pointerOnPhoto = false;
 const syncPointer = () => {
+  // Edit mode owns the cursor for the whole time it is on. This runs a frame
+  // after a railway hover that was already in flight, and clearing the canvas
+  // here handed the pointer back to the map's open hand.
+  if (mode === 'edit') {
+    map.getCanvas().style.cursor = 'crosshair';
+    return;
+  }
   map.getCanvas().style.cursor =
     pointerOnRoute || pointerOnRail || pointerOnAirport || pointerOnPhoto ? 'pointer' : '';
 };
@@ -10831,8 +10818,7 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
 
   let hoverPending = false;
   // pointermove and the mousemove that follows it describe one sample.
-  // Handling both paints the cell twice and, worse, lets a coalesced batch
-  // and its summary disagree about where the pointer was.
+  // Handling both paints the cell twice.
   let brushEventKey = '';
   const scheduleTiles = () => {
     // While the map is panning/zooming, leave the spotlight where it is: it's
@@ -10863,38 +10849,63 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       if (!gesture) return;
       if (e.target instanceof Element && e.target.closest('button, a, input, textarea, select, label, #hud, #layers-menu, #layers-btn')) return;
     }
-    const batched = e.getCoalescedEvents?.();
-    const events = batched && batched.length ? batched : [e];
-    // Modifiers are read off the event itself. A coalesced sample is only
-    // a position — some browsers leave ctrl/meta/alt off it, and trusting
-    // that would end the stroke on the first sample of every move.
-    const want = gestureWanted(e);
-    let any = false;
-    for (const ev of events) {
-      const pos = canvasPoint(ev);
-      if (!pos || !nearCanvas(pos.px, gesture ? 16 : 0)) continue;
-      if (!plausibleSample(ev, pos.px)) continue;
-      cursorPx = pos.px;
-      lastLngLat = pos.lngLat;
-      const el = map.getCanvas();
-      pointerOnMap = pos.px[0] >= 0 && pos.px[1] >= 0
-        && pos.px[0] <= el.clientWidth && pos.px[1] <= el.clientHeight;
-      if (want !== gesture) {
-        // Starting, stopping, or paint becoming erase. syncGesture stamps
-        // the cell when a gesture begins; the samples after this one fill
-        // onward from there.
-        syncGesture(e, true);
-        if (gesture) rememberStroke(lastLngLat, cursorPx);
-        else forgetStroke();
-      } else if (gesture) {
-        applyStroke(pos.lngLat);
-        rememberStroke(pos.lngLat, cursorPx);
-      }
-      any = true;
+    // The dispatched event is where the pointer is. A coalesced sample is
+    // only the points between the last one and this one — taking its position
+    // as the pointer is how the highlight ended up a hand's width, and then
+    // a screen, to the left. Two copies of that wrong place used to confirm
+    // each other, so the highlight stayed there.
+    const pos = canvasPoint(e);
+    if (!pos || !nearCanvas(pos.px, gesture ? 16 : 0)) return;
+    if (pointerTracked && cursorPx && !acceptPointerSample(cursorPx[0], cursorPx[1], pos.px[0], pos.px[1], e.movementX, e.movementY)) {
+      return;
     }
-    if (any) scheduleTiles();
+    const el = map.getCanvas();
+    const want = gestureWanted(e);
+    if (gesture && pointerTracked && cursorPx) {
+      const batch = e.getCoalescedEvents?.();
+      // Modifiers are read off the event itself. A coalesced sample is only
+      // a position — some browsers leave ctrl/meta/alt off it.
+      if (batch) {
+        for (const ev of batch) {
+          const mid = canvasPoint(ev);
+          if (!mid || !sampleOnSegment(cursorPx[0], cursorPx[1], pos.px[0], pos.px[1], mid.px[0], mid.px[1])) continue;
+          applyStroke(mid.lngLat);
+          rememberStroke(mid.lngLat, mid.px);
+        }
+      }
+    }
+    cursorPx = pos.px;
+    lastLngLat = pos.lngLat;
+    pointerTracked = true;
+    pointerOnMap = pos.px[0] >= 0 && pos.px[1] >= 0
+      && pos.px[0] <= el.clientWidth && pos.px[1] <= el.clientHeight;
+    if (want !== gesture) {
+      // Starting, stopping, or paint becoming erase. syncGesture stamps
+      // the cell when a gesture begins; the samples after this one fill
+      // onward from there.
+      syncGesture(e, true);
+      if (gesture) rememberStroke(lastLngLat, cursorPx);
+      else forgetStroke();
+    } else if (gesture) {
+      applyStroke(pos.lngLat);
+      rememberStroke(pos.lngLat, cursorPx);
+    }
+    scheduleTiles();
   };
   window.addEventListener('pointermove', onBrushPointer);
+  // MapLibre pans from the document's mousemove, in the capture phase. A
+  // sample whose client position leapt while the device barely moved becomes
+  // a pan of that leap — the map, and everything anchored to it, jumps left.
+  // Window capture runs before the document's, so stopping it here is the
+  // sample never arriving. A brush sweep has already ignored it above.
+  window.addEventListener('mousemove', (e) => {
+    if (!pointerTracked || !cursorPx || !e.buttons) return;
+    const pos = canvasPoint(e);
+    if (!pos) return;
+    if (acceptPointerSample(cursorPx[0], cursorPx[1], pos.px[0], pos.px[1], e.movementX, e.movementY)) return;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
   onMapBuilt(() => map.on('mousemove', (e) => {
       // View mode: show that the line under the cursor is tappable. Skipped
       // mid-gesture, where a hit test would be both wasted and misleading.
@@ -10902,6 +10913,7 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         cursorPx = [e.point.x, e.point.y];
         lastLngLat = e.lngLat;
         pointerOnMap = true;
+        pointerTracked = true;
         if (!map.isMoving()) {
           if (routesOn && routeGeom) {
             const under = routeAt(e.point);
@@ -10942,6 +10954,10 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       // inside the screen.
       if (gesture) return;
       pointerOnMap = false;
+      // The next entry is a new arrival, not a leap from wherever the pointer
+      // left. Comparing the two is what froze the highlight off to the left
+      // after it had gone and come back.
+      pointerTracked = false;
       setHover(null);
       clearRailHover();
       setHoveredRoute(null);
@@ -10967,6 +10983,7 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         cursorPx = pos.px;
         lastLngLat = pos.lngLat;
         pointerOnMap = true;
+        pointerTracked = true;
       }
       syncGesture(e, true);
     }, true);
@@ -10985,7 +11002,12 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     if (e.key !== 'Control' && e.key !== 'Meta' && e.key !== 'Alt') return;
     syncGesture(e, false);
   });
-  window.addEventListener('blur', () => stopGesture());
+  window.addEventListener('blur', () => {
+    stopGesture();
+    // The pointer can be anywhere when the window is focused again. The next
+    // sample is an arrival, not a leap from the position it left at.
+    pointerTracked = false;
+  });
   window.addEventListener('mouseup', () => {
     if (!swallowClick) return;
     setTimeout(() => { swallowClick = false; }, 0);

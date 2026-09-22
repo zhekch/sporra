@@ -281,6 +281,13 @@ glass look. Click hexagons to mark places you've visited.
   re-blurred (`patchBlobSheet`). Repainting every cell on the map, on every
   sample, is what left the stroke a frame behind the cursor — and at the edge
   of the screen, where the pointer stops, a frame behind is the wrong cell.
+  A sample can also name somewhere the pointer never was. Holding Command, and
+  the extra positions a coalesced `pointermove` carries, both report a client
+  position off to the left of the device movement. The highlight was taking
+  that position, and a second copy of it was treated as the pointer having
+  arrived, so the cell stayed there. The position the highlight uses is the
+  dispatched event, and only when it agrees with how far the device moved.
+  Anything else is dropped, including before the map turns it into a pan.
   The country geometry is also
   **pre-warmed**: ~800 KB of boundaries takes a MapLibre worker ~60 ms to parse
   and tile, and feeding it to the source at the moment the fade starts means the

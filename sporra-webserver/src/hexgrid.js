@@ -172,6 +172,57 @@ export function segmentSamples(ax, ay, bx, by, step, maxDist = Infinity) {
   return out;
 }
 
+/**
+ * Whether this client position is where the device says the pointer went.
+ *
+ * A modifier key, and a coalesced sample, can name a place the pointer never
+ * occupied — on this machine, a long way to the left of it. `movementX` is
+ * how far the device actually moved. A client position that is not there
+ * leapt on its own, and painting it is a cell off to the side. A short step
+ * is kept either way: the reading is noisy below that, and a real flick is
+ * both a long client step *and* a long device step.
+ *
+ * No previous sample has nothing to disagree with. No movement reading
+ * (a browser that does not send one) is kept too — dropping every sample
+ * there would freeze the brush.
+ *
+ * @param {number} px last accepted x
+ * @param {number} py last accepted y
+ * @param {number} x
+ * @param {number} y
+ * @param {number|null|undefined} movementX
+ * @param {number|null|undefined} movementY
+ */
+export function acceptPointerSample(px, py, x, y, movementX, movementY) {
+  const dist = Math.hypot(x - px, y - py);
+  if (!(dist > 48)) return true;
+  if (typeof movementX !== 'number' || typeof movementY !== 'number') return true;
+  // Where the device says this sample landed, from the last place we believed.
+  const along = Math.hypot(x - (px + movementX), y - (py + movementY));
+  if (along <= 32) return true;
+  const moved = Math.hypot(movementX, movementY);
+  return moved + 8 >= dist * 0.5;
+}
+
+/**
+ * Whether `(px, py)` lies on the segment from `a` to `b`.
+ *
+ * Coalesced samples are only useful as the points between the last accepted
+ * position and the event the browser actually dispatched. One that does not
+ * sit on that segment is a reading from somewhere else — the sample that
+ * teleports the highlight — and is not part of the stroke.
+ *
+ * @param {number} slack pixels off the segment that still count
+ */
+export function sampleOnSegment(ax, ay, bx, by, px, py, slack = 24) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1) return Math.hypot(px - bx, py - by) <= slack;
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy)) <= slack;
+}
+
 // Point → containing cell, via axial coords + cube rounding.
 export function pointToCell(L, x, y) {
   const R = radiusOf(L);

@@ -11,7 +11,8 @@
 //   node scripts/test/brush.mjs
 
 import {
-  cellCenter, cellsWithin, colsOf, normCol, pointToCell, radiusOf, segmentSamples, SQRT3,
+  acceptPointerSample, cellCenter, cellsWithin, colsOf, normCol, pointToCell, radiusOf,
+  sampleOnSegment, segmentSamples, SQRT3,
 } from '../../src/hexgrid.js';
 
 let pass = 0;
@@ -106,6 +107,27 @@ console.log('\nA stroke fills the cells between two samples');
   const along = segmentSamples(0, 0, 0, 90, 40);
   check(along.every(([, y], i) => Math.abs(y - (i + 1) * 30) < 1e-9),
     'the samples sit on the segment');
+}
+
+console.log('\nA leap the device did not make is not where the pointer is');
+{
+  check(acceptPointerSample(500, 200, 508, 202, 0, 0),
+    'a short step is kept even when the device reports none');
+  check(!acceptPointerSample(500, 200, 220, 190, 0, 0),
+    'a long leap with no device movement is dropped');
+  check(!acceptPointerSample(500, 200, 224, 188, 2, -1),
+    'and a second copy of that leap is still dropped');
+  check(acceptPointerSample(500, 200, 200, 200, -300, 0),
+    'a leap the device actually made is kept');
+  check(acceptPointerSample(500, 200, 800, 200, undefined, undefined),
+    'no movement reading has nothing to disagree with');
+
+  check(sampleOnSegment(500, 200, 560, 200, 530, 204),
+    'a sample on the way to the dispatched point is part of the stroke');
+  check(!sampleOnSegment(500, 200, 560, 200, 230, 200),
+    'a sample off that segment is not');
+  check(!sampleOnSegment(500, 200, 560, 200, 400, 200),
+    'and neither is one back toward where the pointer is not');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

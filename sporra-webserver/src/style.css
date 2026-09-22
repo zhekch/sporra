@@ -173,6 +173,20 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   margin: 0 0 calc(20px + var(--safe-b)) calc(20px + var(--safe-l));
 }
 
+/* Edit mode is one cursor. The library's open hand, and the closed hand it
+   swaps to for the duration of a drag, are drawn from different points of the
+   glyph. Starting a drag, ending one, or arming the brush moved the pointer
+   by about the width of the hand without the mouse having moved. A crosshair
+   is drawn from its centre the whole time, and this has to beat the library's
+   own `:active` rule, which is why the class is on the container rather than
+   only an inline style on the canvas — that one was being cleared. */
+:is(.maplibregl-canvas-container, .mapboxgl-canvas-container).sporra-editing,
+:is(.maplibregl-canvas-container, .mapboxgl-canvas-container).sporra-editing:active,
+:is(.maplibregl-canvas-container, .mapboxgl-canvas-container).sporra-editing :is(.maplibregl-canvas, .mapboxgl-canvas),
+:is(.maplibregl-canvas-container, .mapboxgl-canvas-container).sporra-editing:active :is(.maplibregl-canvas, .mapboxgl-canvas) {
+  cursor: crosshair;
+}
+
 /* Below the chrome's z-index rather than beside it. Nothing here is pressable —
    it is a reading, not a control — so it must never be the thing a press lands
    on, and `pointer-events: none` says that outright rather than relying on it
