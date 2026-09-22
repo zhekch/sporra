@@ -74,7 +74,9 @@ final class HealthSync {
     /// is not a vague reading of where you were, it is the last place the watch
     /// knew about before it locked on. Keeping one drew a 16.7 km line from Thun
     /// across a 1.17 km walk in Gümligen.
-    private static let maxAccuracyM: CLLocationDistance = 100
+    /// A point the watch itself calls worse than about one cell. It used to be
+    /// 100 m, which was noise inside a 900 m hex and is two cells now.
+    private static let maxAccuracyM: CLLocationDistance = 50
 
     /// Five metres between kept points, and five decimal places on each.
     ///

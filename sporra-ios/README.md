@@ -451,20 +451,19 @@ is no window and no scene.
 **Standard updates** run on top of it for the interval settings, and are what
 those settings actually mean.
 
-### The fixes are coarse on purpose
+### The fixes ask for ten metres
 
-`desiredAccuracy` is `kCLLocationAccuracyHundredMeters` at every setting, which
-is not a compromise. **A cell is about 900 m across**, so a ten-metre fix and a
-hundred-metre fix land in the same hexagon and produce the identical map. What
-they do not cost the same is power: a hundred metres can be answered from wifi
-and cell towers, and ten cannot be answered without the GPS chip. Asking for
-precision the app then throws away would be spending your battery on rounding
-error.
+`desiredAccuracy` is `kCLLocationAccuracyNearestTenMeters`. **A cell is about
+50 m across**, so a hundred-metre fix and a ten-metre fix are different hexes.
+Ten metres is the coarsest reading that still falls in the cell you are
+standing in. It does cost the GPS chip, which a hundred-metre request did not,
+and that was the right trade when a cell was 900 m.
 
-`distanceFilter` is scaled with the cadence — 100 m at *every minute*, 500 m at
+`distanceFilter` is scaled with the cadence — 40 m at *every minute*, 500 m at
 *every hour* — so a phone sitting on a desk costs nothing at any setting: the
 fixes it would deliver are the ones the throttle would discard anyway, and the
-cheapest fix is the one never taken.
+cheapest fix is the one never taken. The coarser cadences stay coarse on
+purpose. They are not trying to fill every cell.
 
 ### The one line that is easy to leave out
 
@@ -529,7 +528,7 @@ applies to a Strava ride and a Komoot tour exactly as much — both had the same
 bug. Doing it on the phone as well would be two definitions of a pause, quietly
 disagreeing.
 
-What `HealthSync` does keep is `maxAccuracyM` (100 m), because accuracy is the
+What `HealthSync` does keep is `maxAccuracyM` (50 m), because accuracy is the
 one thing that cannot travel: it is a property of the fix as CoreLocation hands
 it over, and it is gone by the time the point is a pair of numbers on the wire.
 A watch with GPS lock does not produce a 1.5 km fix, so one is a glitch.

@@ -81,10 +81,11 @@ const s = await computeStats(new Set(meta.keys()), meta);
 
 console.log('\nwhat the panel says at the top');
 check(s.cells === meta.size, 'every cell is counted', `${s.cells} of ${meta.size}`);
-// A level-0 cell is ~0.9 km flat-to-flat at the equator and these are all at
-// European latitudes, so a hundred-odd of them is about 40 km² — tight enough
-// that a factor-of-a-million slip in the m²-to-km² conversion cannot hide.
-check(s.km2 > 30 && s.km2 < 50, 'a hundred-odd cells up here cover about 40 km²', `${s.km2.toFixed(1)} km²`);
+// A level-0 cell is ~74 m flat-to-flat at the equator and these are all at
+// European latitudes, so a hundred-odd of them is about a quarter of a km² —
+// tight enough that a factor-of-a-million slip in the m²-to-km² conversion
+// cannot hide.
+check(s.km2 > 0.1 && s.km2 < 1, 'a hundred-odd cells up here cover about 0.25 km²', `${s.km2.toFixed(3)} km²`);
 check(Math.abs(s.worldPct - (s.km2 / EARTH_LAND_KM2) * 100) < 1e-9, 'the world share divides by the land area');
 // Ground area shrinks with latitude, and the statistics are the only place that
 // shows it: the same cell is worth less the further north it is.

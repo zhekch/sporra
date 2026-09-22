@@ -396,6 +396,11 @@ export async function terrainStyle() {
 /**
  * Esri World Imagery, with OpenFreeMap's labels and roads over the top.
  *
+ * The MapLibre half of the satellite button. With a Mapbox token the button
+ * is Standard Satellite instead — 3D ground, the same engine as the 3D
+ * basemap — and this function is not reached; see STYLES.satellite in
+ * main.js.
+ *
  * Built from the *same* style as Terrain rather than a second provider's, which
  * was the first attempt: VersaTiles publishes a ready-made satellite style, but
  * it is 208 layers designed around its own imagery — which the research found

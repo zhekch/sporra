@@ -66,10 +66,9 @@ final class LocationBridge: NSObject, WKScriptMessageHandlerWithReply, CLLocatio
     private override init() {
         super.init()
         manager.delegate = self
-        // Better than the logger's hundred metres. A blob is 900 m across and a
-        // fix that coarse is fine for *recording* where you were; this is the
-        // dot saying where you are now, which someone is looking at against a
-        // street.
+        // The dot someone is looking at against a street. The logger asks for
+        // the same ten metres now that a cell is 50 m; this one was already
+        // there, because a coarse fix is no use as a "you are here".
         manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
     }
 

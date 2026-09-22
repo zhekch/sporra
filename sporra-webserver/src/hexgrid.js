@@ -11,13 +11,17 @@ export const WORLD = 2 * Math.PI * R_E; // mercator world width ≈ 40_075_017 m
 export const MAX_MERC_Y = WORLD / 2; // web-mercator latitude clamp (±85.05°)
 export const SQRT3 = Math.sqrt(3);
 
-export const MAX_LEVEL = 4;
+export const MAX_LEVEL = 6;
 // Columns around the globe at level 0. The `n · 3^MAX_LEVEL` form keeps the
 // column count integer AND even at every level, so the odd-column vertical
-// offset wraps seamlessly at the antimeridian. With n = 642 the base cell is
-// ~0.9 km flat-to-flat near the equator; double the multiplier to halve the
-// cell (must stay even).
-export const BASE_COLS = 642 * 3 ** MAX_LEVEL; // 52_002
+// offset wraps seamlessly at the antimeridian. n = 858 is also divisible by
+// 6, so the level past the top — the one `parentOf` asks about — stays even
+// too. The base cell is ~74 m flat-to-flat at the equator, which is 50 m on
+// the ground near 47° (× cos φ). It was 642 · 3^4 = 52_002, about 0.9 km at
+// the equator, until the grid was refined; stored ids from that lattice are
+// not this one, and the server refuses them until the migration has rewritten
+// them.
+export const BASE_COLS = 858 * 3 ** MAX_LEVEL; // 625_482
 export const COL_SP0 = WORLD / BASE_COLS; // level-0 column spacing = 1.5·R0
 export const R0 = COL_SP0 / 1.5; // level-0 circumradius
 
@@ -35,12 +39,12 @@ export const project = ([x, y]) => [lngOf(x), latOf(y)];
 // Flat-top hexes, "odd-q" offset layout: odd columns shift up half a row.
 // col spacing = 1.5·R, row spacing = √3·R.
 //
-// There are only five levels, and `parentOf` asks about one above the level it
-// is given, so every answer either function can be asked for in anger fits in a
-// six-entry table. Worth building because these two are the innermost thing in
+// There are only seven levels, and `parentOf` asks about one above the level it
+// is given, so every answer either function can be asked for in anger fits in an
+// eight-entry table. Worth building because these two are the innermost thing in
 // the roll-up: every stored cell walks up to MAX_LEVEL, and each step calls
 // `radiusOf` twice and `colsOf` once, so a map of twenty thousand cells raises
-// `3 ** L` some quarter of a million times to get one of six answers back.
+// `3 ** L` some quarter of a million times to get one of eight answers back.
 // The table is filled from the same expressions, so the values are bit-identical
 // to computing them; anything off the end (a fractional or out-of-range level)
 // falls through to the arithmetic and is answered exactly as before.

@@ -72,13 +72,14 @@ async function api(method, url, body) {
 const DEVICE = { id: 'A1B2C3D4-5E6F-7081-9203-A4B5C6D7E8F9', name: "Zhenya's iPhone", platform: 'iOS 26.1' };
 const push = (fixes, device = DEVICE) => api('POST', '/api/device/fixes', { device, fixes });
 
-// Somewhere real, and small enough to stay inside one cell: cells are ~900 m
-// across and these span about 60.
+// Somewhere real, and the same point every time. A cell is ~50 m across, so
+// the old 20 m jitter between "fixes" walked into the next hex and the visit
+// arithmetic — which is what this file is about — never got a look in.
 const LAT = 46.9481;
 const LNG = 7.4474;
 const T0 = Math.floor(Date.UTC(2026, 5, 3, 9, 0, 0) / 1000);
 const DAY = 86400;
-const at = (t, i = 0) => [LAT + i * 0.0002, LNG + i * 0.0002, t];
+const at = (t, i = 0) => [LAT + i * 0.00001, LNG + i * 0.00001, t];
 
 // The cell the fixes above land in, worked out with the very function the
 // server uses — the lattice has its own tests (visits.mjs, hexgrid), and what

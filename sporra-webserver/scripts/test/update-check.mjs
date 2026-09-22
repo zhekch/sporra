@@ -166,17 +166,18 @@ try {
 
   console.log('\nNumbers, not text');
   {
-    // The release this is really about. `'0.100.0' < '0.49.0'` as text, because
-    // `'1'` sorts before `'4'` — so a string comparison stops reporting updates
-    // for ever at exactly the point the project has had a hundred minors, and
-    // does it silently.
+    // `'0.100.0' < '0.49.0'` as text, because `'1'` sorts before `'4'`. A
+    // string comparison would therefore report 0.49 as an update to 0.100 —
+    // the same silent failure the other way around, now that this project
+    // *is* on a hundredth minor. Numeric comparison is the one that still
+    // knows which is later.
     await stopServer();
-    upstreamVersion = '0.100.0';
+    upstreamVersion = '0.49.0';
     await startServer();
     await api('POST', '/api/login', { username: 'ada', password: 'correct-horse-9' });
     const out = await api('GET', '/api/update');
-    check(out.body.newer === true,
-      'a hundredth minor is newer than a forty-ninth, whatever the alphabet says',
+    check(out.body.newer === false,
+      'a forty-ninth is older than a hundredth, whatever the alphabet says',
       JSON.stringify(out.body));
   }
 

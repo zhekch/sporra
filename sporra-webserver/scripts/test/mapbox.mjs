@@ -32,12 +32,14 @@ globalThis.localStorage = {
 };
 
 const {
-  AUTO_LIGHT, BASEMAP_IMPORT, LIGHT_CHOICES, LIGHT_PRESETS, configureStandard,
+  AUTO_LIGHT, BASEMAP_IMPORT, LIGHT_CHOICES, LIGHT_PRESETS, STANDARD_SATELLITE_STYLE,
+  STANDARD_STYLE, configureStandard,
   hasMapboxToken, landmarksVisibleAt, lightChoice, lightPreset, mapboxToken, presetTheme,
-  refreshAutoLight, setLightChoice, setMapboxToken, standardConfig, tokenComplaint,
+  refreshAutoLight, satelliteConfig, setLightChoice, setMapboxToken, standardConfig, tokenComplaint,
 } = await import('../../src/mapbox.js');
 const {
-  LABEL_SLOT_ID, WASH_SLOT_ID, ctrlClass, ctrlClasses, ctrlSelector, geolocateStateOf, hasCtrlClass,
+  LABEL_SLOT_ID, MAPBOX, MAPLIBRE, WASH_SLOT_ID, ctrlClass, ctrlClasses, ctrlSelector,
+  engineForBasemap, geolocateStateOf, hasCtrlClass,
   installAddLayerSlots, isSlot,
 } = await import('../../src/gl-engine.js');
 
@@ -70,6 +72,30 @@ console.log('\nHolding on to it');
   setMapboxToken('');
   eq(mapboxToken(), '', 'saving nothing removes it rather than storing an empty string');
   check(!hasMapboxToken(), 'and the basemap goes back to being unavailable');
+}
+
+console.log('\nSatellite is Mapbox\'s when a token is present');
+{
+  eq(STANDARD_SATELLITE_STYLE, 'mapbox://styles/mapbox/standard-satellite',
+    'the satellite style is Standard Satellite, not the classic flat one');
+  check(STANDARD_STYLE !== STANDARD_SATELLITE_STYLE,
+    'and it is a different document from the 3D streets');
+
+  setMapboxToken('');
+  eq(engineForBasemap('satellite'), MAPLIBRE,
+    'without a token, satellite is still MapLibre — Esri is a map');
+  eq(engineForBasemap('mapbox'), MAPLIBRE,
+    'and 3D is too, so main.js can move it somewhere MapLibre can go');
+  eq(engineForBasemap('dark'), MAPLIBRE, 'the flat maps never leave MapLibre');
+
+  setMapboxToken('pk.test');
+  eq(engineForBasemap('satellite'), MAPBOX,
+    'with a token, satellite joins 3D on Mapbox GL JS');
+  eq(engineForBasemap('mapbox'), MAPBOX, '3D is Mapbox\'s, as before');
+  eq(engineForBasemap('dark'), MAPLIBRE, 'and Dark still is not — the meter stays off it');
+  eq(engineForBasemap('terrain'), MAPLIBRE, 'Terrain neither');
+  eq(engineForBasemap('voyager'), MAPLIBRE, 'nor Light');
+  setMapboxToken('');
 }
 
 console.log('\nWhere the sun is');
@@ -362,6 +388,45 @@ console.log('\nStandard is told what to draw');
   check(warned.length === 1 && /terrain/i.test(warned[0]),
     'a map with no config API at all is not a crash, and says so once about the terrain',
     warned.join(' | '));
+}
+
+console.log('\nStandard Satellite is told a different list');
+{
+  const sat = satelliteConfig();
+  check(!('show3dLandmarks' in sat) && !('show3dFacades' in sat) && !('showLandmarkIcons' in sat),
+    'it does not ask for landmarks, facades or icons — Standard Satellite has never heard of them');
+  check(sat.showPedestrianRoads === false,
+    'paths and trails come off, so the photograph is not a road map');
+  check(sat.showRoadsAndTransit === true, 'the motorway network stays, to orient by');
+  check(sat.showTransitLabels === false, 'and the tram-stop names stay off, same as Standard');
+  check(sat.backgroundPointOfInterestLabels === 'none', 'as do the POI discs');
+  check(LIGHT_PRESETS.some((p) => p.key === sat.lightPreset),
+    'the sun is still one of the four, never auto');
+
+  const fakeMap = (setConfigProperty) => ({
+    setConfigProperty,
+    getSource: () => ({}),
+    setTerrain: () => {},
+    getZoom: () => 16,
+    on: () => {},
+  });
+
+  const sent = [];
+  const handlers = [];
+  configureStandard({
+    ...fakeMap((fragment, key, value) => sent.push([fragment, key, value])),
+    on: (ev, fn) => { if (ev === 'zoom') handlers.push(fn); },
+  }, { satellite: true });
+
+  const names = sent.map(([, key]) => key);
+  check(names.includes('showPedestrianRoads') && names.includes('lightPreset'),
+    'the satellite list is what reaches the map');
+  check(!names.includes('show3dLandmarks') && !names.includes('show3dFacades'),
+    'and the landmark properties are not sent, even at a zoom Standard would show them');
+  check(handlers.length === 0,
+    'no zoom handler is installed — there is nothing to gate');
+  check(sent.every(([fragment]) => fragment === BASEMAP_IMPORT),
+    'each one still naming the import');
 }
 
 console.log('\nA control class is readable under either library');

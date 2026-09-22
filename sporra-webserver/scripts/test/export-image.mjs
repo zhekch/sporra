@@ -320,11 +320,11 @@ console.log('\nHow fine the blobs are drawn');
       `a pinned ${level} is ${level} at any scale`,
       `${blobLevelFor(tight, level)} / ${blobLevelFor(wide, level)}`);
   }
-  check(blobLevelFor(1e-12, 9) === 4 && blobLevelFor(1e12, -3) === 0,
+  check(blobLevelFor(1e-12, 9) === 6 && blobLevelFor(1e12, -3) === 0,
     'and a level off either end of the ladder is clamped to it');
-  check(CELL_SIZES[0].key === 'auto' && CELL_SIZES.length === 6,
+  check(CELL_SIZES[0].key === 'auto' && CELL_SIZES.length === 8,
     'the picker offers Auto and one entry per level');
-  check(/^0\.9 km$/.test(CELL_SIZES[1].label), 'named by the ground a cell covers', CELL_SIZES[1].label);
+  check(/^70 m$/.test(CELL_SIZES[1].label), 'named by the ground a cell covers', CELL_SIZES[1].label);
 }
 
 // --- The numbers ---------------------------------------------------------------

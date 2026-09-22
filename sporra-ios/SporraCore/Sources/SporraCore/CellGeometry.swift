@@ -54,7 +54,9 @@ extension HexGrid {
     // MARK: - Which level a zoom is showing
 
     /// Zoom at which level 0 — the grid exactly as stored — is the right one.
-    public static let level0Zoom = 10.0
+    /// 13.6 is where a 74 m cell is the same ~6 px the old 0.9 km cell was at
+    /// zoom 10. Has to be the same number as `LEVEL0_ZOOM` in src/main.js.
+    public static let level0Zoom = 13.6
 
     /// Each grid level is 3× wider than the one below it, so they are log2(3)
     /// map-zoom levels apart.

@@ -56,17 +56,16 @@ final class TrackingSettings: ObservableObject {
         /// Scaled with the cadence so a Mac on a desk costs nothing at any
         /// setting: the fixes it would deliver are the ones the throttle would
         /// throw away anyway, and the cheapest fix is the one never taken. The
-        /// floor is 100 m because that is the accuracy asked for in
-        /// ``LocationLogger`` — a tighter filter than the accuracy is a filter
-        /// on noise.
+        /// floor is 40 m — about one cell — so a walk on the finest cadence
+        /// cannot step over a hex. Coarser cadences stay coarse on purpose.
         var distanceFilter: CLLocationDistance {
             switch self {
             case .off, .significant: return kCLDistanceFilterNone
             case .hour: return 500
             case .halfHour: return 350
             case .quarterHour: return 250
-            case .fiveMinutes: return 150
-            case .minute: return 100
+            case .fiveMinutes: return 80
+            case .minute: return 40
             }
         }
 
@@ -83,25 +82,36 @@ final class TrackingSettings: ObservableObject {
 
     /// How vague a fix can be before it is thrown away.
     ///
-    /// A cell is about 900 m across, so a fix the machine itself calls loose
-    /// lands in the wrong one often enough to matter — and a Mac indoors on
-    /// wifi positioning alone produces plenty of them. Home Assistant has the
-    /// same setting for the same reason; the difference is that there it has to
-    /// live on the server, because the server is the thing doing the reading.
+    /// A cell is about 50 m across, so a fix the machine itself calls loose
+    /// lands several cells away — and a Mac indoors on wifi positioning alone
+    /// produces plenty of them. The raw values are the metre caps, and they
+    /// used to be 100 / 250 / 500. ``resolved(_:)`` maps a saved setting from
+    /// that era onto the step it was.
     enum Precision: Int, CaseIterable, Identifiable {
-        case tight = 100
-        case normal = 250
-        case loose = 500
+        case tight = 30
+        case normal = 80
+        case loose = 200
         case any = 0
 
         var id: Int { rawValue }
 
         var title: String {
             switch self {
-            case .tight: return "Within 100 m"
-            case .normal: return "Within 250 m"
-            case .loose: return "Within 500 m"
+            case .tight: return "Within 30 m"
+            case .normal: return "Within 80 m"
+            case .loose: return "Within 200 m"
             case .any: return "Take every fix"
+            }
+        }
+
+        static func resolved(_ raw: Int?) -> Precision {
+            guard let raw else { return .normal }
+            if let exact = Precision(rawValue: raw) { return exact }
+            switch raw {
+            case 100: return .tight
+            case 250: return .normal
+            case 500: return .loose
+            default: return .normal
             }
         }
     }
@@ -224,7 +234,7 @@ final class TrackingSettings: ObservableObject {
         // somebody makes about a laptop they travel with, so it is asked for
         // rather than assumed.
         cadence = (d.object(forKey: Keys.cadence) as? Int).flatMap(Cadence.init) ?? .off
-        precision = (d.object(forKey: Keys.precision) as? Int).flatMap(Precision.init) ?? .normal
+        precision = Precision.resolved(d.object(forKey: Keys.precision) as? Int)
         // Assigned here rather than in the property's initial value, so it is
         // read once from disk and does not immediately write itself back — a
         // `didSet` does not fire for an assignment made inside `init`.

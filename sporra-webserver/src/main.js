@@ -42,7 +42,8 @@ import {
 } from './coloring.js';
 import { terrainStyle, satelliteStyle, washAnchorIn } from './basemap.js';
 import {
-  AUTO_LIGHT, BASEMAP_IMPORT, LIGHT_CHOICES, LIGHT_PRESETS, STANDARD_STYLE, configureStandard,
+  AUTO_LIGHT, BASEMAP_IMPORT, LIGHT_CHOICES, LIGHT_PRESETS, STANDARD_SATELLITE_STYLE,
+  STANDARD_STYLE, configureStandard,
   hasMapboxToken, lightChoice, lightPreset, mapboxToken, presetTheme, refreshAutoLight,
   setLightChoice, setMapboxToken,
 } from './mapbox.js';
@@ -188,7 +189,11 @@ const LEVEL_STEP = Math.log2(3); // ≈ 1.585 zoom levels per grid level
 // Zoom at which the finest level takes over. Every coarser level switches
 // LEVEL_STEP zooms below this, so lowering it makes the grid stay on smaller
 // cells longer — you have to zoom out further before cells enlarge.
-const LEVEL0_ZOOM = 10;
+//
+// 13.6 is where a 74 m cell (50 m on the ground near 47°) is the same ~6 px
+// the old 0.9 km cell was at zoom 10. The ladder below it is unchanged in
+// screen size; the hex-to-region handoff lands near z4.09 instead of z3.66.
+const LEVEL0_ZOOM = 13.6;
 
 const VIEW_PAD = 0.35; // extra region coverage around the viewport, per side
 
@@ -734,15 +739,18 @@ const STYLES = {
     cellAlpha: 1,
     heatAlpha: 1,
   },
-  // Mapbox Standard, and the only entry that is not MapLibre's to draw.
+  // Mapbox Standard, and one of the two entries that are not MapLibre's to
+  // draw (satellite is the other, once a token is present).
   //
   // Two things follow from `engine`, and they are the whole reason this basemap
-  // is different in kind from the other four. It is loaded by a different
-  // library, so choosing it or leaving it **reloads the page** — see
+  // is different in kind from the flat three. It is loaded by a different
+  // library, so choosing it or leaving it **rebuilds the map** — see
   // `setStyleKey` and src/gl-engine.js. And it can be *unavailable*: Mapbox
   // serves nothing without an account, this app does not have one, and the
   // viewer's own token is what switches it on. `needsToken` is what lets the
   // picker say so rather than leaving a button that silently does nothing.
+  // Satellite does not need that gate: without a token it is still a map,
+  // just Esri's.
   //
   // No `build`. Standard is a style *import* and Mapbox GL JS resolves it —
   // there is nothing here to fetch and rewrite, which is most of what made the
@@ -789,13 +797,32 @@ const STYLES = {
   },
   satellite: {
     label: 'Satellite',
-    build: satelliteStyle,
+    // Mapbox Standard Satellite when there is a token to pay for it, Esri's
+    // flat World Imagery when there is not. The engine follows: `url` is a
+    // Mapbox import and `build` is a MapLibre style object, and boot.js has
+    // already picked the library from `hasMapboxToken()` before this module
+    // is evaluated, so the getter that is live is the one that library can
+    // draw. Adding or taking off the token later is `mapboxTokenChanged`.
+    get url() {
+      return hasMapboxToken() ? STANDARD_SATELLITE_STYLE : undefined;
+    },
+    get build() {
+      return hasMapboxToken() ? undefined : satelliteStyle;
+    },
     // Imagery is dark enough that the dark-theme contrast rules are the right
-    // ones — a light wash over aerial photography disappears.
+    // ones — a light wash over aerial photography disappears. The sun still
+    // moves (Standard Satellite has the same four presets), but it relights
+    // the 3D objects and the atmosphere, not the photograph, so the chrome
+    // stays on the dark side of that.
     theme: 'dark',
     // Tune the visited wash over imagery here — see regionOpacity().
     cellAlpha: 1.3,
     heatAlpha: 1.3,
+    // Fog eats our layers the same way it does on Standard, and only while
+    // Mapbox is the one drawing — Esri imagery has no atmosphere.
+    lift: () => (hasMapboxToken()
+      ? (presetTheme() === 'dark' ? [1.2, 0.05] : [1.15, 0.02])
+      : null),
     fallback: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
   },
 };
@@ -887,6 +914,10 @@ if (!STYLES[styleKey]) styleKey = 'dark';
 // the default Dark: 3D is a light basemap, and coming back to a map that has
 // changed colour as well as provider reads as two things having gone wrong.
 if (STYLES[styleKey].needsToken && !STYLES[styleKey].needsToken()) styleKey = 'voyager';
+// Mapbox is drawing this basemap: 3D always (when the token is there), and
+// satellite once the token upgrades it from Esri. Read off the key rather
+// than `engine`, because the UI updates before switchEngine has replaced it.
+const isMapboxStyle = (key = styleKey) => engineOf(key) === MAPBOX;
 // Apply the matching chrome colors before the map initializes to avoid a
 // white-on-light flash when the saved basemap is Voyager.
 document.documentElement.dataset.theme = STYLES[styleKey].theme;
@@ -2016,9 +2047,9 @@ function vivid(color, sat, lift) {
 /**
  * How hard this basemap eats the colours drawn over it.
  *
- * `[saturation multiplier, lightness lift]`, applied by `vivid()`. Only the 3D
- * basemap asks for anything: its atmosphere is the only one in the app that
- * touches our layers, and it is much heavier once the sun is down.
+ * `[saturation multiplier, lightness lift]`, applied by `vivid()`. Only a
+ * Mapbox basemap asks for anything: its atmosphere is the only one in the app
+ * that touches our layers, and it is much heavier once the sun is down.
  */
 function colorLift() {
   const lift = STYLES[styleKey]?.lift;
@@ -2681,9 +2712,10 @@ function rollUpPainted(id) {
 // however many polygon levels there are, because a crossing has exactly two
 // sides. See **Two vector levels** in ARCHITECTURE.md.
 
-// The three coarsest steps are not hexagons. Level 4's cells are ~73 km across,
-// which says nothing a canton doesn't say better — and "which cantons have I
-// been to" is a question with an answer, where "which 73 km squares" is not.
+// The three coarsest steps are not hexagons. The next hex past level 5 would
+// be ~36 km on the ground near 47°, which says nothing a canton doesn't say
+// better — and "which cantons have I been to" is a question with an answer,
+// where "which 36 km squares" is not.
 const REGION_LEVEL = MAX_LEVEL;
 const FIRST_VECTOR_LEVEL = REGION_LEVEL;
 
@@ -2709,10 +2741,10 @@ function neighbourVectorLevel(level, zoom) {
   }
   if (level === COUNTRY_LEVEL) {
     // Which half of its own band the zoom is in, rather than "within 1.2 of the
-    // bottom". The country band is 0.91 wide now that continents take their
-    // room out of it, and a fixed 1.2 margin covers all of it — so the region
-    // level would never be warmed and every zoom-in would start by parsing
-    // instead of fading.
+    // bottom". The country band is about 1.34 wide now that continents take
+    // their room out of it. A fixed 1.2 margin measured from the bottom would
+    // cover most of that and leave the region level unwarmed until the top
+    // sliver, so every zoom-in would start by parsing instead of fading.
     const mid = (levelBoundary(COUNTRY_LEVEL) + levelBoundary(REGION_LEVEL)) / 2;
     return zoom < mid ? CONTINENT_LEVEL : REGION_LEVEL;
   }
@@ -6325,19 +6357,20 @@ let lastLngLat = null;
 // Level L owns every zoom below LEVEL0_ZOOM - L·LEVEL_STEP, so that expression
 // is the boundary between L and L+1.
 // Where the continent level takes over, and the one place the 3× ladder is
-// overridden. The ladder would put this at levelBoundary(5) = 2.075, which is
-// below MapLibre's z2 tile boundary — and a basemap serves *generalised*
-// geometry at z1, far coarser than our own 1 km outlines. Our sharp fill over
-// the basemap's blunt one shows as dark jagged rims all along every coast, and
-// it is worst in the Arctic, where Mercator stretches the mismatch 4.8×. It
-// cures itself the instant the zoom crosses 2.0 and the basemap sharpens,
-// which is exactly how it was caught: two state dumps identical in every field
-// but the zoom, one either side of the line.
+// overridden. The ladder would put the bottom of the country band at
+// levelBoundary(7) ≈ 2.51, and the continent step under that below MapLibre's
+// z2 tile boundary — a basemap serves *generalised* geometry at z1, far
+// coarser than our own 1 km outlines. Our sharp fill over the basemap's blunt
+// one shows as dark jagged rims all along every coast, and it is worst in the
+// Arctic, where Mercator stretches the mismatch 4.8×. It cures itself the
+// instant the zoom crosses 2.0 and the basemap sharpens, which is exactly how
+// it was caught: two state dumps identical in every field but the zoom, one
+// either side of the line.
 //
-// So the level takes its room out of the country level's band instead of out
+// So the continent level takes its room out of the country band instead of out
 // of the bottom of the map. Continents get (2, 2.75] and countries (2.75,
-// 3.66] — both narrower than a full step, both entirely above z2 tiles, and
-// both still wide enough for LEVEL_HYSTERESIS to sit inside.
+// ~4.09] — both entirely above z2 tiles, and both still wide enough for
+// LEVEL_HYSTERESIS to sit inside.
 const CONTINENT_ZOOM = 2.75;
 // The lower end of a level's band; a level owns (levelBoundary(L),
 // levelBoundary(L - 1)].
@@ -7654,7 +7687,7 @@ function setStyleKey(key) {
   // row as Day and Night, so a stored Auto is left alone: that is the one
   // answer that already means "decide for me", and crossing to 3D to see what
   // it does must not undo it.
-  if (key === 'mapbox' && isFlat(styleKey) && lightChoice() !== AUTO_LIGHT) {
+  if (isMapboxStyle(key) && isFlat(styleKey) && lightChoice() !== AUTO_LIGHT) {
     setLightChoice(STYLES[styleKey].theme === 'light' ? 'day' : 'night');
   }
   // Crossing between the two map libraries, which no `setStyle` can do: the map
@@ -7980,10 +8013,10 @@ function syncTrailLayer() {
     // src/trails.js.
     //
     // Keyed off the basemap rather than off `map.getTerrain()`, which is the
-    // live answer and the wrong one to ask here: terrain is set when Standard's
+    // live answer and the wrong one to ask here: terrain is set when the Mapbox
     // style parses, and this runs on that same event, so a truthful reading that
     // arrives one frame late would leave the overlay unwatched for good.
-    draped: styleKey === 'mapbox',
+    draped: isMapboxStyle(),
     before: TRAILS_BEFORE(),
   });
 }
@@ -8807,13 +8840,20 @@ function mapboxTokenChanged() {
   // …unless what just happened is that the token holding the basemap on screen
   // was taken away. Then there is nothing left to draw and the map has to be
   // moved off it — which, from 3D, is a rebuild onto the other library.
-  if (!hasMapboxToken() && STYLES[styleKey]?.needsToken) setStyleKey('voyager');
+  if (!hasMapboxToken() && STYLES[styleKey]?.needsToken) {
+    setStyleKey('voyager');
+    return;
+  }
+  // Satellite is Esri's without a token and Standard Satellite with one. The
+  // key does not change; the engine does. `setStyleKey` would no-op on the
+  // same key, so the rebuild has to be asked for by name.
+  if (engineOf(styleKey) !== engine) switchEngine(styleKey);
 }
 
-// The time-of-day row under the basemap picker, which exists only while 3D is
-// the basemap: it is Standard's own light, and no other basemap has a sun to
-// move. Built once from LIGHT_CHOICES — Day, Night, Auto — and shown or hidden
-// by updateLayersUi().
+// The time-of-day row under the basemap picker, which exists while Mapbox is
+// drawing: it is Standard's own light (and Standard Satellite's), and the
+// flat maps have a theme row instead. Built once from LIGHT_CHOICES — Day,
+// Night, Auto — and shown or hidden by updateLayersUi().
 //
 // Auto used to live in Settings, with the four suns in this row and no Auto
 // button, so the only press that showed you what Auto did was the one that
@@ -8890,7 +8930,7 @@ buildTrailsRow();
 function setLightPresetNow(choice) {
   setLightChoice(choice);
   const key = lightPreset();
-  if (engine === MAPBOX && styleKey === 'mapbox') {
+  if (engine === MAPBOX && isMapboxStyle()) {
     try {
       map.setConfigProperty(BASEMAP_IMPORT, 'lightPreset', key);
     } catch (e) {
@@ -8966,9 +9006,11 @@ function updateLayersUi() {
   if (lightSeg && lightHead) {
     // Hidden rather than disabled where it does not apply: a control for a thing
     // that is not on the map is not a control, it is a question nobody asked.
-    // Satellite is where both are hidden — a photograph is lit by the sun that
-    // was up when it was taken.
-    const on = styleKey === 'mapbox';
+    // Esri satellite is where both stay hidden — a photograph is lit by the
+    // sun that was up when it was taken. Mapbox satellite has a sun of its
+    // own (it relights the 3D objects and the atmosphere), so the row comes
+    // back with the token.
+    const on = isMapboxStyle();
     const flat = isFlat(styleKey);
     lightHead.hidden = !on && !flat;
     lightSeg.hidden = !on;
@@ -9762,7 +9804,7 @@ function installGrid() {
   // config rather than anything this app draws, so they are set before a single
   // layer of ours goes in — a light preset arriving after the wash would relight
   // the map underneath a colour already chosen for the old one.
-  if (engine === MAPBOX) configureStandard(map);
+  if (engine === MAPBOX) configureStandard(map, { satellite: styleKey === 'satellite' });
   // A style swap takes the snow with it, so this is asked again on every parse
   // rather than once at startup — and the remembered answer is cleared first,
   // because what it describes is a map that no longer exists.
@@ -10613,7 +10655,13 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     // only wanted to paste a token, and switching under them looked presumptuous
     // — but that reading had it backwards: the only reason to type a token at
     // all is the basemap on the other side of it.
-    onUse: () => setStyleKey('mapbox'),
+    onUse: () => {
+      // Already looking at a Mapbox map (3D, or satellite that just upgraded
+      // in place) is the basemap the token pays for. Switching to 3D from
+      // there would throw away the photograph somebody was already on.
+      if (isMapboxStyle()) return;
+      setStyleKey('mapbox');
+    },
   });
   const mapLayersUi = mountMapLayers({
     rail: railUi,

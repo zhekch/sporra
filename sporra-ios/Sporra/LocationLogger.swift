@@ -23,15 +23,14 @@ import UIKit
 /// **Standard updates** run on top of that for every cadence but "only when I
 /// go somewhere", and are what the interval settings actually mean.
 ///
-/// ## Why the fixes are coarse on purpose
+/// ## Why the fixes ask for ten metres
 ///
-/// `desiredAccuracy` is `kCLLocationAccuracyHundredMeters` at every setting,
-/// which is not a compromise — it is the right answer. A cell is about 900 m
-/// across, so a ten-metre fix and a hundred-metre fix land in the same hexagon
-/// and produce the identical map. What they do not cost the same is power: a
-/// hundred metres can be answered from wifi and cell towers, and ten cannot be
-/// answered without the GPS chip. Asking for precision this app then throws
-/// away would be spending your battery on rounding error.
+/// `desiredAccuracy` is `kCLLocationAccuracyNearestTenMeters`. A cell is about
+/// 50 m across, so a hundred-metre fix — wifi, a cell tower, a cold start —
+/// lands in a different hex often enough to matter. Ten metres is the
+/// coarsest reading that still falls in the cell you are standing in. It does
+/// cost the GPS chip, which the old hundred-metre request did not, and that
+/// was the right trade when a cell was 900 m. It is not anymore.
 @MainActor
 final class LocationLogger: NSObject, ObservableObject, CLLocationManagerDelegate {
 
@@ -50,7 +49,7 @@ final class LocationLogger: NSObject, ObservableObject, CLLocationManagerDelegat
     private override init() {
         super.init()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         // The single most important line in this file, and the least obvious.
         //
         // With the default, iOS pauses updates when it decides you have stopped

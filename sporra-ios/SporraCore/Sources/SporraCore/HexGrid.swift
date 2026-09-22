@@ -28,15 +28,16 @@ public enum HexGrid {
 
     public static let sqrt3 = 3.0.squareRoot()
 
-    public static let maxLevel = 4
+    public static let maxLevel = 6
 
     /// Columns around the globe at level 0.
     ///
     /// The `n · 3^maxLevel` form keeps the column count integer *and* even at
     /// every level, so the odd-column vertical offset wraps seamlessly at the
-    /// antimeridian. With n = 642 the base cell is ~0.9 km flat-to-flat near the
-    /// equator; double the multiplier to halve the cell (it must stay even).
-    public static let baseCols = 642 * 81  // 642 · 3^4 = 52_002
+    /// antimeridian. n = 858 is also divisible by 6, so the level past the top
+    /// stays even too. The base cell is ~74 m flat-to-flat at the equator,
+    /// which is 50 m on the ground near 47°.
+    public static let baseCols = 858 * 729  // 858 · 3^6 = 625_482
 
     /// Level-0 column spacing = 1.5 · R0.
     public static let columnSpacing0 = world / Double(baseCols)

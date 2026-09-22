@@ -16,7 +16,7 @@ number of approaches that were tried and abandoned.
 ## What it does
 
 - **Click to mark.** Turn on editing and paint cells. The base cell is about
-  900 m across; marks roll up, so a single visited cell lights its whole
+  50 m across; marks roll up, so a single visited cell lights its whole
   country when you zoom out — and its whole continent one step further.
 - **Soft blobs, not tiles.** Marked areas are drawn as discs, blurred, and cut
   at a fixed alpha — neighbouring cells merge and blend their colours.
@@ -42,9 +42,10 @@ number of approaches that were tried and abandoned.
   it was taken. No photo is ever uploaded — the app reads them off the device it
   is running on, which is also why this switch is not in the menu in a browser.
 - **Five basemaps** — dark, terrain, light, satellite, and a **3D** one with
-  buildings that have height and ground that has shape. Colour the map with a
-  single accent, or shade each cell by **visits**, by **first seen**, or by
-  **type** (a colour per app the data came from).
+  buildings that have height and ground that has shape. With a Mapbox token,
+  satellite is the 3D one over a photograph rather than Esri's flat imagery.
+  Colour the map with a single accent, or shade each cell by **visits**, by
+  **first seen**, or by **type** (a colour per app the data came from).
 - **Ask any area what it knows.** Tap a blob for when you were there, how many
   visits, and which app it came from — or switch **Tap for details** off in the
   layers menu when you would rather just look at the map. Routes, photos and the
@@ -419,13 +420,17 @@ spot and the map switches straight to 3D. The token is saved to your account, so
 every device you sign in on gets the basemap without being asked again. Empty the
 box and press Done to take it off all of them.
 
-**Time of day** appears under the basemaps while 3D is the one showing — Day,
-Night, or Auto. Auto follows the sun where you are and still picks among dawn,
-day, dusk and night; dusk and night turn the whole map dark. Tilt with a
-right-button drag, or two fingers on a touchscreen: 3D leans all the way to 85°,
-far enough to put the sky and the horizon on screen, where the other four stop at
-60° because they have no sky to show you. Zoom in past about z14 to see the
-buildings stand up.
+**Satellite** with that same token is Mapbox Standard Satellite — the 3D ground
+and the sun, over aerial photography. Without a token it is Esri's World Imagery,
+flat, with place names on top. There is nothing extra to paste.
+
+**Time of day** appears under the basemaps while 3D is showing, and while
+Satellite is showing with a token — Day, Night, or Auto. Auto follows the sun
+where you are and still picks among dawn, day, dusk and night; dusk and night
+turn the 3D scene dark. Tilt with a right-button drag, or two fingers on a
+touchscreen: a Mapbox map leans all the way to 85°, far enough to put the sky
+and the horizon on screen, where the others stop at 60° because they have no sky
+to show you. Zoom in past about z14 to see the buildings stand up.
 
 ## Rebuilding the map data
 
@@ -486,7 +491,7 @@ allowed to connect to, and why each limit is where it is — is in
 
 - [MapLibre GL JS](https://maplibre.org/) — vector map rendering
 - [Vite](https://vite.dev/) — dev server / bundler
-- Basemaps: [CARTO](https://carto.com/basemaps/), [OpenFreeMap](https://openfreemap.org/), Esri World Imagery, [Mapbox](https://www.mapbox.com/) (3D, your own token)
+- Basemaps: [CARTO](https://carto.com/basemaps/), [OpenFreeMap](https://openfreemap.org/), Esri World Imagery, [Mapbox](https://www.mapbox.com/) (3D and 3D satellite, your own token)
 - Railways: [OpenRailwayMap](https://www.openrailwaymap.org/) vector tiles
   ([openrailwaymap.app](https://openrailwaymap.app/), ODbL via OpenStreetMap)
 - Waymarked routes: [Waymarked Trails](https://waymarkedtrails.org/) raster tiles

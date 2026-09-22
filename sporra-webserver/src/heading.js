@@ -17,7 +17,7 @@
 // **Mapbox GL JS has `showUserHeading` and MapLibre has nothing at all**, so
 // neither library's version is usable here: this app switches between the two
 // while it is running (see src/gl-engine.js), and a beam that exists on one
-// basemap and not on the other four is worse than no beam. What follows is one
+// library and not the other is worse than no beam. What follows is one
 // implementation driven onto whichever control is live, the same way
 // src/glide.js drives one dot-smoother onto both.
 //

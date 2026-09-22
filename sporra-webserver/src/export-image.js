@@ -1129,8 +1129,13 @@ export function blobLevelFor(k, pinned = null) {
 export const CELL_SIZES = [
   { key: 'auto', label: 'Auto — fits the picture' },
   ...Array.from({ length: MAX_LEVEL + 1 }, (_, L) => {
-    const km = (SQRT3 * radiusOf(L)) / 1000;
-    return { key: L, label: km >= 10 ? `${Math.round(km)} km` : `${km.toFixed(1)} km` };
+    // Metres below a kilometre. One decimal of kilometres would call the 74 m
+    // cell "0.1 km", which is a different size.
+    const m = SQRT3 * radiusOf(L);
+    const label = m >= 10_000 ? `${Math.round(m / 1000)} km`
+      : m >= 1000 ? `${(m / 1000).toFixed(1)} km`
+      : `${Math.round(m / 10) * 10} m`;
+    return { key: L, label };
   }),
 ];
 

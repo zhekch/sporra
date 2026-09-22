@@ -45,8 +45,11 @@ function cellAt(lng, lat) {
   return `0/${normCol(col, COLS)}/${row}`;
 }
 
-/** The cell as the old code saw it: rolled up to level 2, ~9 km across. */
-function rolledUp(id, level = 2) {
+/** The cell as the old code saw it: rolled up until the parent is coarse
+ *  enough to leave the canton. That used to be level 2 (~9 km). On the 50 m
+ *  grid the same mistake shows up a few levels higher — level 3 is about
+ *  1.4 km on the ground here and already crosses the Rhine. */
+function rolledUp(id, level = 3) {
   let [L, col, row] = id.split('/').map(Number);
   for (let l = L; l < level; l++) [col, row] = parentOf(l, col, row);
   return `${level}/${col}/${row}`;
@@ -68,16 +71,17 @@ const cellFor = (town) => cellAt(...TOWNS[town]);
 
 console.log('a cell is attributed to the region it is actually in');
 
-// Gais is in Appenzell Ausserrhoden, and the 9 km hexagon it rolls up into is
-// centred in Innerrhoden. This one case is the whole bug.
+// Gais is in Appenzell Ausserrhoden. The coarse hex it rolls up into is
+// centred in Sankt Gallen. This one case is the whole bug: the parent decides
+// for ground it does not contain.
 {
   const id = cellFor('Gais AR');
   const own = areaOfCell('region', id);
-  const hex = areaOfCell('region', rolledUp(id));
+  const hex = areaOfCell('region', rolledUp(id, 5));
   check(own === 'Switzerland/Appenzell Ausserrhoden', 'Gais is in Appenzell Ausserrhoden', own);
   check(
-    hex === 'Switzerland/Appenzell Innerrhoden' && hex !== own,
-    'and the 9 km hexagon around it is not — which is what used to decide',
+    hex === 'Switzerland/Sankt Gallen' && hex !== own,
+    'and the coarse hexagon around it is not — which is what used to decide',
     `hexagon said ${hex}`,
   );
 }
@@ -91,7 +95,7 @@ console.log('a cell is attributed to the region it is actually in');
   check(areaOfCell('country', id) === 'Switzerland', 'and in Switzerland', areaOfCell('country', id));
   check(
     areaOfCell('region', rolledUp(id)) === 'Austria/Vorarlberg',
-    'while its 9 km hexagon lands in Austria',
+    'while its coarse hexagon lands in Austria',
     areaOfCell('region', rolledUp(id)),
   );
 }
@@ -109,8 +113,12 @@ console.log('\nno region is lit without a cell in it');
 // kilometres of it.
 const AROUND = ['Gais AR', 'Rüthi SG', 'Altstätten SG', 'Sennwald SG', 'Herisau AR'];
 const cells = AROUND.map(cellFor);
+// A point in Sankt Gallen whose level-3 parent is centred in Innerrhoden.
+// None of the named towns above still do that after the grid change; the
+// geometry of the bug did not go away, it moved.
+const witness = cellAt(9.465, 47.3);
 const lit = new Set(cells.map((id) => areaOfCell('region', id)).filter(Boolean));
-const litByRollUp = new Set(cells.map((id) => areaOfCell('region', rolledUp(id))).filter(Boolean));
+const litByRollUp = new Set([witness, ...cells].map((id) => areaOfCell('region', rolledUp(id))).filter(Boolean));
 
 check(
   !lit.has('Switzerland/Appenzell Innerrhoden'),

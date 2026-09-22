@@ -1,9 +1,11 @@
 // Mapbox Standard: the token it needs, and the two knobs it has.
 //
-// This is the fifth basemap — 3D buildings, modelled landmarks, trees you can
-// see the shape of, and a sun that can be put in four places or left to follow
-// the one outside the viewer's own window. It is drawn by Mapbox GL JS rather
-// than by MapLibre; `src/gl-engine.js` is where that decision lives and why.
+// This is the Mapbox half of the map — Standard (the 3D button) and, with a
+// token, Standard Satellite (the satellite button). 3D buildings, modelled
+// landmarks, trees you can see the shape of, and a sun that can be put in four
+// places or left to follow the one outside the viewer's own window. Drawn by
+// Mapbox GL JS rather than by MapLibre; `src/gl-engine.js` is where that
+// decision lives and why.
 //
 // **What this file used to be.** The first version of the 3D basemap ran on
 // MapLibre, because keeping one engine was worth a lot: it fetched
@@ -54,6 +56,12 @@ const API = 'https://api.mapbox.com';
 
 /** The style itself. Its config is what the presets below set. */
 export const STANDARD_STYLE = 'mapbox://styles/mapbox/standard';
+
+// The satellite button's Mapbox half. Same import mechanism as Standard — so
+// the same engine, the same slots, the same sun — with aerial photography as
+// the ground instead of the drawn streets. Without a token the button stays
+// Esri's flat World Imagery; see STYLES.satellite in main.js.
+export const STANDARD_SATELLITE_STYLE = 'mapbox://styles/mapbox/standard-satellite';
 
 // Standard's own name for the import, and the only one it has. Every
 // `setConfigProperty` call has to name it.
@@ -277,6 +285,26 @@ export const standardConfig = (zoom = Infinity) => ({
   showLandmarkIcons: SHOW_LANDMARK_ICONS,
 });
 
+// Standard Satellite's own schema. It keeps the sun, the POI discs and the
+// transit labels — those are the same opinions as Standard — and it does not
+// have landmarks, facades or landmark icons at all: those are `show3dObjects`
+// and colour-theming, which Mapbox documents as the two things this style
+// will not take. Sending them is not a crash (`setConfigProperty` returns
+// without a word) but it is a lie in the test that checks every name is sent.
+//
+// The two it *does* have that Standard does not are the road toggles. The
+// photograph is the subject, the same way it is on the Esri fallback, so the
+// motorway network stays and every path and trail comes off — otherwise the
+// aerial photo becomes a road map with a photo behind it, which is the diet
+// `satelliteStyle()` already keeps on the MapLibre half.
+export const satelliteConfig = () => ({
+  lightPreset: lightPreset(),
+  backgroundPointOfInterestLabels: POI_BACKGROUND,
+  showTransitLabels: SHOW_TRANSIT_LABELS,
+  showRoadsAndTransit: true,
+  showPedestrianRoads: false,
+});
+
 // One `zoom` handler per map, and the last value each was given. A style swap
 // brings `configureStandard` back with the config reset to Standard's own
 // defaults, so the property is always re-sent — it is only the handler that must
@@ -488,7 +516,8 @@ export async function checkMapboxToken(token) {
 }
 
 /**
- * Everything that has to be said to a Standard map once its style has parsed.
+ * Everything that has to be said to a Standard (or Standard Satellite) map
+ * once its style has parsed.
  *
  * Kept here rather than in main.js's `installGrid` because all of it is about
  * Mapbox in particular, and `installGrid` is the one function that has to stay
@@ -498,12 +527,15 @@ export async function checkMapboxToken(token) {
  * a fresh style and no sources.
  *
  * @param {object} map a Mapbox GL JS map whose style has loaded
+ * @param {{satellite?: boolean}} [opts] Standard Satellite has a different
+ *   schema — no landmarks to gate, and two road toggles Standard does not.
  */
-export function configureStandard(map) {
+export function configureStandard(map, { satellite = false } = {}) {
   // The zoom decides one of these, and this runs on every style parse — so the
   // value sent is the one for where the camera is now, not for where it was.
   const zoom = typeof map.getZoom === 'function' ? map.getZoom() : Infinity;
-  for (const [key, value] of Object.entries(standardConfig(zoom))) {
+  const config = satellite ? satelliteConfig() : standardConfig(zoom);
+  for (const [key, value] of Object.entries(config)) {
     try {
       map.setConfigProperty(BASEMAP_IMPORT, key, value);
     } catch {
@@ -516,7 +548,10 @@ export function configureStandard(map) {
       // bug that gets blamed on the sun.
     }
   }
-  gateLandmarks(map);
+  // Satellite has no `show3dLandmarks` to keep in step with the zoom. The
+  // handler would fire, the call would return without a word, and nothing
+  // would look wrong — which is exactly the silence this file exists to avoid.
+  if (!satellite) gateLandmarks(map);
 
   if (!TERRAIN_EXAGGERATION) return;
   try {

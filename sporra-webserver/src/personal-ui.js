@@ -35,7 +35,7 @@ const appSettingsHost = () => globalThis.webkit?.messageHandlers?.[APP_SETTINGS]
  * @param {() => string} [opts.snow]     never / in winter / always
  * @param {(mode:string) => void} [opts.onSnow]
  * @param {() => boolean} [opts.snowPossible] whether the basemap on screen can
- *   show it at all — Mapbox can, the other four cannot
+ *   show it at all — Mapbox can, MapLibre cannot
  * @param {() => string} [opts.whatsNew] how often to say what has changed
  * @param {(mode:string) => void} [opts.onWhatsNew]
  * @param {() => Array<{key:string,label:string}>} [opts.locales] the languages that exist
@@ -114,8 +114,8 @@ export function mountPersonal({
     clockNote.textContent = clockSel.value === 'auto'
       ? `${localIs24Hour() ? '24-hour' : '12-hour'}${clockSource() === 'device' ? '' : ", from your browser's language"}`
       : '';
-    // Snow is Mapbox's own renderer pass and the other four basemaps have no
-    // equivalent (see src/snow.js). The row is left working rather than disabled
+    // Snow is Mapbox's own renderer pass and MapLibre has no equivalent (see
+    // src/snow.js). The row is left working rather than disabled
     // — the setting is real and it will apply the moment you switch basemap —
     // but it says which of the two situations you are in, because a switch that
     // demonstrably does nothing is indistinguishable from a broken one.

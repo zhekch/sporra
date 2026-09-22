@@ -22,6 +22,7 @@ import { lakeAround, loadPlaces, nearestTown } from '../../src/places.js';
 import { loadRegions, regionNear } from '../../src/regions.js';
 import { countryNear } from '../../src/countries.js';
 import { buildTrips, findHome, nameTrips } from '../../src/trips.js';
+import { colsOf, mercX, mercY, normCol, pointToCell } from '../../src/hexgrid.js';
 import * as derive from '../../server/derive.js';
 
 let pass = 0;
@@ -41,19 +42,27 @@ const AUG = Math.floor(new Date('2024-08-10T09:00:00Z').getTime() / 1000);
  * the title — so the home cells carry many hits across many days, and the trip
  * cells carry one visit each on consecutive days.
  */
+// Anchored on real ground. A bare column and row used to land in Europe and,
+// once the lattice got finer, in the Gulf of Guinea — the ids are coordinates.
+function lineAt(lng, lat, n) {
+  const [col, row] = pointToCell(0, mercX(lng), mercY(lat));
+  const c = normCol(col, colsOf(0));
+  return Array.from({ length: n }, (_, i) => `0/${c}/${row + i}`);
+}
+
 function account({ homeHits = 40 } = {}) {
   const cellMeta = new Map();
-  for (let i = 0; i < 20; i++) {
+  lineAt(12.5, 41.9, 20).forEach((id, i) => {
     const at = AUG + i * 3600;
-    cellMeta.set(`0/1076/${6668 + i}`, [
+    cellMeta.set(id, [
       { source: 'gpx', addedAt: AUG, firstAt: at, lastAt: at + 600, hits: 1, fixes: 9 },
     ]);
-  }
-  for (let i = 0; i < 15; i++) {
-    cellMeta.set(`0/2000/${3000 + i}`, [
+  });
+  lineAt(7.44, 46.95, 15).forEach((id, i) => {
+    cellMeta.set(id, [
       { source: 'ha', addedAt: AUG, firstAt: AUG - 200 * DAY + i * DAY, lastAt: AUG - 10 * DAY, hits: homeHits, fixes: 100 },
     ]);
-  }
+  });
   return cellMeta;
 }
 

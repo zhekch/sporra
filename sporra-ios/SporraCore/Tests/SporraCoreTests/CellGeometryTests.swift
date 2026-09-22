@@ -45,7 +45,7 @@ struct CellGeometryTests {
             let y = HexGrid.mercatorY(lat: corner.lat)
             let distance = ((x - centre.x) * (x - centre.x) + (y - centre.y) * (y - centre.y)).squareRoot()
             // Round-tripping through lng/lat and back costs a little precision;
-            // a millimetre on a cell 900 m across is not a shape anyone can see.
+            // a millimetre on a cell 50 m across is not a shape anyone can see.
             #expect(abs(distance - r) < 0.001, "corner \(distance) m from centre, radius \(r)")
         }
     }
@@ -96,11 +96,13 @@ struct CellGeometryTests {
     @Test("the level a zoom asks for matches the web app")
     func levelForZoomMatchesTheWebApp() {
         let expected: [(zoom: Double, level: Int)] = [
-            (0, 4), (1, 4), (2, 4), (3, 4), (3.66, 4), (3.7, 4), (4, 4), (5, 4), (5.05, 4),
-            (6, 3), (6.5, 3), (6.83, 3),
-            (7, 2), (8, 2),
-            (8.42, 1), (9, 1), (9.5, 1),
-            (10, 0), (11, 0), (14, 0), (18, 0),
+            (0, 6), (2, 6), (2.75, 6), (4, 6), (4.2, 6),
+            (5.7, 5), (7, 5), (7.26, 5),
+            (7.3, 4), (8.8, 4),
+            (8.85, 3), (10, 3), (10.43, 3),
+            (10.5, 2), (12, 2),
+            (12.02, 1), (13, 1),
+            (13.6, 0), (14, 0), (18, 0),
         ]
         for case let (zoom, level) in expected {
             #expect(HexGrid.levelForZoom(zoom) == level, "zoom \(zoom)")

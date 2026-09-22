@@ -35,14 +35,15 @@ import Foundation
 /// **Standard updates** run on top of it for every cadence but that one, and are
 /// what the interval settings actually mean.
 ///
-/// ## Why the fixes are coarse on purpose
+/// ## Why the fixes ask for ten metres
 ///
-/// `desiredAccuracy` is `kCLLocationAccuracyHundredMeters` at every setting,
-/// which is not a compromise — it is the right answer. A cell is about 900 m
-/// across, so a ten-metre fix and a hundred-metre fix land in the same hexagon
-/// and produce the identical map. A Mac has no GPS chip and answers from wifi
-/// positioning either way, so asking for precision it cannot give and this app
-/// would throw away buys nothing at all.
+/// `desiredAccuracy` is `kCLLocationAccuracyNearestTenMeters`. A cell is about
+/// 50 m across, so a hundred-metre fix lands in a different one. A Mac has no
+/// GPS chip and often cannot answer to ten metres — wifi positioning is what
+/// it has — and a fix it reports as worse than a cell is dropped by the
+/// precision setting rather than painted in the wrong hex. Asking is still
+/// worth it: a fix the machine can answer that well should be kept, which was
+/// not true when a cell was 900 m and both answers were the same hex.
 @MainActor
 final class LocationLogger: NSObject, ObservableObject, CLLocationManagerDelegate {
 
@@ -64,7 +65,7 @@ final class LocationLogger: NSObject, ObservableObject, CLLocationManagerDelegat
     private override init() {
         super.init()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         // With the default, the system pauses updates when it decides you have
         // stopped moving — and then does not resume them. The documented remedy
         // is for the app to notice and restart, and what it looks like from the

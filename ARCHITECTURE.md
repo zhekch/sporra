@@ -86,15 +86,22 @@ glass look. Click hexagons to mark places you've visited.
   `scripts/test/card-lift.mjs` guards the neighbouring version of this trap.
 - **Grid**: flat-top hexagons defined in Web Mercator space, so every cell
   renders as a perfect, identically-oriented hexagon at any location and zoom
-  (no rotation or pentagon artifacts). The base (finest) cell is **~0.9 km**
-  flat-to-flat near the equator — change the `BASE_COLS` multiplier in
-  `src/main.js` to resize (must stay even; double it to halve the cell).
-  Being a Mercator grid, ground size shrinks with latitude (×cos φ);
-  on-screen size is constant everywhere.
+  (no rotation or pentagon artifacts). The base (finest) cell is **~74 m**
+  flat-to-flat at the equator — **50 m on the ground near 47°**, which is
+  where this map's cells actually are (× cos φ). `BASE_COLS` in
+  `src/hexgrid.js` is `858 · 3^6`; the multiplier stays divisible by 6 so the
+  column count is even at every level, including the one past the top.
+  It was `642 · 3^4`, about 0.9 km at the equator, until that stopped being
+  a useful claim about a street. Stored ids from the old lattice are not
+  this one; `scripts/migrate-cell-size.mjs` is what rewrote them, and the
+  server will not serve a database that has not been through it.
+  On-screen size is constant everywhere; ground size is not.
 - **Zoom steps**: each grid level is exactly **3×** wider than the previous
-  (5 levels, 0–4), and every big-cell center lands on a small-cell center. As
-  you zoom out the grid snaps to the next coarser level (~1.585 map-zoom
-  levels apart) and regions **crossfade** concentrically. Past the hexagons come
+  (levels 0–6; 0–5 are hexes, 6 is where regions take over), and every
+  big-cell center lands on a small-cell center. Level 0 takes over at zoom
+  **13.6**, where a 74 m cell is the same ~6 px the old cell was at zoom 10.
+  As you zoom out the grid snaps to the next coarser level (~1.585 map-zoom
+  levels apart) and regions **crossfade** concentrically near **z4.1**. Past the hexagons come
   three polygon levels — regions, countries, continents. **Detail** in the
   menu pins that choice instead, at either end: *Tiniest* holds level 0 — the
   grid exactly as stored — at every zoom, *Country* holds whole-country fills,
@@ -636,10 +643,12 @@ grid, same visit counting as an imported file.
   between them is not filled in, guessed at, or drawn. A sparse day looks
   sparse, which is the honest answer for a map whose whole claim is *I was
   here*.
-- **Vague fixes are skipped.** A cell is about 900 m across, so a fix the phone
+- **Vague fixes are skipped.** A cell is about 50 m across, so a fix the phone
   itself calls loose (cell-tower fallback, indoors) can land in the wrong one.
   Anything reported as worse than the *Skip vague fixes* threshold — 250 m by
-  default — is dropped. Trackers that report no accuracy are taken at their word.
+  default, several cells at this size — is dropped. Trackers that report no
+  accuracy are taken at their word. Nothing is linked here, so the default
+  was left; a tracker that is connected should be tightened.
 - **The cursor only moves forward.** Each poll records how far it read, so
   nothing is fetched or counted twice. Adding a device later starts it from now
   rather than re-reading history, and disconnecting and reconnecting can't
@@ -856,7 +865,7 @@ a hillside is not 300 m you climbed.
 **What stays on the phone is accuracy**, and only that, because it is the one
 thing that cannot travel: `horizontalAccuracy` is a property of the fix as
 CoreLocation hands it over and is gone by the time the point is a pair of numbers
-on the wire. `HealthSync` drops anything worse than 100 m. The logger has a
+on the wire. `HealthSync` drops anything worse than 50 m, about one cell. The logger has a
 *setting* for the same idea and this has a constant, deliberately — a phone in a
 pocket genuinely does spend the day on cell-tower fixes, but a watch recording a
 walk has GPS lock, so a 1,500 m reading in the middle of one is a glitch rather
@@ -1577,7 +1586,7 @@ default to the map's own when nobody overrides them.
 *Cell size* pins a grid level, and it used to pin an *offset* from whatever the
 frame could carry — so the base moved as you zoomed and a size you had chosen
 quietly changed under you. It reads the level straight now (`blobLevelFor`), and
-the options are named by the ground a cell covers (0.9 km, 2.7 km, 8 km, …)
+the options are named by the ground a cell covers (70 m, 220 m, 670 m, …) at the equator
 rather than by an adjective: "8 km" is a fact about the grid, "Medium" is a fact
 about the list it appears in. *Auto* is still there and still means the finest
 level the picture can honestly draw.
@@ -4146,8 +4155,26 @@ geometry in Node.
 The fifth basemap is **3D**: Mapbox **Standard**, with the modelled landmarks,
 the trees, and a sun that can be put in four places — or left to follow the one
 outside the viewer's own window, which is what it does unless told otherwise. It
-is the only entry in the picker that another library draws, the only one that can
-be *unavailable*, and the only one whose theme is not a constant.
+is the one that can be *unavailable* (no token, no map), and the one whose theme
+is not a constant.
+
+**Satellite joins it when a token is present.** Without one it is Esri's World
+Imagery, flat, drawn by MapLibre, the way it has always been. With one it is
+Mapbox **Standard Satellite** — the same import mechanism, the same terrain, the
+same sun, over a photograph instead of the drawn streets. The button does not
+change and nothing extra is asked for; the token 3D already wanted is the one
+that pays for this too. Taking the token off puts Esri back, by rebuilding onto
+MapLibre, because the key did not change and `setStyleKey` would no-op.
+
+Standard Satellite has a different config schema: no landmarks, facades or
+landmark icons (`show3dObjects` and colour-theming are the two things Mapbox
+says this style will not take), and two road toggles Standard does not have.
+`satelliteConfig()` is that list; `configureStandard(map, { satellite: true })`
+sends it and skips the landmark zoom-gate. Pedestrian roads are off, for the
+same reason the Esri half diets them — otherwise the aerial photo becomes a road
+map with a photo behind it. The chrome stays dark: the sun relights the 3D
+objects and the atmosphere, not the photograph, and a light wash over imagery
+disappears.
 
 **Standard cannot be rendered by MapLibre**, and everything below follows from
 that. It is published as a style *import*:
@@ -4157,7 +4184,8 @@ that. It is published as a style *import*:
 Style imports are a Mapbox GL JS v3 feature; MapLibre 5.24 has no implementation
 and renders that document as a style with zero layers and a blank screen. The
 trees and the landmarks are not layers in a style you can borrow — they are
-Standard.
+Standard. Standard Satellite is the same shape with a different URL
+(`mapbox://styles/mapbox/standard-satellite`).
 
 **What was tried first.** The original 3D basemap ran on MapLibre and imitated
 Standard by hand: it fetched `mapbox/streets-v12`, which is a classic flat spec-v8
@@ -4173,8 +4201,9 @@ config value.
 
 **So the engine is chosen at boot, per basemap.** `src/gl-engine.js` holds the
 decision, `src/boot.js` acts on it, and both libraries are dynamic imports — a
-viewer who never picks 3D never downloads Mapbox GL JS (520 KB gz) and one who
-does never downloads MapLibre (284 KB gz).
+viewer who never picks a Mapbox basemap never downloads Mapbox GL JS (520 KB gz)
+and one who does never downloads MapLibre (284 KB gz). `MAPBOX_BASEMAPS` is the
+set that decides; satellite is the second word in it.
 
 Why not simply run Mapbox GL JS for all five and delete the seam: it is
 proprietary since v2, and it is billed **per map load** rather than per tile, so
@@ -4931,10 +4960,10 @@ weather is something a map does, and it now sits under **The map** with the sun
 and the editing switch — which is also the honest grouping, since all three
 change what the map is doing rather than what it knows.
 
-**It is Mapbox's, so it is the 3D basemap's alone.** `setSnow` renders inside the
+**It is Mapbox's, so it is the 3D maps' alone.** `setSnow` renders inside the
 same 3D scene as the terrain and the buildings. MapLibre has no equivalent and
 cannot be given one from out here — precipitation is a renderer pass, not a layer
-you can add — so the other four basemaps never snow whatever the setting says.
+you can add — so the MapLibre basemaps never snow whatever the setting says.
 The Settings row is left working rather than disabled, and its subtitle says
 which of the two situations you are in, because a control that demonstrably does
 nothing is indistinguishable from one that is failing.

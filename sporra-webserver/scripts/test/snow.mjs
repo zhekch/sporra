@@ -5,9 +5,9 @@
 //   - "in winter" is answered against the *map's* latitude, not the viewer's, so
 //     the southern hemisphere has to get the opposite half of the year. This is
 //     the bug that would not be noticed for six months, in either direction.
-//   - `applySnow` is called on a MapLibre map on four of the five basemaps, and
-//     must do nothing at all rather than throw — the feature does not exist
-//     there and never will.
+//   - `applySnow` is called on a MapLibre map (the flat three, and satellite
+//     with no token) and must do nothing at all rather than throw — the
+//     feature does not exist there and never will.
 //   - the mode is read back from storage on every load, and anything unknown has
 //     to land on `off`. A stored value from a future build must not switch snow
 //     on permanently with no control that admits to it.
@@ -107,7 +107,7 @@ console.log('\nWhat actually reaches the renderer');
 {
   setSnowMode('always');
 
-  // MapLibre: no setSnow at all. This is four of the five basemaps.
+  // MapLibre: no setSnow at all. The flat maps, and satellite without a token.
   const maplibre = { getCenter: () => ({ lat: BERN }) };
   check(applySnow(maplibre) === false, 'a map with no setSnow is left alone');
 

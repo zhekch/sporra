@@ -1,13 +1,13 @@
 // Which library draws the map, and why there are two of them.
 //
-// Four of the five basemaps are MapLibre's business and always will be: they are
-// CARTO's, OpenFreeMap's and Esri's tiles, MapLibre is BSD, and nothing about
-// them wants anything else. The fifth is Mapbox **Standard** — the 3D trees, the
-// modelled landmarks, the dawn/day/dusk/night presets — and that style is
-// delivered as a style `import`, which is a Mapbox GL JS v3 feature MapLibre
-// 5.24 does not implement. Handing that document to MapLibre yields a style with
-// zero layers and a blank screen. There is no version of this where one library
-// draws all five.
+// Three of the five basemaps are MapLibre's business and always will be: they
+// are CARTO's and OpenFreeMap's tiles, MapLibre is BSD, and nothing about them
+// wants anything else. Two more are Mapbox **imports** — Standard, and Standard
+// Satellite — delivered as a style `import`, which is a Mapbox GL JS v3 feature
+// MapLibre 5.24 does not implement. Handing that document to MapLibre yields a
+// style with zero layers and a blank screen. Satellite without a token stays
+// Esri's, which MapLibre draws; with a token it joins 3D on this side. There is
+// no version of this where one library draws all five.
 //
 // So the engine is **decided at boot, from the chosen basemap** — and changed
 // afterwards by rebuilding the map rather than by reloading the page. The
@@ -23,23 +23,24 @@
 // it only when it is the thing being looked at keeps both the licence and the
 // meter where they belong.
 //
-// Both libraries are imported dynamically, so a viewer who never chooses 3D
-// never downloads Mapbox GL JS, and one who does never downloads MapLibre.
+// Both libraries are imported dynamically, so a viewer who never chooses a
+// Mapbox basemap never downloads Mapbox GL JS, and one who does never
+// downloads MapLibre.
 
 import { hasMapboxToken, mapboxToken } from './mapbox.js';
 
 export const MAPBOX = 'mapbox';
 export const MAPLIBRE = 'maplibre';
 
-// Which basemap key belongs to which library. One entry today, and a Set rather
-// than an `=== 'mapbox'` because the next Mapbox style added — a satellite one,
-// say — should be a word here and nothing else.
+// Which basemap key belongs to which library. A Set rather than an
+// `=== 'mapbox'` because satellite is the second Mapbox style — Standard
+// Satellite, the 3D one — and joining it is a word here and nothing else.
 //
 // Deliberately *not* a field on the STYLES entries in main.js, tempting as that
 // is. This has to be answerable before main.js has been loaded at all: which
 // library to fetch is the first decision of the page, and STYLES lives seven
 // thousand lines inside the module that cannot be parsed until it is made.
-const MAPBOX_BASEMAPS = new Set(['mapbox']);
+const MAPBOX_BASEMAPS = new Set(['mapbox', 'satellite']);
 
 export const STYLE_KEY = 'visited-map:style:v1';
 
@@ -47,8 +48,8 @@ export const STYLE_KEY = 'visited-map:style:v1';
  * Which library has to draw a given basemap.
  *
  * A Mapbox basemap with no token is not Mapbox's problem to draw — there is
- * nothing it could fetch — so it reports MapLibre and main.js moves the basemap
- * somewhere MapLibre can go.
+ * nothing it could fetch — so it reports MapLibre. 3D then moves somewhere
+ * MapLibre can go; satellite stays put and MapLibre draws Esri instead.
  */
 export const engineForBasemap = (key) =>
   (MAPBOX_BASEMAPS.has(key) && hasMapboxToken() ? MAPBOX : MAPLIBRE);
@@ -97,7 +98,7 @@ export const engineNow = () => loaded;
  *
  * So the CSS is fetched as text (`?inline` gives the string and injects
  * nothing) and put at the *top* of the head, before anything this app wrote.
- * Same lazy fetch — a session that never opens the 3D basemap still never
+ * Same lazy fetch — a session that never opens a Mapbox basemap still never
  * downloads its 40 KB — and now the order is a fact rather than a coincidence.
  */
 async function useEngineCss(which) {

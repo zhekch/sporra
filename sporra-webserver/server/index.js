@@ -103,7 +103,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.99.4';
+export const SERVER_VERSION = '0.101.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -236,6 +236,7 @@ import { createRailTiles } from './rail-tiles.js';
 // of that module is about why, and one of the three reasons is that a tile
 // request from this app is a coordinate somebody visited.
 import { createTrailTiles } from './trail-tiles.js';
+import { BASE_COLS } from '../src/hexgrid.js';
 import { loadRegions } from '../src/regions.js';
 import { airportAt } from './airport-at.js';
 import { describeCron } from '../src/cron.js';
@@ -1136,6 +1137,37 @@ function migrateRouteThumbs() {
   });
 }
 migrateRouteThumbs();
+
+// Cell ids are coordinates. The column count that produced them is part of
+// the datum, and a server compiled for a different one would silently move
+// every place. An empty database just records what it is about to write;
+// a full one that has not been through scripts/migrate-cell-size.mjs stops.
+const GRID_META = 'grid_base_cols';
+function assertGridGeneration() {
+  const have = db.prepare('SELECT COUNT(*) AS n FROM cell_sources').get().n;
+  const row = q.getMeta.get(GRID_META);
+  const want = String(BASE_COLS);
+  if (!row) {
+    if (have > 0) {
+      console.error(
+        `[visited-map] ${have} stored cells were written on an older grid. `
+        + `This server stores ${want} columns at level 0. `
+        + 'Run: node scripts/migrate-cell-size.mjs',
+      );
+      process.exit(1);
+    }
+    q.setMeta.run(GRID_META, want);
+    return;
+  }
+  if (row.value !== want) {
+    console.error(
+      `[visited-map] database grid is ${row.value} columns, this server is ${want}. `
+      + 'Run: node scripts/migrate-cell-size.mjs',
+    );
+    process.exit(1);
+  }
+}
+assertGridGeneration();
 
 // The owner's location history, baked in by `npm run import`. Read fresh on each
 // merge so re-importing while the server runs still takes effect. `detail` rows
