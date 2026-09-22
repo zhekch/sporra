@@ -11,8 +11,8 @@
 //   node scripts/test/brush.mjs
 
 import {
-  cellCenter, cellsWithin, colsOf, normCol, pointToCell, radiusOf,
-  sampleOnSegment, segmentSamples, SQRT3,
+  cellCenter, cellsWithin, colsOf, holdPointerSample, normCol, pointToCell,
+  radiusOf, sampleOnSegment, segmentSamples, SQRT3,
 } from '../../src/hexgrid.js';
 
 let pass = 0;
@@ -117,6 +117,23 @@ console.log('\nA coalesced sample counts only when it is on the way');
     'a sample off that segment is not');
   check(!sampleOnSegment(500, 200, 560, 200, 400, 200),
     'and neither is one back toward where the pointer is not');
+}
+
+// A twitch and a flick are the same number in one sample. What tells them
+// apart is the sample after: the pointer is still out there, or it never left.
+console.log('\nA sample that leaps waits for the one after it');
+{
+  const LIMIT = 120;
+  const hold = (from, held, to) => holdPointerSample(from, held, to, LIMIT);
+  check(!hold([500, 200], null, [540, 214]), 'an ordinary step is believed at once');
+  check(!hold(null, null, [200, 200]), 'and so is the first sample of all, having nothing to leap from');
+  check(hold([500, 200], null, [180, 206]), 'a step across the map is held back');
+  check(!hold([500, 200], [180, 206], [150, 230]),
+    'the sample after it, still out there, is the pointer having moved');
+  check(!hold([500, 200], [180, 206], [505, 204]),
+    'one back under the cursor is believed where it lands, and the leap it answers goes unused');
+  check(hold([500, 200], [180, 206], [900, 210]),
+    'a second leap somewhere else is held in its turn');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

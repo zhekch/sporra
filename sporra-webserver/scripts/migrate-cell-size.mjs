@@ -588,6 +588,7 @@ backup();
 
 const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA busy_timeout = 8000');
+db.exec('PRAGMA journal_mode = WAL');
 // A previous run died after creating this and before the swap. Those rows
 // are not the map; the live table is still the old grid.
 db.exec('DROP TABLE IF EXISTS cell_sources_next');
@@ -706,5 +707,8 @@ try {
   try { db.exec('DROP TABLE IF EXISTS cell_sources_next'); } catch { /* the rollback undid it */ }
   throw e;
 }
+
+db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+db.close();
 
 console.log(`\ndone. tiles fetched ${fetchedTiles}, failed ${failedTiles}. grid ${BASE_COLS}.`);

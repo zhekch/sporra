@@ -353,6 +353,17 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   font-variant-numeric: tabular-nums;
 }
 
+/* The row whose disk is on the map. Paint and erase are both always there;
+   this is which one the outline is measuring. */
+.hud-row.is-live {
+  color: #fff;
+  font-weight: 600;
+}
+
+:is([data-theme='light'], [data-chrome='light']) .hud-row.is-live {
+  color: #0f172a;
+}
+
 .hud-step {
   display: flex;
   align-items: center;

@@ -96,15 +96,23 @@
         <div class="hud-row"><span data-i18n="hud.cell-size">Cell size</span><b id="hud-size">–</b></div>
         <div class="hud-row"><span data-i18n="hud.level">Level</span><b id="hud-res">–</b></div>
         <div class="hud-row"><span data-i18n="hud.visited">Visited</span><b id="hud-visited">0</b></div>
-        <div class="hud-row">
-          <span data-i18n="hud.size">Size</span>
+        <div class="hud-row" id="hud-paint-row">
+          <span data-i18n="hud.paint">Paint</span>
           <span class="hud-step">
-            <button type="button" id="hud-brush-dec" data-i18n-aria-label="hud-brush.smaller" aria-label="Smaller brush">−</button>
-            <b id="hud-brush">1</b>
-            <button type="button" id="hud-brush-inc" data-i18n-aria-label="hud-brush.larger" aria-label="Larger brush">+</button>
+            <button type="button" id="hud-paint-dec" data-i18n-aria-label="hud-paint-dec.smaller-paint-brush" aria-label="Smaller paint brush">−</button>
+            <b id="hud-paint">1</b>
+            <button type="button" id="hud-paint-inc" data-i18n-aria-label="hud-paint-inc.larger-paint-brush" aria-label="Larger paint brush">+</button>
           </span>
         </div>
-        <div data-i18n="hud-hint.tap-toggles-ctrl-paints" class="hud-hint" id="hud-hint">Tap toggles · Ctrl paints · Option clears</div>
+        <div class="hud-row" id="hud-erase-row">
+          <span data-i18n="hud.erase">Erase</span>
+          <span class="hud-step">
+            <button type="button" id="hud-erase-dec" data-i18n-aria-label="hud-erase-dec.smaller-erase-brush" aria-label="Smaller erase brush">−</button>
+            <b id="hud-erase">1</b>
+            <button type="button" id="hud-erase-inc" data-i18n-aria-label="hud-erase-inc.larger-erase-brush" aria-label="Larger erase brush">+</button>
+          </span>
+        </div>
+        <div data-i18n="hud-hint.tap-toggles-ctrl-paints" class="hud-hint" id="hud-hint">Tap toggles · Ctrl paints · Option erases</div>
       </div>
     </div>
 
