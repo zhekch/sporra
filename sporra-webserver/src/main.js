@@ -17,7 +17,6 @@ import {
   lngOf,
   latOf,
   segmentSamples,
-  acceptPointerSample,
   sampleOnSegment,
 } from './hexgrid.js';
 import {
@@ -10849,16 +10848,12 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       if (!gesture) return;
       if (e.target instanceof Element && e.target.closest('button, a, input, textarea, select, label, #hud, #layers-menu, #layers-btn')) return;
     }
-    // The dispatched event is where the pointer is. A coalesced sample is
-    // only the points between the last one and this one — taking its position
-    // as the pointer is how the highlight ended up a hand's width, and then
-    // a screen, to the left. Two copies of that wrong place used to confirm
-    // each other, so the highlight stayed there.
+    // The dispatched event is where the pointer is. A coalesced sample is only
+    // a position along the way, and on this machine it can sit a long way to
+    // the left of the event it belongs to. Taking it as the pointer is how
+    // the highlight left the cursor.
     const pos = canvasPoint(e);
     if (!pos || !nearCanvas(pos.px, gesture ? 16 : 0)) return;
-    if (pointerTracked && cursorPx && !acceptPointerSample(cursorPx[0], cursorPx[1], pos.px[0], pos.px[1], e.movementX, e.movementY)) {
-      return;
-    }
     const el = map.getCanvas();
     const want = gestureWanted(e);
     if (gesture && pointerTracked && cursorPx) {
@@ -10893,19 +10888,6 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     scheduleTiles();
   };
   window.addEventListener('pointermove', onBrushPointer);
-  // MapLibre pans from the document's mousemove, in the capture phase. A
-  // sample whose client position leapt while the device barely moved becomes
-  // a pan of that leap — the map, and everything anchored to it, jumps left.
-  // Window capture runs before the document's, so stopping it here is the
-  // sample never arriving. A brush sweep has already ignored it above.
-  window.addEventListener('mousemove', (e) => {
-    if (!pointerTracked || !cursorPx || !e.buttons) return;
-    const pos = canvasPoint(e);
-    if (!pos) return;
-    if (acceptPointerSample(cursorPx[0], cursorPx[1], pos.px[0], pos.px[1], e.movementX, e.movementY)) return;
-    e.stopPropagation();
-    e.preventDefault();
-  }, true);
   onMapBuilt(() => map.on('mousemove', (e) => {
       // View mode: show that the line under the cursor is tappable. Skipped
       // mid-gesture, where a hit test would be both wasted and misleading.
