@@ -33,12 +33,16 @@ glass look. Click hexagons to mark places you've visited.
 - **Modes**: the map is view-only until you switch **Editing** on in the menu,
   which reveals the glass **pencil button**; tapping that expands the edit panel
   and enters edit mode, where a **circle under the pointer** shows the brush —
-  one ring, not a field of hexes. The panel's **paint** and **erase** sizes
+  one ring, drawn into a canvas the size of the map, not a box as wide as the
+  brush. The wide erase step is kilometres across; a layer of that size is
+  what made arming it fall over. The panel's **paint** and **erase** sizes
   step through `BRUSH_STEPS` (1, 3, 8, 15, …, each remembered on this
   browser). A tap uses whichever the cell under the pointer calls for, and
   Ctrl paints and Option erases at their own sizes for the whole sweep. A tap
   on a **track**, when that overlay is on, paints the cells the line touches
-  from the stop before the pointer to the stop after it. In
+  from the previous station or junction to the next. A halt or a stop position
+  is not an end, and neither is the OSM way boundary in the middle of a
+  straight line. In
   view mode a tap opens the
   **info card** for that area instead. Set `EDIT_ENABLED = false` in
   `src/main.js` to ship a fully view-only build (no pencil, no editing, at all).

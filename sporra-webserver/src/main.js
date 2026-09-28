@@ -17,7 +17,6 @@ import {
   parentOf,
   parseCellId,
   wrapLng,
-  WORLD,
   lngOf,
   latOf,
   segmentSamples,
@@ -3490,6 +3489,7 @@ function toggleCell(id) {
 // single-cell toggle this replaced, including the one-cell history phrase.
 function editClick(lngLat) {
   if (currentLevel == null) return;
+  clearSpanHighlight();
   clearTripHighlight();
   const center = cellAt(lngLat);
   const [L, col, row] = parseCellId(center.id);
@@ -3589,49 +3589,94 @@ function paintCellsOnLine(lngLats, phrase) {
   return true;
 }
 
-// One click in flight. A second click before the first answer arrives paints
-// the second run, and the first answer is dropped.
-let railPaintGen = 0;
+// How long the line that was just painted stays marked. The next edit clears
+// it sooner — a brush stroke, a cell, leaving edit mode.
+const SPAN_HOLD_MS = 30_000;
+let spanHoldTimer = 0;
 
-async function paintRailSpan(info, hit, lngLat) {
-  const gen = ++railPaintGen;
+function clearSpanHighlight() {
+  if (spanHoldTimer) clearTimeout(spanHoldTimer);
+  spanHoldTimer = 0;
+  map?.getSource?.('rail-span')?.setData(EMPTY);
+}
+
+function showSpanHighlight(lngLats) {
+  const src = map?.getSource?.('rail-span');
+  if (!src || !lngLats || lngLats.length < 2) return;
+  src.setData({
+    type: 'Feature',
+    properties: {},
+    geometry: { type: 'LineString', coordinates: lngLats },
+  });
+  if (spanHoldTimer) clearTimeout(spanHoldTimer);
+  spanHoldTimer = setTimeout(clearSpanHighlight, SPAN_HOLD_MS);
+}
+
+// Clicks that arrive while a track is still being fetched. They used to
+// replace the one in flight, so a second section was thrown away.
+const railPaintQueue = [];
+let railPainting = false;
+
+async function paintOneRail({ info, hit, lngLat }) {
+  let points = null;
+  let from = null;
+  let to = null;
+  try {
+    const q = new URLSearchParams({
+      way: info.osm.id,
+      lng: String(lngLat.lng),
+      lat: String(lngLat.lat),
+    });
+    const res = await fetch(`/api/rail/span?${q}`, { credentials: 'same-origin' });
+    if (res.ok) {
+      const body = await res.json();
+      if (Array.isArray(body.points) && body.points.length >= 2) {
+        points = body.points;
+        from = body.from || null;
+        to = body.to || null;
+      }
+    }
+  } catch {
+    /* the piece under the pointer is still a line */
+  }
+  if (mode !== 'edit') return;
+  if (!points) points = linePointsOf(hit);
+  if (!points) return;
+  const phrase = from && to ? `painting ${from} → ${to}` : 'painting the track';
+  paintCellsOnLine(points, phrase);
+  showSpanHighlight(points);
+}
+
+async function drainRailPaint() {
+  if (railPainting) return;
+  railPainting = true;
   const done = busy('Painting the track…');
   try {
-    let points = null;
-    let from = null;
-    let to = null;
-    try {
-      const q = new URLSearchParams({
-        way: info.osm.id,
-        lng: String(lngLat.lng),
-        lat: String(lngLat.lat),
-      });
-      const res = await fetch(`/api/rail/span?${q}`, { credentials: 'same-origin' });
-      if (res.ok) {
-        const body = await res.json();
-        if (Array.isArray(body.points) && body.points.length >= 2) {
-          points = body.points;
-          from = body.from || null;
-          to = body.to || null;
-        }
-      }
-    } catch {
-      /* the piece under the pointer is still a line */
+    while (railPaintQueue.length && mode === 'edit') {
+      const job = railPaintQueue.shift();
+      const waiting = railPaintQueue.length;
+      const label = document.getElementById('busy-text');
+      if (label) label.textContent = waiting ? `Painting the track… ${waiting} more` : 'Painting the track…';
+      await paintOneRail(job);
     }
-    if (gen !== railPaintGen || mode !== 'edit') return;
-    if (!points) points = linePointsOf(hit);
-    if (!points) return;
-    const phrase = from && to ? `painting ${from} → ${to}` : 'painting the track';
-    paintCellsOnLine(points, phrase);
   } finally {
+    railPainting = false;
     done();
+    // A click can land in the gap between the loop ending and this flag
+    // dropping. That one is already queued; start it.
+    if (railPaintQueue.length && mode === 'edit') void drainRailPaint();
   }
 }
 
 function paintRailAt(e) {
   const found = railLineAt(e.point);
   if (!found) return false;
-  paintRailSpan(found.info, found.hit, e.lngLat);
+  railPaintQueue.push({
+    info: found.info,
+    hit: found.hit,
+    lngLat: { lng: e.lngLat.lng, lat: e.lngLat.lat },
+  });
+  void drainRailPaint();
   return true;
 }
 
@@ -6751,6 +6796,7 @@ function startGesture(kind, stamp) {
   sweptCells = [];
   sweptSet = new Set();
   erasedSnap = [];
+  clearSpanHighlight();
   setHover(null);
   // Disabling dragPan drops the handler but not the inertia buffer: a pan
   // already under way still gets its fling, so the map coasts under the sweep
@@ -7259,7 +7305,7 @@ let editCursor = null;
 
 function editCursorEl() {
   if (!editCursor) {
-    editCursor = document.createElement('div');
+    editCursor = document.createElement('canvas');
     editCursor.id = 'edit-cursor';
     editCursor.hidden = true;
   }
@@ -7268,54 +7314,48 @@ function editCursorEl() {
   return editCursor;
 }
 
-// Screen pixels for a ground distance at the pointer. Measured both ways
-// across the screen, because a lean foreshortens one of them and the circle
-// has to cover the disk anyway. A step that wraps the antimeridian is not a
-// distance, and the zoom's own scale is the answer then.
-function diskPixelRadius(lngLat, metres) {
-  const fallback = () => metres / mercPerPixel(map.getZoom());
-  let p;
-  try {
-    p = map.project(lngLat);
-  } catch {
-    return fallback();
-  }
-  const probe = 80;
-  const span = (q) => {
-    let dx = mercX(q.lng) - mercX(lngLat.lng);
-    if (dx > WORLD / 2) dx -= WORLD;
-    else if (dx < -WORLD / 2) dx += WORLD;
-    return Math.hypot(dx, mercY(q.lat) - mercY(lngLat.lat));
-  };
-  let right;
-  let down;
-  try {
-    right = span(map.unproject([p.x + probe, p.y]));
-    down = span(map.unproject([p.x, p.y + probe]));
-  } catch {
-    return fallback();
-  }
-  const mpp = Math.min(right > 1 ? right / probe : Infinity, down > 1 ? down / probe : Infinity);
-  return Number.isFinite(mpp) && mpp > 0 ? metres / mpp : fallback();
-}
-
 function placeEditCursor() {
-  const el = editCursorEl();
-  if (!el) return;
-  const show = mode === 'edit' && pointerOnMap && cursorPx && currentLevel != null && map?.project;
-  el.hidden = !show;
+  const canvas = editCursorEl();
+  if (!canvas) return;
+  const show = mode === 'edit' && pointerOnMap && cursorPx && currentLevel != null && map?.getZoom;
+  canvas.hidden = !show;
   if (!show) return;
+  const parent = canvas.parentElement;
+  const w = parent?.clientWidth || 0;
+  const h = parent?.clientHeight || 0;
+  if (!(w > 0 && h > 0)) return;
+  const dpr = window.devicePixelRatio || 1;
+  const bw = Math.round(w * dpr);
+  const bh = Math.round(h * dpr);
+  if (canvas.width !== bw || canvas.height !== bh) {
+    canvas.width = bw;
+    canvas.height = bh;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
   const kind = brushKindNow();
   const size = brushSizes[kind] ?? BRUSH_STEPS[0];
   const reach = Math.max(0, size - 1);
-  const metres = reach * SQRT3 * radiusOf(currentLevel) + radiusOf(currentLevel);
-  const lngLat = pointerLngLat();
-  const px = lngLat ? diskPixelRadius(lngLat, metres) : metres / mercPerPixel(map.getZoom());
-  el.classList.toggle('is-erase', kind === 'erase');
-  const d = Math.max(4, px * 2);
-  el.style.width = `${d}px`;
-  el.style.height = `${d}px`;
-  el.style.transform = `translate(${cursorPx[0]}px, ${cursorPx[1]}px) translate(-50%, -50%)`;
+  const metres = (reach * SQRT3 + 1) * radiusOf(currentLevel);
+  // Zoom, not a measured step across the screen. Unprojecting that step on
+  // every move, and then building a box as wide as the answer, is what made
+  // arming a wide erase brush hang the page.
+  const r = Math.max(2, metres / mercPerPixel(map.getZoom()));
+  ctx.beginPath();
+  ctx.arc(cursorPx[0], cursorPx[1], r, 0, Math.PI * 2);
+  ctx.lineWidth = 3.5;
+  ctx.strokeStyle = 'rgba(8, 10, 16, 0.85)';
+  ctx.setLineDash([]);
+  ctx.stroke();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = '#fff';
+  ctx.setLineDash(kind === 'erase' ? [5, 4] : []);
+  ctx.stroke();
+  if (kind !== 'erase') {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.fill();
+  }
 }
 
 function markLiveBrush(kind) {
@@ -7984,7 +8024,11 @@ function setMode(next) {
   } catch {
     /* fine */
   }
-  if (mode !== 'edit') stopGesture();
+  if (mode !== 'edit') {
+    stopGesture();
+    railPaintQueue.length = 0;
+    clearSpanHighlight();
+  }
   setHover(null);
   // Edit mode never asks which route is under the pointer, so one lit on the way
   // in would stay lit until something else happened to clear it.
@@ -10818,6 +10862,18 @@ function installGrid() {
     },
   });
 
+  // The track a click just painted. Above the brush so it reads on the wash.
+  // Cleared by the next edit, or on its own after half a minute.
+  map.addSource('rail-span', { type: 'geojson', data: EMPTY, tolerance: 0 });
+  map.addLayer({
+    id: 'rail-span-halo', type: 'line', source: 'rail-span', layout: lineLayout,
+    paint: { 'line-color': SEL_CASING, 'line-width': 7, 'line-opacity': 0.9 },
+  });
+  map.addLayer({
+    id: 'rail-span-line', type: 'line', source: 'rail-span', layout: lineLayout,
+    paint: { 'line-color': SEL_COLOR, 'line-width': 3, 'line-opacity': 0.95 },
+  });
+
   // Repopulate geometry for the new style and restore the current opacities.
   applyColors();
   applyTileVis();
@@ -11027,6 +11083,9 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
   // pointer is really out there. See LEAP_PX.
   let heldLeap = null;
   let leapTimer = 0;
+  // When Option or Command went down. A pointer sample in the moment after
+  // is the key, not the hand — see onBrushPointer.
+  let modifierAt = 0;
   const takeLeap = () => {
     if (leapTimer) clearTimeout(leapTimer);
     leapTimer = 0;
@@ -11078,8 +11137,14 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     // and comes back costs nothing, and a frame of lag on an ordinary hover is
     // not worth spending to save it.
     const held = takeLeap();
-    if ((gesture || want) && pointerTracked
-      && holdPointerSample(cursorPx, held?.px ?? null, pos.px, LEAP_PX)) {
+    // Option and Command each invent a pointer sample on this machine, a long
+    // way from where the cursor is, and nothing follows it. Settling that
+    // sample is the circle jumping to the middle of the page when the key
+    // goes down. A leap in the moment after the key is not the pointer.
+    const leapt = (gesture || want) && pointerTracked
+      && holdPointerSample(cursorPx, held?.px ?? null, pos.px, LEAP_PX);
+    if (leapt && performance.now() - modifierAt < 120) return;
+    if (leapt) {
       heldLeap = { px: pos.px, lngLat: pos.lngLat };
       leapTimer = setTimeout(settleLeap, LEAP_SETTLE_MS);
       return;
@@ -11179,6 +11244,7 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Control' && e.key !== 'Meta' && e.key !== 'Alt') return;
     if (isTypingIn(e.target) || mode !== 'edit') return;
+    modifierAt = performance.now();
     if ((e.key === 'Alt' || e.key === 'Control') && !e.metaKey && !e.repeat) e.preventDefault();
     syncGesture(e, (e.buttons & 1) !== 0);
   });

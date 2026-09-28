@@ -1,53 +1,40 @@
-// The piece of railway a click paints: from the stop before the pointer to the
-// stop after it.
+// The piece of railway a click paints.
 //
 // OpenRailwayMap's tiles draw the line and name the OSM way, and they stop
-// there. A way is often a few dozen metres — split at every switch — and a tile
-// clips even that. The stops are other elements. So the span is worked out from
-// the ways and the stops, not from the feature that was clicked.
-//
-// The walk stays on the running line. At a junction the straightest plain
-// continuation wins, and a siding is not a continuation of a main line: taking
-// it would paint the yard. A click that *was* on a siding stays on sidings.
-// With no stop in a direction, the span ends where the clicked way ends rather
-// than running on to the edge of the search.
+// there. A way is often a few dozen metres — split wherever the tags change,
+// not only at a switch — so the piece under the pointer is not the run. The
+// run is the connected track from the previous station or junction to the next
+// one. A halt, a stop position, a signal, a switch that does not actually
+// branch: none of those is an end. A junction is, because past it there is
+// more than one track and the click did not say which. With neither a station
+// nor a junction in reach, the span is the straight track itself, not the one
+// way the pointer happened to hit.
 
 import { latOf, lngOf, mercX, mercY, WORLD } from './hexgrid.js';
 
-// How far around the click the ways and stops are asked for. A stop further
-// than this is not the next one — the span ends at the clicked way instead.
-export const RAIL_SPAN_RADIUS_M = 8000;
+// How far one query looks. The server asks again from an end that fell on the
+// rim, so a station past this is still the end of the run.
+export const RAIL_SPAN_RADIUS_M = 12000;
 
-// A stop this close to the click is the place you are standing, not the end of
-// the run. Counting it would make a tap in a station paint nothing.
-const STOP_GAP_M = 12;
-// stop_position nodes sit on the rail. A station node is the building, which
-// is beside it. Anything further is a different line.
-const POSITION_M = 18;
-const STATION_M = 90;
-// A station and the stop_position in front of it are one stop. The one on the
-// rail is the end of the run.
-const SAME_STOP_M = 250;
+// A station this close along the track is the one you are standing in. Using
+// it as both ends would paint nothing.
+const STOP_GAP_M = 40;
+// The station node is the building, beside the rail.
+const STATION_M = 160;
 
 /**
- * Which kind of stop a node's tags are, or null.
+ * A station, or null.
  *
- * A `stop_position` with no railway tag is usually a bus. Snapping those onto
- * the track would end a line at a stop the train does not call at.
+ * Halts and stop positions sit on the same straight track every few minutes
+ * of running. Ending the run at one of them is why a click landed in the
+ * middle of a line that had not branched and had not reached a station.
  *
  * @param {object} [tags]
- * @returns {'position'|'station'|null}
+ * @returns {'station'|null}
  */
 export function stopKind(tags) {
   if (!tags) return null;
-  const rw = tags.railway;
-  if (rw === 'station' || rw === 'halt') return 'station';
-  if (rw === 'tram_stop' || rw === 'stop') return 'position';
-  if (tags.public_transport === 'stop_position'
-    && (rw || tags.train === 'yes' || tags.tram === 'yes' || tags.subway === 'yes' || tags.light_rail === 'yes')) {
-    return 'position';
-  }
-  return null;
+  return tags.railway === 'station' ? 'station' : null;
 }
 
 /**
@@ -75,8 +62,7 @@ way(${wayId})->.hit;
 (
   way.hit;
   way(around:${r},${la},${ln})[railway~"^(rail|light_rail|subway|tram|narrow_gauge|preserved|monorail)$"];
-  node(around:${r},${la},${ln})[railway~"^(station|halt|stop|tram_stop)$"];
-  node(around:${r},${la},${ln})[public_transport=stop_position];
+  node(around:${r},${la},${ln})[railway=station];
 );
 out geom;`;
 }
@@ -116,7 +102,10 @@ export function waysAndStops(elements) {
   return { ways, stops };
 }
 
-const endKey = (xy) => `${Math.round(xy[0] * 2) / 2}|${Math.round(xy[1] * 2) / 2}`;
+// Two metres. A shared node is the same coordinate; a way split by a tag
+// change still meets. Parallel tracks sit further apart than this, so they
+// do not become a junction by rounding.
+const endKey = (xy) => `${Math.round(xy[0] / 2)}|${Math.round(xy[1] / 2)}`;
 
 function gap(a, b) {
   let dx = b[0] - a[0];
@@ -160,15 +149,6 @@ function sliceBetween(way, from, to) {
   const end = pointAt(way, hi);
   if (gap(pts[pts.length - 1], end) > 0.05) pts.push(end);
   return rev ? pts.reverse() : pts;
-}
-
-function unitBetween(way, fromAlong, toAlong) {
-  const a = pointAt(way, fromAlong);
-  const b = pointAt(way, toAlong);
-  const dx = b[0] - a[0];
-  const dy = b[1] - a[1];
-  const len = Math.hypot(dx, dy) || 1;
-  return [dx / len, dy / len];
 }
 
 function prepare(raw) {
@@ -223,52 +203,26 @@ function locate(way, xy) {
   return { d: bestD, along };
 }
 
-function chooseNext(ways, adj, wi, end, seen) {
+function continuations(ways, adj, wi, end, seen) {
   const way = ways[wi];
   const vertex = end === 0 ? way.xy[0] : way.xy[way.xy.length - 1];
-  let cands = (adj.get(endKey(vertex)) || []).filter((c) => c.wi !== wi && !seen.has(c.wi));
-  if (!cands.length) return null;
-  // A main line that only continues as a siding has ended. Following the siding
-  // paints the yard. A click that started on a siding may keep to them.
-  if (!way.service) {
-    const plain = cands.filter((c) => !ways[c.wi].service);
-    if (!plain.length) return null;
-    cands = plain;
-  } else {
-    const svc = cands.filter((c) => ways[c.wi].service);
-    if (svc.length) cands = svc;
+  const byWay = new Map();
+  for (const c of adj.get(endKey(vertex)) || []) {
+    if (c.wi === wi || seen.has(c.wi) || byWay.has(c.wi)) continue;
+    byWay.set(c.wi, c);
   }
-  const reach = Math.min(40, way.total);
-  const incoming = end === 1
-    ? unitBetween(way, Math.max(0, way.total - reach), way.total)
-    : unitBetween(way, Math.min(way.total, reach), 0);
-  let best = null;
-  let bestScore = -Infinity;
-  for (const c of cands) {
-    const w = ways[c.wi];
-    const leaveReach = Math.min(40, w.total);
-    const leave = c.enterEnd === 0
-      ? unitBetween(w, 0, leaveReach)
-      : unitBetween(w, w.total, Math.max(0, w.total - leaveReach));
-    let score = incoming[0] * leave[0] + incoming[1] * leave[1];
-    if (w.railway && w.railway === way.railway) score += 0.05;
-    if (way.ref && w.ref === way.ref) score += 0.2;
-    if (score > bestScore) {
-      bestScore = score;
-      best = c;
-    }
-  }
-  return best;
+  return [...byWay.values()];
 }
 
 function walkDir(ways, adj, startWi, startAlong, dir, maxMetres) {
   const out = [];
   let travelled = 0;
+  let why = 'end';
   const seen = new Set();
   let wi = startWi;
   let along = startAlong;
   let d = dir;
-  for (let hops = 0; hops < 500 && travelled < maxMetres; hops++) {
+  for (let hops = 0; hops < 800 && travelled < maxMetres; hops++) {
     const way = ways[wi];
     seen.add(wi);
     const piece = sliceBetween(way, along, d > 0 ? way.total : 0);
@@ -281,12 +235,18 @@ function walkDir(ways, adj, startWi, startAlong, dir, maxMetres) {
       if (step < 0.05) continue;
       travelled += step;
       out.push({ xy, chain: travelled });
-      if (travelled >= maxMetres) return out;
+      if (travelled >= maxMetres) return { pts: out, why: 'limit' };
     }
-    const next = chooseNext(ways, adj, wi, d > 0 ? 1 : 0, seen);
-    if (!next) break;
-    wi = next.wi;
-    if (next.enterEnd === 0) {
+    const next = continuations(ways, adj, wi, d > 0 ? 1 : 0, seen);
+    // One continuation is the same track, service tag or not. Two is a
+    // junction: the click did not choose a branch, so the run ends here.
+    if (next.length >= 2) {
+      why = 'junction';
+      break;
+    }
+    if (next.length === 0) break;
+    wi = next[0].wi;
+    if (next[0].enterEnd === 0) {
       along = 0;
       d = 1;
     } else {
@@ -294,28 +254,46 @@ function walkDir(ways, adj, startWi, startAlong, dir, maxMetres) {
       d = -1;
     }
   }
-  return out;
+  return { pts: out, why };
 }
 
-function snapStops(line, stops) {
+function snapStations(line, stops) {
   const snapped = [];
-  for (const stop of stops) {
+  for (const stop of stops || []) {
+    if (stop.kind !== 'station') continue;
     const xy = [mercX(stop.lng), mercY(stop.lat)];
-    const limit = stop.kind === 'position' ? POSITION_M : STATION_M;
     let best = null;
     for (let i = 1; i < line.length; i++) {
       const a = line[i - 1];
       const b = line[i];
       const proj = projectSeg(xy, a.xy, b.xy);
-      if (proj.d > limit) continue;
+      if (proj.d > STATION_M) continue;
       const chain = a.chain + proj.t * (b.chain - a.chain);
-      if (!best || proj.d < best.d) best = { d: proj.d, chain, name: stop.name || '', kind: stop.kind };
+      if (!best || proj.d < best.d) best = { d: proj.d, chain, name: stop.name || '' };
     }
     if (best) snapped.push(best);
   }
-  const positions = snapped.filter((s) => s.kind === 'position');
-  return snapped.filter((s) => s.kind === 'position'
-    || !positions.some((p) => Math.abs(p.chain - s.chain) < SAME_STOP_M));
+  return snapped;
+}
+
+function pointOnLine(line, chain) {
+  if (chain <= line[0].chain) return line[0].xy;
+  for (let i = 1; i < line.length; i++) {
+    const a = line[i - 1];
+    const b = line[i];
+    if (b.chain + 1e-6 >= chain) return lerp(a, b, chain);
+  }
+  return line[line.length - 1].xy;
+}
+
+function endInfo(line, chain, why, name) {
+  const xy = pointOnLine(line, chain);
+  return {
+    lng: lngOf(xy[0]),
+    lat: latOf(xy[1]),
+    why: name ? 'station' : why,
+    name: name || null,
+  };
 }
 
 function lerp(a, b, chain) {
@@ -343,7 +321,11 @@ function cut(line, lo, hi) {
 }
 
 /**
- * The run from the previous stop to the next one.
+ * The run from the previous station or junction to the next one.
+ *
+ * `back` and `fore` say why each end stopped. `end` near the rim of a query
+ * is the track leaving the area that was fetched, which is not a place the
+ * run is finished.
  *
  * @param {object} o
  * @param {object[]} o.ways `{id, points:[[lng,lat]], railway, service, ref}`
@@ -352,9 +334,9 @@ function cut(line, lo, hi) {
  * @param {number} o.lng
  * @param {number} o.lat
  * @param {number} [o.maxMetres]
- * @returns {{points: number[][], from: string|null, to: string|null}|null}
+ * @returns {{points: number[][], from: string|null, to: string|null, back: object, fore: object}|null}
  */
-export function spanBetweenStops({ ways: raw, stops, wayId, lng, lat, maxMetres = 20000 }) {
+export function spanBetweenStops({ ways: raw, stops, wayId, lng, lat, maxMetres = 40000 }) {
   const { ways, adj } = prepare(raw);
   const seed = ways.findIndex((w) => w.id === wayId || String(w.id) === String(wayId));
   if (seed < 0) return null;
@@ -362,24 +344,30 @@ export function spanBetweenStops({ ways: raw, stops, wayId, lng, lat, maxMetres 
   const back = walkDir(ways, adj, seed, here.along, -1, maxMetres);
   const fore = walkDir(ways, adj, seed, here.along, 1, maxMetres);
   const line = [];
-  for (let i = back.length - 1; i >= 1; i--) line.push({ xy: back[i].xy, chain: -back[i].chain });
-  for (const p of fore) line.push(p);
+  for (let i = back.pts.length - 1; i >= 1; i--) line.push({ xy: back.pts[i].xy, chain: -back.pts[i].chain });
+  for (const p of fore.pts) line.push(p);
   if (line.length < 2) return null;
 
-  const seedBack = Math.max(line[0].chain, -here.along);
-  const seedFore = Math.min(line[line.length - 1].chain, ways[seed].total - here.along);
-  const kept = snapStops(line, stops || []);
+  const kept = snapStations(line, stops);
   const behind = kept.filter((s) => s.chain <= -STOP_GAP_M);
   const ahead = kept.filter((s) => s.chain >= STOP_GAP_M);
-  const lo = behind.length ? Math.max(...behind.map((s) => s.chain)) : seedBack;
-  const hi = ahead.length ? Math.min(...ahead.map((s) => s.chain)) : seedFore;
+  // No station in a direction means the whole walked track — the join where
+  // one OSM way ends and the next begins is not an end. Cutting back to the
+  // way under the pointer is what left a few dozen metres lit in the middle
+  // of a straight line.
+  const lo = behind.length ? Math.max(...behind.map((s) => s.chain)) : line[0].chain;
+  const hi = ahead.length ? Math.min(...ahead.map((s) => s.chain)) : line[line.length - 1].chain;
   if (!(hi > lo + 0.5)) return null;
   const pts = cut(line, lo, hi);
   if (pts.length < 2) return null;
   const nameAt = (chain) => kept.find((s) => Math.abs(s.chain - chain) < 1)?.name || null;
+  const fromName = behind.length ? nameAt(lo) : null;
+  const toName = ahead.length ? nameAt(hi) : null;
   return {
     points: pts.map(([x, y]) => [lngOf(x), latOf(y)]),
-    from: behind.length ? nameAt(lo) : null,
-    to: ahead.length ? nameAt(hi) : null,
+    from: fromName,
+    to: toName,
+    back: endInfo(line, lo, back.why, fromName),
+    fore: endInfo(line, hi, fore.why, toName),
   };
 }

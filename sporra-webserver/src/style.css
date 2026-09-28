@@ -187,26 +187,17 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   cursor: crosshair;
 }
 
-/* The brush. One circle, glued to the pointer, instead of a polygon stitched
-   out of every hex the disk would touch and a field of hexes around it — both
-   of those were rebuilt on every move and both shimmered. Erase is dashed so
-   the two sizes read apart without a second shape. */
+/* The brush circle is drawn into this, which is the size of the map and no
+   bigger. A div sized to the brush itself — erase 99 is kilometres across —
+   is a layer of that many pixels, and resizing it when Option armed the erase
+   brush was enough to kill the tab. */
 #edit-cursor {
   position: absolute;
-  left: 0;
-  top: 0;
-  box-sizing: border-box;
-  border-radius: 50%;
-  border: 1.5px solid #fff;
-  box-shadow: 0 0 0 1px rgba(8, 10, 16, 0.85);
-  background: rgba(255, 255, 255, 0.12);
+  inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
   z-index: 3;
-}
-
-#edit-cursor.is-erase {
-  background: transparent;
-  border-style: dashed;
 }
 
 /* Below the chrome's z-index rather than beside it. Nothing here is pressable —
