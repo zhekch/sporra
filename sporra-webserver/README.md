@@ -59,7 +59,8 @@ number of approaches that were tried and abandoned.
   lights up, and a tap opens a card with the track number, the operator, the
   voltage, the platform, and every service that calls there. In **edit mode**
   a tap on a track does something else: it paints every cell the line touches,
-  from the previous station or junction to the next. The stretch stays marked
+  from the previous station or junction to the next. A second track running
+  alongside does not split it. The stretch stays marked
   for half a minute. Further taps wait their turn.
 - **Trails.** The waymarked routes — the ones somebody has signed and painted
   onto a post — from Waymarked Trails, over whatever basemap you are on. Switch

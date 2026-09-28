@@ -42,7 +42,8 @@ glass look. Click hexagons to mark places you've visited.
   on a **track**, when that overlay is on, paints the cells the line touches
   from the previous station or junction to the next. A halt or a stop position
   is not an end, and neither is the OSM way boundary in the middle of a
-  straight line. In
+  straight line, nor a second track running alongside — the switch that joins
+  the two rails of a double line is not a choice of route. In
   view mode a tap opens the
   **info card** for that area instead. Set `EDIT_ENABLED = false` in
   `src/main.js` to ship a fully view-only build (no pencil, no editing, at all).

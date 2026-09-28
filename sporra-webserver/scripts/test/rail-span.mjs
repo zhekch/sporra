@@ -106,6 +106,27 @@ console.log('\nA junction is the end, whichever branch looks straighter');
   check(!south, 'neither branch is painted');
 }
 
+console.log('\nA parallel track is not a junction');
+{
+  // The second rail sits 8 m north and is tied in by a short switch, the
+  // shape of the two red lines. The run is the rail that was clicked.
+  const ways = [
+    way(1, [[0, 0], [500, 0]]),
+    way(2, [[500, 0], [2000, 0]]),
+    way(3, [[500, 0], [540, 8]]),
+    way(4, [[540, 8], [2000, 8]]),
+  ];
+  const stops = [stop(1800, 0, 'Ahead')];
+  const [lng, lat] = ll(200, 0);
+  const span = spanBetweenStops({ ways, stops, wayId: 1, lng, lat });
+  const end = span?.points?.[span.points.length - 1];
+  check(span?.to === 'Ahead', 'the run carries on to the station', span?.to);
+  check(end && near(end, 1800, 0, 20), 'along the track that was clicked', end && end.join(','));
+  check(span?.fore?.why === 'station', 'the parallel rail did not end it', span?.fore?.why);
+  const north = span?.points.some((p) => mercY(p[1]) - origin[1] > 4);
+  check(!north, 'and is not painted');
+}
+
 console.log('\nOnly a station ends the run');
 {
   check(stopKind({ railway: 'station' }) === 'station', 'a station is a station');

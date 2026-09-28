@@ -5,8 +5,10 @@
 // not only at a switch — so the piece under the pointer is not the run. The
 // run is the connected track from the previous station or junction to the next
 // one. A halt, a stop position, a signal, a switch that does not actually
-// branch: none of those is an end. A junction is, because past it there is
-// more than one track and the click did not say which. With neither a station
+// branch: none of those is an end. A second track running alongside is not
+// an end either — the two red rails of a double line are one corridor, and
+// the switch between them is not a choice of route. A junction is a line
+// that leaves that corridor. With neither a station
 // nor a junction in reach, the span is the straight track itself, not the one
 // way the pointer happened to hit.
 
@@ -21,6 +23,11 @@ export const RAIL_SPAN_RADIUS_M = 12000;
 const STOP_GAP_M = 40;
 // The station node is the building, beside the rail.
 const STATION_M = 160;
+// How far a second track may sit from the one you clicked and still be the
+// same line. A branch has left the corridor by the end of this look-ahead; a
+// track running alongside has not.
+const CORRIDOR_M = 45;
+const LOOK_M = 220;
 
 /**
  * A station, or null.
@@ -214,6 +221,99 @@ function continuations(ways, adj, wi, end, seen) {
   return [...byWay.values()];
 }
 
+function unitOf(a, b) {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const len = Math.hypot(dx, dy) || 1;
+  return [dx / len, dy / len];
+}
+
+function leaveDir(ways, cand) {
+  const way = ways[cand.wi];
+  const reach = Math.min(60, way.total);
+  if (cand.enterEnd === 0) return unitOf(pointAt(way, 0), pointAt(way, reach));
+  return unitOf(pointAt(way, way.total), pointAt(way, Math.max(0, way.total - reach)));
+}
+
+function incomingDir(ways, wi, end) {
+  const way = ways[wi];
+  const reach = Math.min(80, way.total);
+  if (end === 1) return unitOf(pointAt(way, Math.max(0, way.total - reach)), pointAt(way, way.total));
+  return unitOf(pointAt(way, Math.min(way.total, reach)), pointAt(way, 0));
+}
+
+// A point `metres` along this continuation. A short switch is followed onto
+// whichever track it joins that still heads the same way, so a parallel line
+// is measured out in the open and not on the slant of the points.
+function aheadPoint(ways, adj, cand, dir, seen, metres) {
+  let wi = cand.wi;
+  let along = cand.enterEnd === 0 ? 0 : ways[wi].total;
+  let d = cand.enterEnd === 0 ? 1 : -1;
+  let travelled = 0;
+  const local = new Set(seen);
+  local.add(wi);
+  let xy = cand.enterEnd === 0 ? ways[wi].xy[0] : ways[wi].xy[ways[wi].xy.length - 1];
+  for (let hops = 0; hops < 24 && travelled < metres; hops++) {
+    const way = ways[wi];
+    const dest = d > 0 ? way.total : 0;
+    const dist = Math.abs(dest - along);
+    const remain = metres - travelled;
+    if (dist >= remain - 0.01) {
+      return pointAt(way, d > 0 ? along + remain : along - remain);
+    }
+    travelled += dist;
+    xy = d > 0 ? way.xy[way.xy.length - 1] : way.xy[0];
+    const end = d > 0 ? 1 : 0;
+    const next = continuations(ways, adj, wi, end, local);
+    if (!next.length) return xy;
+    let best = next[0];
+    let bestDot = -Infinity;
+    for (const n of next) {
+      const leave = leaveDir(ways, n);
+      const dot = leave[0] * dir[0] + leave[1] * dir[1];
+      if (dot > bestDot) {
+        bestDot = dot;
+        best = n;
+      }
+    }
+    local.add(best.wi);
+    wi = best.wi;
+    if (best.enterEnd === 0) {
+      along = 0;
+      d = 1;
+    } else {
+      along = ways[wi].total;
+      d = -1;
+    }
+  }
+  return xy;
+}
+
+// The continuation that keeps this track. Other tracks running beside it are
+// not a choice of route. A line that has left the corridor is.
+function throughTrack(ways, adj, wi, end, next, seen) {
+  const origin = end === 0 ? ways[wi].xy[0] : ways[wi].xy[ways[wi].xy.length - 1];
+  const dir = incomingDir(ways, wi, end);
+  const ranked = next.map((c) => {
+    const leave = leaveDir(ways, c);
+    return {
+      c,
+      dot: leave[0] * dir[0] + leave[1] * dir[1],
+      far: aheadPoint(ways, adj, c, dir, seen, LOOK_M),
+    };
+  });
+  ranked.sort((a, b) => b.dot - a.dot);
+  const ref = ranked[0];
+  const refDir = unitOf(origin, ref.far);
+  const leaves = ranked.slice(1).some((s) => {
+    const dx = s.far[0] - origin[0];
+    const dy = s.far[1] - origin[1];
+    const lat = Math.abs(dx * refDir[1] - dy * refDir[0]);
+    return lat > CORRIDOR_M;
+  });
+  return leaves ? null : ref.c;
+}
+
 function walkDir(ways, adj, startWi, startAlong, dir, maxMetres) {
   const out = [];
   let travelled = 0;
@@ -237,16 +337,19 @@ function walkDir(ways, adj, startWi, startAlong, dir, maxMetres) {
       out.push({ xy, chain: travelled });
       if (travelled >= maxMetres) return { pts: out, why: 'limit' };
     }
-    const next = continuations(ways, adj, wi, d > 0 ? 1 : 0, seen);
-    // One continuation is the same track, service tag or not. Two is a
-    // junction: the click did not choose a branch, so the run ends here.
-    if (next.length >= 2) {
+    const end = d > 0 ? 1 : 0;
+    const next = continuations(ways, adj, wi, end, seen);
+    if (next.length === 0) break;
+    // Two ways leaving is only a junction when one of them actually departs.
+    // A second track beside this one, and the switch that joins them, stay
+    // in the corridor — the run follows the track it arrived on.
+    const chosen = next.length === 1 ? next[0] : throughTrack(ways, adj, wi, end, next, seen);
+    if (!chosen) {
       why = 'junction';
       break;
     }
-    if (next.length === 0) break;
-    wi = next[0].wi;
-    if (next[0].enterEnd === 0) {
+    wi = chosen.wi;
+    if (chosen.enterEnd === 0) {
       along = 0;
       d = 1;
     } else {

@@ -15,7 +15,7 @@ const ENDPOINTS = [
   'https://lz4.overpass-api.de/api/interpreter',
 ];
 
-const USER_AGENT = 'Sporra/0.106 (+https://github.com/zhekch/sporra; personal map)';
+const USER_AGENT = 'Sporra/0.106.1 (+https://github.com/zhekch/sporra; personal map)';
 const CACHE_MS = 10 * 60 * 1000;
 const FAIL_MS = 20 * 1000;
 // Bern's station throat is about 2 MB. Past this the answer is not a span,
