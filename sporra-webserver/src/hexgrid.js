@@ -134,6 +134,88 @@ export function cellsWithin(col, row, reach) {
   return out;
 }
 
+// Radii the edit brushes step through, in cells. 1 is the cell under the
+// pointer. The gaps widen on purpose — clearing a district should be a few
+// clicks, and the old one-cell stepper stopped at a disk about 700 m across
+// because that was as far as the spotlight still showed an edge. The cursor is
+// a circle that grows with the radius now, so the later steps can be wide.
+export const BRUSH_STEPS = Object.freeze([1, 3, 8, 15, 24, 35, 48, 63, 80, 99]);
+
+/**
+ * The ladder step nearest `n`.
+ *
+ * A size saved by the old stepper (2 through 7) is not a step any more. Snapping
+ * it keeps the brush the user had, instead of dropping them back to a single
+ * cell because the stored number is no longer one of the buttons.
+ *
+ * @param {number} n
+ * @returns {number}
+ */
+export function brushRadius(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return BRUSH_STEPS[0];
+  let best = BRUSH_STEPS[0];
+  let bestD = Infinity;
+  for (const s of BRUSH_STEPS) {
+    const d = Math.abs(s - v);
+    // A tie goes to the larger step: 4 is nearer 3 than 8, but a stored size
+    // that sits exactly between two steps should not come back smaller.
+    if (d < bestD || (d === bestD && s > best)) {
+      best = s;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+/**
+ * Every cell a polyline passes through.
+ *
+ * Samples are closer together than a cell is wide, so a line cannot step from
+ * one cell into a cell that does not touch it without the cell between being
+ * named. A corner the line only clips can still be missed; the ribbon is the
+ * cells the line actually runs through.
+ *
+ * A segment that jumps more than half a world is the antimeridian, not a line
+ * across the map, and only its ends are cells.
+ *
+ * @param {number} L
+ * @param {Array<[number, number]>} points Mercator metres
+ * @returns {Array<[number, number]>}
+ */
+export function cellsOnPolyline(L, points) {
+  const step = Math.max(radiusOf(L) * 0.45, 1);
+  const seen = new Set();
+  const out = [];
+  const add = (x, y) => {
+    const [col, row] = pointToCell(L, x, y);
+    const k = `${col}/${row}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push([col, row]);
+  };
+  if (!points?.length) return out;
+  add(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) {
+    const ax = points[i - 1][0];
+    const ay = points[i - 1][1];
+    const bx = points[i][0];
+    const by = points[i][1];
+    const dx = bx - ax;
+    const dy = by - ay;
+    if (Math.abs(dx) > WORLD / 2) {
+      add(bx, by);
+      continue;
+    }
+    const n = Math.ceil(Math.hypot(dx, dy) / step);
+    for (let s = 1; s <= n; s++) {
+      const t = s / n;
+      add(ax + dx * t, ay + dy * t);
+    }
+  }
+  return out;
+}
+
 /**
  * Points along the Mercator segment from `a` to `b`, at most `step` apart,
  * including `b` and not `a`.

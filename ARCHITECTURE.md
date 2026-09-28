@@ -32,13 +32,13 @@ glass look. Click hexagons to mark places you've visited.
   map](#turning-the-map).
 - **Modes**: the map is view-only until you switch **Editing** on in the menu,
   which reveals the glass **pencil button**; tapping that expands the edit panel
-  and enters edit mode, where a glass tile **spotlight around the cursor** shows
-  the grid — tiles render only near the pointer and fade out toward the rim
-  (`SPOT_PX`, `SPOT_MAX_CELLS`), so even a zoomed-out map never builds more
-  than a couple thousand cells. The panel's **paint** and **erase** sizes
-  step those brushes apart (`BRUSH_MIN`…`BRUSH_MAX`, each remembered on this
+  and enters edit mode, where a **circle under the pointer** shows the brush —
+  one ring, not a field of hexes. The panel's **paint** and **erase** sizes
+  step through `BRUSH_STEPS` (1, 3, 8, 15, …, each remembered on this
   browser). A tap uses whichever the cell under the pointer calls for, and
-  Ctrl paints and Option erases at their own sizes for the whole sweep. In
+  Ctrl paints and Option erases at their own sizes for the whole sweep. A tap
+  on a **track**, when that overlay is on, paints the cells the line touches
+  from the stop before the pointer to the stop after it. In
   view mode a tap opens the
   **info card** for that area instead. Set `EDIT_ENABLED = false` in
   `src/main.js` to ship a fully view-only build (no pencil, no editing, at all).
@@ -122,8 +122,8 @@ glass look. Click hexagons to mark places you've visited.
   cell matches across world copies.
 - **Performance**: colored regions are built by iterating only the marked
   cells (not the viewport), so region rendering stays proportional to what
-  you've marked at any zoom; the tile spotlight lives in its own source, so
-  mouse movement never rebuilds region geometry.
+  you've marked at any zoom. The edit cursor is a circle in the page, so a
+  pointer move never rebuilds region geometry either.
 - **Visited cells**: clicks resolve to a cell mathematically (hex
   point-location), so toggling works at any zoom, on boundaries and gaps.
   Marks **propagate upward** — a coarse cell lights up if it contains any
@@ -4093,6 +4093,12 @@ Almost nothing, and that is the point of the canvas source being georeferenced.
 The saved routes, the trip track, the photographs, the airports, the train
 tracks, the country and region fills, the edit-mode tiles and the two markers
 are all MapLibre layers; they turn because the camera does.
+
+The edit cursor is no longer that spotlight. A field of hexes rebuilt on every
+move, plus an outline stitched out of the brush, shimmered and arrived a frame
+late. It is one circle in the page now, sized to the brush and placed on the
+pointer. The note below is how the radius was measured while the spotlight
+existed.
 
 One thing was genuinely wrong. The **edit-mode spotlight** converted its radius
 from screen pixels to ground by unprojecting a point `SPOT_PX` to the right of
