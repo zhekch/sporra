@@ -11,7 +11,8 @@
 //   node scripts/test/brush.mjs
 
 import {
-  cellCenter, cellsWithin, colsOf, holdPointerSample, normCol, pointToCell,
+  BRUSH_STEPS, brushRadius, cellCenter, cellsOnPolyline, cellsWithin, colsOf,
+  holdPointerSample, normCol, pointToCell,
   radiusOf, sampleOnSegment, segmentSamples, SQRT3,
 } from '../../src/hexgrid.js';
 
@@ -134,6 +135,58 @@ console.log('\nA sample that leaps waits for the one after it');
     'one back under the cursor is believed where it lands, and the leap it answers goes unused');
   check(hold([500, 200], [180, 206], [900, 210]),
     'a second leap somewhere else is held in its turn');
+}
+
+console.log('\nThe brush steps widen');
+{
+  check(BRUSH_STEPS[0] === 1 && BRUSH_STEPS[1] === 3 && BRUSH_STEPS[2] === 8 && BRUSH_STEPS[3] === 15,
+    'the first steps are 1, 3, 8, 15');
+  let widening = true;
+  for (let i = 2; i < BRUSH_STEPS.length; i++) {
+    const gap = BRUSH_STEPS[i] - BRUSH_STEPS[i - 1];
+    const prev = BRUSH_STEPS[i - 1] - BRUSH_STEPS[i - 2];
+    if (!(gap > prev)) widening = false;
+  }
+  check(widening, 'each gap is wider than the one before it');
+  check(brushRadius(1) === 1 && brushRadius(8) === 8, 'a step that is still a step stays put');
+  check(brushRadius(2) === 3 && brushRadius(6) === 8, 'an old in-between size snaps to the ladder',
+    `${brushRadius(2)}, ${brushRadius(6)}`);
+  check(brushRadius(99) === 99, 'the widest step is a step');
+}
+
+console.log('\nA line of track names every cell it crosses');
+{
+  const axial = (col, row) => {
+    const q = col;
+    const r = row - (q - (q & 1)) / 2;
+    return [q, r, -q - r];
+  };
+  const hexDist = (a, b) => {
+    const [q1, r1, s1] = axial(a[0], a[1]);
+    const [q2, r2, s2] = axial(b[0], b[1]);
+    return Math.max(Math.abs(q1 - q2), Math.abs(r1 - r2), Math.abs(s1 - s2));
+  };
+  const [x, y] = cellCenter(0, 100, 40);
+  const one = cellsOnPolyline(0, [[x, y]]);
+  check(one.length === 1 && one[0][0] === 100 && one[0][1] === 40, 'a point is its own cell');
+  const [x2, y2] = cellCenter(0, 101, 40);
+  const step = cellsOnPolyline(0, [[x, y], [x2, y2]]);
+  const keys = new Set(step.map(([c, r]) => `${c}/${r}`));
+  check(keys.has('100/40') && keys.has('101/40'), 'the neighbour at the far end is included');
+  const [x3, y3] = cellCenter(0, 130, 40);
+  const line = cellsOnPolyline(0, [[x, y], [x3, y3]]);
+  const seen = new Set(['0']);
+  const queue = [0];
+  while (queue.length) {
+    const i = queue.pop();
+    for (let j = 0; j < line.length; j++) {
+      if (seen.has(String(j)) || hexDist(line[i], line[j]) !== 1) continue;
+      seen.add(String(j));
+      queue.push(j);
+    }
+  }
+  check(line.length > 10 && seen.size === line.length, 'thirty columns of line is one connected ribbon',
+    `${seen.size}/${line.length}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

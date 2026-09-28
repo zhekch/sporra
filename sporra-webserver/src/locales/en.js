@@ -207,7 +207,7 @@ export default {
   "hud-done.done": "Done",
   "hud-erase-dec.smaller-erase-brush": "Smaller erase brush",
   "hud-erase-inc.larger-erase-brush": "Larger erase brush",
-  "hud-hint.tap-toggles-ctrl-paints": "Tap toggles · Ctrl paints · Option erases",
+  "hud-hint.tap-toggles-ctrl-paints": "Tap toggles · tap a track to paint it · Ctrl paints · Option erases",
   "hud-paint-dec.smaller-paint-brush": "Smaller paint brush",
   "hud-paint-inc.larger-paint-brush": "Larger paint brush",
   "hud-pencil.edit-visited-areas": "Edit visited areas",

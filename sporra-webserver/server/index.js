@@ -103,7 +103,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.104.1';
+export const SERVER_VERSION = '0.105.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -231,6 +231,7 @@ import { createFineRegions } from './regions-fine.js';
 // every browser separately. Read the policy note at the top of that module
 // before touching how often it asks upstream.
 import { createRailTiles } from './rail-tiles.js';
+import { railSpan } from './rail-span.js';
 // The trails overlay's raster tiles, and the lookup behind the card a tap
 // opens. Both proxied rather than fetched from the page — the note at the top
 // of that module is about why, and one of the three reasons is that a tile
@@ -3732,6 +3733,15 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       // insists on. See server/rail-tiles.js.
       const origin = selfOrigin(req);
       if (!origin) return send(res, 400, { error: 'no host' });
+
+      // The run from the stop before a click to the stop after it. Not a tile:
+      // one query, answered as JSON, and not worth caching in the browser —
+      // the next click is a different place.
+      if (rest === 'span') {
+        const span = await railSpan(query.get('way') ?? '', Number(query.get('lng')), Number(query.get('lat')));
+        if (!span) return send(res, 404, { error: 'no such span' });
+        return send(res, 200, span, { 'Cache-Control': 'no-store' });
+      }
 
       // How deep it is currently worth asking each source for. The client caps
       // its `maxzoom` at this so MapLibre overzooms a parent tile rather than

@@ -10,10 +10,14 @@ import {
   normCol,
   cellCenter,
   cellsWithin,
+  cellsOnPolyline,
+  BRUSH_STEPS,
+  brushRadius,
   pointToCell,
   parentOf,
   parseCellId,
   wrapLng,
+  WORLD,
   lngOf,
   latOf,
   segmentSamples,
@@ -292,11 +296,6 @@ const SMOOTH_CUT = 0.28;
 // false renders visited regions as fill only; true restores the outline + glow.
 const SHOW_REGION_BORDERS = false;
 
-// Edit-mode tile spotlight: tiles render only near the cursor and fade out
-// toward the rim, so zoomed-out views never build a viewport full of cells.
-const SPOT_PX = 300; // spotlight radius in screen px
-const SPOT_FADE_START = 0.5; // fraction of the radius where the fade begins
-const SPOT_MAX_CELLS = 2200; // shrink the spotlight when cells get tiny
 // A pointer sample can name a place the pointer never was. Holding Command or
 // Option, one move in a while reports a client position a long way off — on
 // this machine, off to the left of the cursor every time — and the sample after
@@ -314,22 +313,26 @@ const SPOT_MAX_CELLS = 2200; // shrink the spotlight when cells get tiny
 const LEAP_PX = 120;
 const LEAP_SETTLE_MS = 60;
 
-// Brush radii on the edit panel, counted in cells. 1 is the cell under the
-// pointer; each step adds a ring. Paint and erase each keep their own — the
-// disk a sweep lays down and the disk it takes away are different gestures,
-// and one stepper used to force them to the same reach. Eight is 169 cells —
-// about 700 m across near 47°, which is as wide as the spotlight you are
-// aiming with still shows the edge of. Past that a single Option-drag erases
-// ground you cannot see.
-const BRUSH_MIN = 1;
-const BRUSH_MAX = 8;
+// Brush radii, in cells, one ladder for both steppers. Paint and erase each
+// remember their own step — the disk a sweep lays down and the disk it takes
+// away are different gestures. The steps themselves are in BRUSH_STEPS: they
+// widen, so the erase brush can clear a district without a hundred clicks.
+// The circle under the pointer grows with the step, which is what makes a
+// wide one aimable. It used to stop at 8 because that was as far as a field
+// of hexes around the cursor still showed an edge.
 // The one size, from before the two were split. Still written with the paint
 // size, so a build that only reads it does not forget the brush entirely.
 const BRUSH_KEY = 'visited-map:brush:v1';
 const BRUSH_SIZES_KEY = 'visited-map:brushes:v1';
 
 function brushInRange(n) {
-  return Number.isInteger(n) && n >= BRUSH_MIN && n <= BRUSH_MAX ? n : null;
+  const v = Number(n);
+  if (!Number.isFinite(v)) return null;
+  if (BRUSH_STEPS.includes(v)) return v;
+  // 2 through 7 are the old stepper. They are not steps any more; the nearest
+  // one on the ladder is the size that was meant.
+  if (v >= 1 && v <= 8) return brushRadius(v);
+  return null;
 }
 
 function savedBrushes() {
@@ -339,7 +342,7 @@ function savedBrushes() {
   } catch {
     /* private mode — the sizes last for this visit */
   }
-  const fallback = legacy ?? BRUSH_MIN;
+  const fallback = legacy ?? BRUSH_STEPS[0];
   try {
     const stored = JSON.parse(localStorage.getItem(BRUSH_SIZES_KEY) ?? 'null');
     if (stored && typeof stored === 'object') {
@@ -1806,9 +1809,10 @@ const EDIT_ENABLED = true;
 
 // --- Mode & accent color -----------------------------------------------------
 // 'view' (default): a normal map with only the colored regions visible.
-// 'edit': a tile spotlight follows the cursor. A tap uses whichever brush the
-// cell under the pointer calls for, Ctrl paints and Option erases, each at
-// its own size. Ctrl-drag turns the map only in view mode.
+// 'edit': a circle follows the cursor, sized to the brush. A tap uses whichever
+// brush the cell under the pointer calls for, Ctrl paints and Option erases,
+// each at its own size, and a tap on a track paints that run. Ctrl-drag turns
+// the map only in view mode.
 const MODE_KEY = 'visited-map:mode:v1';
 // One colour for both basemaps — what this was before the two were told apart.
 // Still written, so rolling back to a build that only reads this one doesn't
@@ -3524,6 +3528,111 @@ function editClick(lngLat) {
   updateGrid(true);
   updateTiles();
   updateHud(currentLevel);
+}
+
+// The topmost track under a point, or nothing. A few pixels of slop: the line
+// is a hairline and a click is not. Stations and platforms are not a run.
+function railLineAt(point) {
+  const ids = railLayerIds().filter((id) => map.getLayer(id));
+  if (!ids.length || !point) return null;
+  const pad = 6;
+  const hits = map.queryRenderedFeatures(
+    [[point.x - pad, point.y - pad], [point.x + pad, point.y + pad]],
+    { layers: ids },
+  );
+  for (const hit of hits) {
+    const info = describeRailFeature(hit);
+    if (info?.kind === 'line' && info.osm?.type === 'way') return { hit, info };
+  }
+  return null;
+}
+
+function linePointsOf(feature) {
+  const g = feature?.geometry;
+  if (!g) return null;
+  const coords = g.type === 'LineString' ? g.coordinates
+    : g.type === 'MultiLineString' ? g.coordinates.flat()
+      : null;
+  if (!coords) return null;
+  const pts = coords.filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]));
+  return pts.length >= 2 ? pts : null;
+}
+
+// Cells the line passes through, as one edit. Cells already marked are left
+// as they are — painting a run you have already painted is not a second edit.
+function paintCellsOnLine(lngLats, phrase) {
+  if (currentLevel == null || !lngLats || lngLats.length < 2) return false;
+  const merc = [];
+  for (const [lng, lat] of lngLats) {
+    const x = mercX(lng);
+    const y = mercY(lat);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    merc.push([x, y]);
+  }
+  if (merc.length < 2) return false;
+  const N = colsOf(currentLevel);
+  const ids = [];
+  for (const [col, row] of cellsOnPolyline(currentLevel, merc)) {
+    const id = `${currentLevel}/${normCol(col, N)}/${row}`;
+    if (visited.has(id)) continue;
+    ids.push(id);
+  }
+  if (!ids.length) return false;
+  clearTripHighlight();
+  for (const id of ids) markCell(id);
+  const snapshot = snapshotCells(ids);
+  history.push(phrase, () => clearCells(ids), () => remarkCells(snapshot));
+  recomputeLit();
+  updateGrid(true);
+  updateTiles();
+  updateHud(currentLevel);
+  return true;
+}
+
+// One click in flight. A second click before the first answer arrives paints
+// the second run, and the first answer is dropped.
+let railPaintGen = 0;
+
+async function paintRailSpan(info, hit, lngLat) {
+  const gen = ++railPaintGen;
+  const done = busy('Painting the track…');
+  try {
+    let points = null;
+    let from = null;
+    let to = null;
+    try {
+      const q = new URLSearchParams({
+        way: info.osm.id,
+        lng: String(lngLat.lng),
+        lat: String(lngLat.lat),
+      });
+      const res = await fetch(`/api/rail/span?${q}`, { credentials: 'same-origin' });
+      if (res.ok) {
+        const body = await res.json();
+        if (Array.isArray(body.points) && body.points.length >= 2) {
+          points = body.points;
+          from = body.from || null;
+          to = body.to || null;
+        }
+      }
+    } catch {
+      /* the piece under the pointer is still a line */
+    }
+    if (gen !== railPaintGen || mode !== 'edit') return;
+    if (!points) points = linePointsOf(hit);
+    if (!points) return;
+    const phrase = from && to ? `painting ${from} → ${to}` : 'painting the track';
+    paintCellsOnLine(points, phrase);
+  } finally {
+    done();
+  }
+}
+
+function paintRailAt(e) {
+  const found = railLineAt(e.point);
+  if (!found) return false;
+  paintRailSpan(found.info, found.hit, e.lngLat);
+  return true;
 }
 
 // Debug hooks — handy in devtools for poking at cells and their provenance.
@@ -7103,7 +7212,7 @@ function buildGrid(bb, L) {
   return { type: 'FeatureCollection', features: regionFeatures(boundary) };
 }
 
-// --- Edit-mode tile spotlight ------------------------------------------------
+// --- Edit-mode cursor ----------------------------------------------------------
 let cursorPx = null; // last pointer position in screen px
 let pointerOnMap = false;
 // False until a real event has set cursorPx. The value it holds before that
@@ -7111,125 +7220,102 @@ let pointerOnMap = false;
 // move against it would throw the first drag away.
 let pointerTracked = false;
 
-function buildTiles() {
-  if (currentLevel == null || !cursorPx) return EMPTY;
-  const L = currentLevel;
-  const R = radiusOf(L);
-  const colSp = 1.5 * R;
-  const rowSp = SQRT3 * R;
-  const N = colsOf(L);
-  const lit = litSets[L];
-  const offs = tileOffsets(R);
-
-  const c = map.unproject(cursorPx);
-  const cxm = mercX(c.lng);
-  const cym = mercY(c.lat);
-  // Spotlight radius: SPOT_PX on screen, capped so tiny cells can't flood it.
-  //
-  // Straight from the zoom rather than by unprojecting a point SPOT_PX to the
-  // right of the cursor and measuring how far east it landed. That measurement
-  // is the same number only while north is up: turn the map a quarter turn and
-  // a step to the right of the cursor is a step *north*, its easting is zero,
-  // and the spotlight closes to nothing with the grid still switched on. A CSS
-  // pixel is a fixed number of Mercator metres at a given zoom whatever the
-  // compass says, so the conversion never needed the map at all.
-  const hexArea = ((3 * SQRT3) / 2) * R * R;
-  const radius = Math.min(
-    SPOT_PX * mercPerPixel(map.getZoom()),
-    Math.sqrt((SPOT_MAX_CELLS * hexArea) / Math.PI),
-  );
-
-  const features = [];
-  const colMin = Math.floor((cxm - radius - R) / colSp);
-  const colMax = Math.ceil((cxm + radius + R) / colSp);
-  for (let col = colMin; col <= colMax; col++) {
-    const cx = col * colSp;
-    const p = col & 1;
-    const off = p ? 0.5 : 0;
-    const nc = normCol(col, N);
-    const rowLo = Math.floor((cym - radius) / rowSp - off) - 1;
-    const rowHi = Math.ceil((cym + radius) / rowSp - off) + 1;
-    for (let row = rowLo; row <= rowHi; row++) {
-      const cy = (row + off) * rowSp;
-      const dist = Math.hypot(cx - cxm, cy - cym);
-      if (dist > radius) continue;
-      if (lit.has(`${nc}/${row}`)) continue;
-      const t = dist / radius;
-      let fade = 1;
-      if (t > SPOT_FADE_START) {
-        const u = (t - SPOT_FADE_START) / (1 - SPOT_FADE_START);
-        fade = 1 - u * u * (3 - 2 * u); // smoothstep falloff
-      }
-      if (fade < 0.03) continue;
-      features.push({
-        type: 'Feature',
-        properties: { id: `${L}/${nc}/${row}`, k: 0, f: Math.round(fade * 100) / 100 },
-        geometry: {
-          type: 'Polygon',
-          coordinates: [offs.map(([dx, dy]) => project([cx + dx, cy + dy]))],
-        },
-      });
-    }
-  }
-  return { type: 'FeatureCollection', features };
-}
-
 function updateTiles() {
-  // Keep the last tile set while fading out of edit mode; it's cleared when
-  // the mode tween lands.
+  // The field of hexes used to be rebuilt here, one polygon per cell, on every
+  // move. It arrived a frame late and the shared edges shimmered. The cursor
+  // is a circle in the page now; these sources stay empty.
   if (mode !== 'edit' && tileVis === 0) return;
-  map.getSource('tiles')?.setData(mode === 'edit' ? buildTiles() : EMPTY);
-  updateBrush();
-}
-
-// The disk the brush will touch, as one polygon. Raw columns, not wrapped
-// ids: a brush on the prime meridian has to stay one shape, and the wrapped
-// column is a world away. Shown whenever the pointer is on the map in edit
-// mode and the brush about to be used is bigger than one cell, so each
-// stepper has an edge to move.
-function brushShape(L, col, row, reach) {
-  const cells = cellsWithin(col, row, reach);
-  const have = new Set(cells.map(([c, r]) => `${c}/${r}`));
-  const R = radiusOf(L);
-  const hexOffs = fullHexOffsets(R);
-  const boundary = [];
-  for (const [c, r] of cells) {
-    const p = c & 1;
-    const [cx, cy] = cellCenter(L, c, r);
-    for (const e of EDGES) {
-      if (have.has(`${c + e.dc}/${r + e.dr(p)}`)) continue;
-      const [ax, ay] = hexOffs[e.a];
-      const [bx, by] = hexOffs[e.b];
-      boundary.push([[cx + ax, cy + ay], [cx + bx, cy + by]]);
-    }
-  }
-  const loops = chainSegments(boundary).filter((pts) => pts.length > 3);
-  if (!loops.length) return EMPTY;
-  loops.sort((a, b) => b.length - a.length);
-  const loop = loops[0];
-  const first = loop[0];
-  const last = loop[loop.length - 1];
-  if (first[0] !== last[0] || first[1] !== last[1]) loop.push(first);
-  return {
-    type: 'FeatureCollection',
-    features: [{
-      type: 'Feature',
-      properties: {},
-      geometry: { type: 'Polygon', coordinates: [loop.map((p) => project(p))] },
-    }],
-  };
+  placeEditCursor();
 }
 
 // Which disk the pointer is about to lay down. A sweep already chose, and
 // that choice holds for the whole stroke: the cells it paints become lit, and
 // asking the ground again would swap sizes under the cursor. With no key
-// down, a tap asks the centre cell, so the outline asks the same one.
+// down, a tap asks the centre cell, so the circle asks the same one.
 function brushKindNow() {
   if (gesture === 'paint' || gesture === 'erase') return gesture;
-  if (!lastLngLat || currentLevel == null) return 'paint';
-  const { id } = cellAt(lastLngLat);
+  const at = pointerLngLat();
+  if (!at || currentLevel == null) return 'paint';
+  const { id } = cellAt(at);
   const [L, col, row] = parseCellId(id);
   return litSets[L]?.has(`${col}/${row}`) ? 'erase' : 'paint';
+}
+
+// Where the pointer is, as a place. cursorPx is screen pixels and stays put
+// while the map moves under it; lastLngLat is the place from the last event
+// and is already somewhere else by then.
+function pointerLngLat() {
+  if (cursorPx && map?.unproject) {
+    try {
+      return map.unproject(cursorPx);
+    } catch {
+      /* the map has not projected anything yet */
+    }
+  }
+  return lastLngLat;
+}
+
+let editCursor = null;
+
+function editCursorEl() {
+  if (!editCursor) {
+    editCursor = document.createElement('div');
+    editCursor.id = 'edit-cursor';
+    editCursor.hidden = true;
+  }
+  const parent = map?.getCanvasContainer?.();
+  if (parent && editCursor.parentElement !== parent) parent.append(editCursor);
+  return editCursor;
+}
+
+// Screen pixels for a ground distance at the pointer. Measured both ways
+// across the screen, because a lean foreshortens one of them and the circle
+// has to cover the disk anyway. A step that wraps the antimeridian is not a
+// distance, and the zoom's own scale is the answer then.
+function diskPixelRadius(lngLat, metres) {
+  const fallback = () => metres / mercPerPixel(map.getZoom());
+  let p;
+  try {
+    p = map.project(lngLat);
+  } catch {
+    return fallback();
+  }
+  const probe = 80;
+  const span = (q) => {
+    let dx = mercX(q.lng) - mercX(lngLat.lng);
+    if (dx > WORLD / 2) dx -= WORLD;
+    else if (dx < -WORLD / 2) dx += WORLD;
+    return Math.hypot(dx, mercY(q.lat) - mercY(lngLat.lat));
+  };
+  let right;
+  let down;
+  try {
+    right = span(map.unproject([p.x + probe, p.y]));
+    down = span(map.unproject([p.x, p.y + probe]));
+  } catch {
+    return fallback();
+  }
+  const mpp = Math.min(right > 1 ? right / probe : Infinity, down > 1 ? down / probe : Infinity);
+  return Number.isFinite(mpp) && mpp > 0 ? metres / mpp : fallback();
+}
+
+function placeEditCursor() {
+  const el = editCursorEl();
+  if (!el) return;
+  const show = mode === 'edit' && pointerOnMap && cursorPx && currentLevel != null && map?.project;
+  el.hidden = !show;
+  if (!show) return;
+  const kind = brushKindNow();
+  const size = brushSizes[kind] ?? BRUSH_STEPS[0];
+  const reach = Math.max(0, size - 1);
+  const metres = reach * SQRT3 * radiusOf(currentLevel) + radiusOf(currentLevel);
+  const lngLat = pointerLngLat();
+  const px = lngLat ? diskPixelRadius(lngLat, metres) : metres / mercPerPixel(map.getZoom());
+  el.classList.toggle('is-erase', kind === 'erase');
+  const d = Math.max(4, px * 2);
+  el.style.width = `${d}px`;
+  el.style.height = `${d}px`;
+  el.style.transform = `translate(${cursorPx[0]}px, ${cursorPx[1]}px) translate(-50%, -50%)`;
 }
 
 function markLiveBrush(kind) {
@@ -7241,18 +7327,7 @@ function markLiveBrush(kind) {
 function updateBrush() {
   const kind = mode === 'edit' ? brushKindNow() : null;
   markLiveBrush(kind);
-  const src = map.getSource('brush');
-  if (!src) return;
-  const size = kind ? brushSizes[kind] : 1;
-  // Size 1 is the cell the spotlight already highlights. The disk is only
-  // there once the brush is bigger than that, so the stepper has an edge to
-  // move and a one-cell brush looks like edit mode always did.
-  if (!kind || !pointerOnMap || currentLevel == null || !lastLngLat || size < 2) {
-    src.setData(EMPTY);
-    return;
-  }
-  const { col, row } = cellAt(lastLngLat);
-  src.setData(brushShape(currentLevel, col, row, size - 1));
+  placeEditCursor();
 }
 
 // --- Crossfade -------------------------------------------------------------
@@ -7652,8 +7727,8 @@ function updateGrid(force = false, changed = null) {
   if (!map.getSource('hex')) return;
   if (paintHeldForPrefs) return;
   const bb = paddedMerc();
-  // Edit mode always works on the smallest cells: display, spotlight and
-  // painting all lock to level 0 so what you see is what gets marked. Outside
+  // Edit mode always works on the smallest cells: the cursor and the paint
+  // both lock to level 0 so what you see is what gets marked. Outside
   // it, a pinned Detail level wins over the zoom.
   let level;
   if (mode === 'edit') level = 0;
@@ -7924,7 +7999,8 @@ function setMode(next) {
   if (mode === 'edit') updateTiles();
   else updateBrush();
 
-  // Tween the tile spotlight in/out.
+  // The old spotlight faded with the mode. The layers are empty now; the
+  // circle appears and disappears with edit mode itself.
   if (modeRaf) cancelAnimationFrame(modeRaf);
   const from = tileVis;
   const to = mode === 'edit' ? 1 : 0;
@@ -8004,8 +8080,15 @@ function updateHud(level) {
   updateDetailNow(level);
 }
 
+function stepBrush(kind, dir) {
+  const i = Math.max(0, BRUSH_STEPS.indexOf(brushSizes[kind]));
+  const next = i + dir;
+  if (next < 0 || next >= BRUSH_STEPS.length) return;
+  setBrushSize(kind, BRUSH_STEPS[next]);
+}
+
 function setBrushSize(kind, next) {
-  const size = Math.max(BRUSH_MIN, Math.min(BRUSH_MAX, next | 0));
+  const size = brushRadius(next);
   if (size === brushSizes[kind]) return;
   brushSizes[kind] = size;
   try {
@@ -8028,8 +8111,8 @@ function paintBrushUi() {
     label.textContent = String(size);
     const reach = size - 1;
     label.title = plural(3 * reach * (reach + 1) + 1, 'cell');
-    dec.disabled = size <= BRUSH_MIN;
-    inc.disabled = size >= BRUSH_MAX;
+    dec.disabled = size <= BRUSH_STEPS[0];
+    inc.disabled = size >= BRUSH_STEPS[BRUSH_STEPS.length - 1];
   }
   markLiveBrush(mode === 'edit' ? brushKindNow() : null);
 }
@@ -10395,7 +10478,9 @@ function installGrid() {
     : [];
   basemapContinentsOn = true;
 
-  // Tile spotlight (below the region layers).
+  // The edit cursor used to be this: a field of hexes under the pointer. It is a
+  // circle in the page now. The source stays, empty, because the mode fade
+  // still addresses the layers.
   map.addSource('tiles', { type: 'geojson', data: EMPTY, promoteId: 'id', tolerance: 0 });
   map.addLayer({
     id: 'tile-fill', type: 'fill', source: 'tiles',
@@ -10710,11 +10795,9 @@ function installGrid() {
   if (shownTrack) showTrack(shownTrack);
   if (placePin) showPlacePin(placePin);
 
-  // The brush disk, above the photographs — otherwise a dot you are aiming
-  // past would hide the cells you are about to change. White over a dark
-  // casing, same as the selection ring: it has to read on the wash, on a pale
-  // field and on a photograph, and the accent is the colour that disappears
-  // into the wash.
+  // The brush outline used to be this polygon. It is the same circle as the
+  // cursor now — a stitched hex ring shimmered where its vertices met. The
+  // source stays empty so a style rebuild does not have to grow a new one.
   map.addSource('brush', { type: 'geojson', data: EMPTY, tolerance: 0 });
   map.addLayer({
     id: 'brush-fill', type: 'fill', source: 'brush',
@@ -10881,6 +10964,10 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         swallowClick = false;
         return;
       }
+      // A track, when the overlay is on, is the run from the stop before the
+      // pointer to the stop after it — not the one cell underneath. Ground
+      // that is not a track is still the brush.
+      if (railOn && paintRailAt(e)) return;
       editClick(e.lngLat);
     }));
 
@@ -10889,12 +10976,11 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
   // Handling both paints the cell twice.
   let brushEventKey = '';
   const scheduleTiles = () => {
-    // While the map is panning/zooming, leave the spotlight where it is: it's
-    // anchored to the map, so it rides along and stays under the cursor.
-    // Rebuilding here would use a mid-drag camera and make it swim. moveend
-    // re-anchors it. A brush sweep has panning disabled, so it still refreshes.
+    // A pan or a zoom is already placing the circle from the move handler.
+    // Doing it again here, off a camera that is mid-gesture, is what made the
+    // old spotlight swim. A brush sweep has panning disabled, so it still
+    // refreshes from the pointer.
     if (map.isMoving()) return;
-    if (!gesture && lastLngLat) setHover(cellIdAt(lastLngLat));
     if (hoverPending) return;
     hoverPending = true;
     requestAnimationFrame(() => {
@@ -11116,8 +11202,8 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
   hudPencil.addEventListener('click', () => setMode('edit'));
   hudDone.addEventListener('click', () => setMode('view'));
   for (const kind of ['paint', 'erase']) {
-    document.getElementById(`hud-${kind}-dec`).addEventListener('click', () => setBrushSize(kind, brushSizes[kind] - 1));
-    document.getElementById(`hud-${kind}-inc`).addEventListener('click', () => setBrushSize(kind, brushSizes[kind] + 1));
+    document.getElementById(`hud-${kind}-dec`).addEventListener('click', () => stepBrush(kind, -1));
+    document.getElementById(`hud-${kind}-inc`).addEventListener('click', () => stepBrush(kind, 1));
   }
   paintBrushUi();
   // The accent picker. Repainting on every drag frame is the point — you pick
@@ -11817,8 +11903,10 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         // caught up when you let go is wrong for the whole of a pinch, which is
         // exactly when somebody is looking at it.
         scaleBar.update();
-        // Don't rebuild the spotlight mid-move — it rides with the map so it
-        // stays under the cursor while dragging; moveend re-anchors it.
+        // The circle is in screen pixels, so a zoom or a pan leaves it behind
+        // unless it is placed again. It is the pointer's position, not a
+        // feature, so this is a transform and not a tile rebuild.
+        if (mode === 'edit') placeEditCursor();
       });
     }));
   onMapBuilt(() => map.on('moveend', () => {
@@ -11834,7 +11922,8 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
   // rather than at the first drag.
   onMapBuilt(() => scaleBar.update());
 
-  // Until the pointer moves, anchor the spotlight to the viewport center.
+  // Until the pointer moves, this is the viewport centre — and not a place
+  // the circle is drawn, because the pointer has not arrived yet.
   const el = map.getContainer();
   cursorPx = [el.clientWidth / 2, el.clientHeight / 2];
 
