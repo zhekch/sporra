@@ -1211,6 +1211,12 @@ onMapBuilt(() => map.addControl(
 // on the vertical axis of the turn gesture, and `touchPitch` is its two-finger
 // equivalent. Asked for by name rather than left to the default so that a
 // `maxPitch()` of 0 really does mean the camera cannot lean, by any route.
+function syncBoxZoom() {
+  if (!map?.boxZoom) return;
+  if (mode === 'edit') map.boxZoom.disable();
+  else map.boxZoom.enable();
+}
+
 onMapBuilt(() => {
   if (!ROTATE_ENABLED) {
     map.dragRotate.disable();
@@ -1823,6 +1829,9 @@ const DEFAULT_ACCENT = '#60acff';
 const isAccent = (v) => /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(String(v ?? ''));
 
 let mode = EDIT_ENABLED && localStorage.getItem(MODE_KEY) === 'edit' ? 'edit' : 'view';
+// After `mode` exists. The handler registered with the other camera setup
+// runs while this is still in the temporal dead zone.
+onMapBuilt(() => syncBoxZoom());
 let tileVis = mode === 'edit' ? 1 : 0; // 0..1, tweened on mode change
 
 /** Which of the two colours the basemap on screen calls for. */
@@ -3530,6 +3539,149 @@ function editClick(lngLat) {
   updateHud(currentLevel);
 }
 
+// The region the pointer is in, and whether Shift is asking to clear it.
+// The name stays put once the pointer leaves the canvas: the Clear button
+// sits over some other piece of ground, and following the pointer onto it
+// would wipe whatever happens to be under the panel.
+let aimedRegion = null;
+let aimedCell = null;
+let regionShift = false;
+let regionClearing = false;
+
+let regionWarm = null;
+function warmRegionData() {
+  if (countriesLoaded() && regionsLoaded()) return Promise.resolve();
+  // One load, however many pointers ask. The file is a few megabytes and the
+  // brush does not need it; a clear does, and it waits on this same promise.
+  if (!regionWarm) {
+    regionWarm = Promise.all([loadCountries(), loadRegions()]).then(() => {
+      aimedCell = null;
+      if (mode === 'edit' && pointerOnMap) noteRegionAim(pointerLngLat());
+    });
+  }
+  return regionWarm;
+}
+
+// Shift-click. The datasets may still be on their way — edit mode does not
+// wait for them, because painting a cell does not need a canton — so this
+// one does the waiting, then clears the region the click actually landed in.
+async function clearRegionAt(lngLat) {
+  if (regionClearing) return;
+  if (!countriesLoaded() || !regionsLoaded()) {
+    regionClearing = true;
+    paintRegionUi();
+    const stop = busy('Loading regions');
+    try {
+      await warmRegionData();
+    } catch (e) {
+      console.warn('Loading regions failed:', e);
+      showToast('Could not load regions', { tone: 'quiet' });
+      return;
+    } finally {
+      stop();
+      regionClearing = false;
+      paintRegionUi();
+    }
+  }
+  await clearRegion(regionUnder(lngLat));
+}
+
+function noteRegionAim(lngLat) {
+  if (!lngLat || mode !== 'edit' || currentLevel == null) return;
+  if (!countriesLoaded() || !regionsLoaded()) {
+    warmRegionData();
+    return;
+  }
+  const { id } = cellAt(lngLat);
+  if (id === aimedCell) return;
+  aimedCell = id;
+  const next = regionUnder(lngLat);
+  const same = (aimedRegion?.id ?? null) === (next?.id ?? null);
+  aimedRegion = next;
+  if (!same) paintRegionUi();
+  if (regionShift) paintRegionOutline();
+}
+
+function paintRegionUi() {
+  const label = document.getElementById('hud-region');
+  const btn = document.getElementById('hud-region-clear');
+  if (!label || !btn) return;
+  label.textContent = aimedRegion?.name ?? '—';
+  label.title = aimedRegion?.name ?? '';
+  btn.disabled = !aimedRegion || regionClearing;
+}
+
+// Shift draws the region's own border and takes the brush circle off, because
+// the next click clears the shape and the disk would be describing a
+// different edit. A preview, not a selection: leaving Shift puts the outline
+// away and does not close a card, which edit mode does not open anyway.
+function paintRegionOutline() {
+  if (mode !== 'edit' || !regionShift || !aimedRegion) {
+    if (selection?.preview) {
+      selection = null;
+      updateSelection();
+    }
+    return;
+  }
+  if (selection?.preview && selection.area?.id === aimedRegion.id) return;
+  selection = { area: aimedRegion, preview: true };
+  updateSelection();
+}
+
+function setRegionShift(on) {
+  const next = !!on && mode === 'edit';
+  if (regionShift === next) {
+    if (next) paintRegionOutline();
+    return;
+  }
+  regionShift = next;
+  updateBrush();
+  paintRegionOutline();
+}
+
+// Every visited cell in one region, as one edit. The same cells the region
+// level painted there — `storedInArea` is that walk — so the clear takes the
+// shape and nothing past its border. Undo puts the rows back with their
+// dates, the way any other clear does. No confirm: it is one undo, and a
+// second press on top of an undo is how the rest of edit mode already works.
+async function clearRegion(region) {
+  if (regionClearing) return;
+  if (!region) {
+    showToast('No region here', { tone: 'quiet' });
+    return;
+  }
+  regionClearing = true;
+  paintRegionUi();
+  // The walk is synchronous and, the first time, a point-in-polygon per
+  // stored cell. Paint the spinner before that starts, or a long history
+  // freezes the page with nothing on screen to say why.
+  const heavy = visited.size > 8000;
+  const stop = heavy ? busy('Clearing') : () => {};
+  try {
+    if (heavy) await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const ids = storedInArea('region', region.id);
+    if (!ids.length) {
+      showToast(`Nothing in ${region.name}`, { tone: 'quiet' });
+      return;
+    }
+    const snapshot = snapshotCells(ids);
+    for (const id of ids) unmarkCell(id);
+    history.push(
+      `clearing ${plural(ids.length, 'cell')} in ${region.name}`,
+      () => restoreCells(snapshot),
+      () => clearCells(ids),
+    );
+    recomputeLit();
+    updateGrid(true);
+    updateTiles();
+    updateHud(currentLevel);
+  } finally {
+    stop();
+    regionClearing = false;
+    paintRegionUi();
+  }
+}
+
 // The topmost track under a point, or nothing. A few pixels of slop: the line
 // is a hairline and a click is not. Stations and platforms are not a run.
 function railLineAt(point) {
@@ -3859,13 +4011,32 @@ function areaAt(lngLat) {
     return name ? { kind, id: name, name, of: null } : null;
   }
   if (kind !== 'region') return { kind, id: country.id, name: country.id, of: null };
+  // The same region a Shift-clear would take. The card and the edit have to
+  // agree about the shape, including the whole-country stand-in.
+  return regionUnder(lngLat);
+}
+
+/**
+ * The admin-1 region under a point, at any zoom.
+ *
+ * Edit mode draws the finest cells, so the region level is not on screen, and
+ * the question is still which canton the pointer is in. A country the dataset
+ * never subdivided stands in as its own region — the same stand-in the fill
+ * was built from. Null over the sea, and null until both datasets have
+ * arrived: `regionsInCountry` is 0 while the file is still loading, and that
+ * must not turn every country into the stand-in.
+ *
+ * @returns {{kind:'region', id:string, name:string, of:string|null}|null}
+ */
+function regionUnder(lngLat) {
+  if (!lngLat || !countriesLoaded() || !regionsLoaded()) return null;
+  const lng = wrapLng(lngLat.lng);
+  const country = countryNear(lng, lngLat.lat);
+  if (!country) return null;
   const region = regionNear(lng, lngLat.lat, country.iso);
-  if (region) return { kind, id: region.id, name: region.name, of: country.id };
-  // A country the dataset never subdivided stands in as its own region — the
-  // same stand-in the fill was built from, so the two agree about what was
-  // clicked. See buildAreaFC.
+  if (region) return { kind: 'region', id: region.id, name: region.name, of: country.id };
   if (regionsInCountry(country.iso) === 0) {
-    return { kind, id: `${WHOLE_COUNTRY}${country.id}`, name: country.id, of: null };
+    return { kind: 'region', id: `${WHOLE_COUNTRY}${country.id}`, name: country.id, of: null };
   }
   return null;
 }
@@ -7317,7 +7488,9 @@ function editCursorEl() {
 function placeEditCursor() {
   const canvas = editCursorEl();
   if (!canvas) return;
-  const show = mode === 'edit' && pointerOnMap && cursorPx && currentLevel != null && map?.getZoom;
+  // Shift is a region, not a disk. Leaving the circle up would say the next
+  // click erases a handful of cells.
+  const show = mode === 'edit' && !regionShift && pointerOnMap && cursorPx && currentLevel != null && map?.getZoom;
   canvas.hidden = !show;
   if (!show) return;
   const parent = canvas.parentElement;
@@ -7360,8 +7533,9 @@ function placeEditCursor() {
 
 function markLiveBrush(kind) {
   for (const k of ['paint', 'erase']) {
-    document.getElementById(`hud-${k}-row`)?.classList.toggle('is-live', k === kind);
+    document.getElementById(`hud-${k}-row`)?.classList.toggle('is-live', !regionShift && k === kind);
   }
+  document.getElementById('hud-region-row')?.classList.toggle('is-live', regionShift && mode === 'edit');
 }
 
 function updateBrush() {
@@ -8028,6 +8202,7 @@ function setMode(next) {
     stopGesture();
     railPaintQueue.length = 0;
     clearSpanHighlight();
+    setRegionShift(false);
   }
   setHover(null);
   // Edit mode never asks which route is under the pointer, so one lit on the way
@@ -8040,8 +8215,15 @@ function setMode(next) {
   // Re-lock the region level: edit mode pins to level 0 (smallest cells),
   // view mode returns to the zoom-appropriate level. Crossfades either way.
   updateGrid(true);
-  if (mode === 'edit') updateTiles();
-  else updateBrush();
+  if (mode === 'edit') {
+    warmRegionData();
+    updateTiles();
+    if (pointerOnMap) noteRegionAim(pointerLngLat());
+  } else updateBrush();
+  // Shift-drag is the box zoom everywhere else. In edit mode Shift is the
+  // region clear, and the box zoom swallows the click — a press and release
+  // with no drag never arrives as one — so it is off for as long as editing is.
+  syncBoxZoom();
 
   // The old spotlight faded with the mode. The layers are empty now; the
   // circle appears and disappears with edit mode itself.
@@ -11013,6 +11195,16 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         else { closeCellInfo(); closeRouteInfo(); closePhotoInfo(); }
         return;
       }
+      // Where the pointer landed, including on a phone, which has no hover
+      // for the region row to follow. Done before the brush, so a tap that
+      // also toggles a cell still names the region it landed in.
+      noteRegionAim(e.lngLat);
+      // Shift clears the region. It is not a brush stroke and not a track:
+      // both of those are a run of cells, and this is the shape.
+      if (e.originalEvent?.shiftKey && !e.originalEvent.altKey && !isCtrl(e.originalEvent)) {
+        void clearRegionAt(e.lngLat);
+        return;
+      }
       // Ctrl/Cmd paints and Option erases; the click would toggle the same
       // cells a second time on the way up. swallowClick covers the release
       // that happens before mouseup, when the click no longer carries the key.
@@ -11077,6 +11269,7 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       applyStroke(pos.lngLat);
       rememberStroke(pos.lngLat, cursorPx);
     }
+    noteRegionAim(pos.lngLat);
     scheduleTiles();
   };
   // A sample that leapt, waiting for the one after it to say whether the
@@ -11242,6 +11435,11 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
   // button is down. The keydown of Ctrl is usually the start of Ctrl-Z, and
   // the cell under the pointer is not what that chord means.
   window.addEventListener('keydown', (e) => {
+    if (e.key === 'Shift') {
+      if (isTypingIn(e.target) || mode !== 'edit') return;
+      setRegionShift(true);
+      return;
+    }
     if (e.key !== 'Control' && e.key !== 'Meta' && e.key !== 'Alt') return;
     if (isTypingIn(e.target) || mode !== 'edit') return;
     modifierAt = performance.now();
@@ -11249,11 +11447,16 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     syncGesture(e, (e.buttons & 1) !== 0);
   });
   window.addEventListener('keyup', (e) => {
+    if (e.key === 'Shift') {
+      setRegionShift(false);
+      return;
+    }
     if (e.key !== 'Control' && e.key !== 'Meta' && e.key !== 'Alt') return;
     syncGesture(e, false);
   });
   window.addEventListener('blur', () => {
     stopGesture();
+    setRegionShift(false);
     // The pointer can be anywhere when the window is focused again. The next
     // sample is an arrival, not a leap from the position it left at.
     pointerTracked = false;
@@ -11271,6 +11474,9 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     document.getElementById(`hud-${kind}-dec`).addEventListener('click', () => stepBrush(kind, -1));
     document.getElementById(`hud-${kind}-inc`).addEventListener('click', () => stepBrush(kind, 1));
   }
+  document.getElementById('hud-region-clear').addEventListener('click', () => {
+    void clearRegion(aimedRegion);
+  });
   paintBrushUi();
   // The accent picker. Repainting on every drag frame is the point — you pick
   // the color against the map itself, not against a swatch.
@@ -11972,7 +12178,13 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         // The circle is in screen pixels, so a zoom or a pan leaves it behind
         // unless it is placed again. It is the pointer's position, not a
         // feature, so this is a transform and not a tile rebuild.
-        if (mode === 'edit') placeEditCursor();
+        if (mode === 'edit') {
+          placeEditCursor();
+          // A pan moves the ground under a still pointer. The region follows
+          // the ground, and only while the pointer is actually on it — over
+          // the panel, the name is the one Clear will remove.
+          if (pointerOnMap) noteRegionAim(pointerLngLat());
+        }
       });
     }));
   onMapBuilt(() => map.on('moveend', () => {

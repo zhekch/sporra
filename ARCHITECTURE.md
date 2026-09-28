@@ -38,7 +38,16 @@ glass look. Click hexagons to mark places you've visited.
   what made arming it fall over. The panel's **paint** and **erase** sizes
   step through `BRUSH_STEPS` (1, 3, 8, 15, …, each remembered on this
   browser). A tap uses whichever the cell under the pointer calls for, and
-  Ctrl paints and Option erases at their own sizes for the whole sweep. A tap
+  Ctrl paints and Option erases at their own sizes for the whole sweep. Shift
+  clears every visited cell in the **region** under the pointer — the canton,
+  the county, the province — and the panel names that region and offers the
+  same clear. The outline of the region is what Shift puts on the map: the
+  brush circle is a disk of cells, and this edit is a shape, so the circle
+  steps aside while Shift is down. Shift-drag is the box zoom on the rest of
+  the map; while editing it is off, because that gesture swallows a Shift-click
+  before it can become one. It is one undo, the same as a stroke. A
+  country the dataset never subdivided is its own region, which is the same
+  stand-in the region level already draws. A tap
   on a **track**, when that overlay is on, paints the cells the line touches
   from the previous station or junction to the next. A halt or a stop position
   is not an end, and neither is the OSM way boundary in the middle of a

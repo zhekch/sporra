@@ -147,6 +147,50 @@ export async function serverUpdate() {
   }
 }
 
+// The server refuses a mutate or a restore past this many cells (see
+// MAX_CELLS_PER_MUTATE in server/index.js). A brush stroke never gets there.
+// Clearing a region does: one canton of logged cells is the whole history
+// that fell inside it, and that can be more than one request is allowed to
+// carry. Each batch stays under the cap, and every batch is the same edit
+// said again — a delete of a cell already gone, or a restore of a row already
+// back, is the same row — so a retry after a dropped connection is safe.
+export const MUTATE_BATCH = 40000;
+
+/**
+ * One mutate, cut into requests that fit.
+ *
+ * Adds fill a batch first and removes take what is left, because the cap is
+ * on the two arrays together. An empty edit is no request at all.
+ *
+ * @param {Iterable<string>} add
+ * @param {Iterable<string>} remove
+ * @param {number} [limit]
+ * @returns {Array<{add: Array<string>, remove: Array<string>}>}
+ */
+export function mutateBatches(add, remove, limit = MUTATE_BATCH) {
+  const a = Array.isArray(add) ? add : [...(add ?? [])];
+  const r = Array.isArray(remove) ? remove : [...(remove ?? [])];
+  const batches = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < r.length) {
+    const addSlice = a.slice(i, i + limit);
+    i += addSlice.length;
+    const removeSlice = r.slice(j, j + (limit - addSlice.length));
+    j += removeSlice.length;
+    batches.push({ add: addSlice, remove: removeSlice });
+  }
+  return batches;
+}
+
+/** The same cut, for a restore, which is one array of rows. */
+export function listBatches(items, limit = MUTATE_BATCH) {
+  const list = Array.isArray(items) ? items : [...(items ?? [])];
+  const batches = [];
+  for (let i = 0; i < list.length; i += limit) batches.push(list.slice(i, i + limit));
+  return batches;
+}
+
 export const auth = {
   // Resolves to the username if a valid session cookie exists, else null.
   me: () => api('GET', '/api/me').then(keepVersion).catch(() => null),
@@ -166,13 +210,29 @@ export const auth = {
   // `hits` counts separate visits, `fixes` the raw points behind them.
   getCells: () => api('GET', '/api/cells'),
   // Incremental map edits. Removing a cell clears it for every source.
-  mutateCells: (add, remove, source = 'manual') =>
-    api('POST', '/api/cells/mutate', { add, remove, source }),
+  // Split so a region clear, which can be the whole of a canton's history,
+  // stays under the server's cap. See mutateBatches.
+  async mutateCells(add, remove, source = 'manual') {
+    const batches = mutateBatches(add, remove);
+    if (!batches.length) return { ok: true };
+    let last;
+    for (const batch of batches) {
+      last = await api('POST', '/api/cells/mutate', { add: batch.add, remove: batch.remove, source });
+    }
+    return last;
+  },
   // Undo for a clear. Not the same call as mutateCells(add): clearing drops
   // every source's row for a cell, so putting it back means sending the rows
   // themselves — [id, source, addedAt, firstAt, lastAt, hits, fixes] — and not
-  // just the ids, which would come back as bare manual marks.
-  restoreCells: (rows) => api('POST', '/api/cells/restore', { rows }),
+  // just the ids, which would come back as bare manual marks. Batched for the
+  // same reason a mutate is: the undo of a region is every row the clear took.
+  async restoreCells(rows) {
+    const batches = listBatches(rows);
+    if (!batches.length) return { ok: true, restored: 0 };
+    let last;
+    for (const batch of batches) last = await api('POST', '/api/cells/restore', { rows: batch });
+    return last;
+  },
   // How this account likes to look at its map (route colours, hidden
   // activities). Synced so the phone and the laptop agree.
   getPrefs: () => api('GET', '/api/prefs').then((d) => d.prefs ?? {}),

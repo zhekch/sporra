@@ -415,6 +415,48 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   cursor: default;
 }
 
+/* The name is whatever region the pointer is in, and it has to be able to
+   shrink: the panel is 280px on a phone and a canton name is not. Clear stays
+   full size, because a clipped button is a button you cannot read. */
+.hud-region {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hud-region b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hud-region button {
+  flex: none;
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.hud-region button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.hud-region button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 :is([data-theme='light'], [data-chrome='light']) .hud-step button {
   background: rgba(15, 23, 42, 0.08);
   border-color: rgba(15, 23, 42, 0.14);
@@ -422,6 +464,16 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 }
 
 :is([data-theme='light'], [data-chrome='light']) .hud-step button:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.14);
+}
+
+:is([data-theme='light'], [data-chrome='light']) .hud-region button {
+  background: rgba(15, 23, 42, 0.08);
+  border-color: rgba(15, 23, 42, 0.14);
+  color: #0f172a;
+}
+
+:is([data-theme='light'], [data-chrome='light']) .hud-region button:hover:not(:disabled) {
   background: rgba(15, 23, 42, 0.14);
 }
 

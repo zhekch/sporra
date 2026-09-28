@@ -101,6 +101,26 @@ export function areaAtPoint(kind, lng, lat) {
   return regionsInCountry(at.iso) === 0 ? `${WHOLE_COUNTRY}${at.id}` : null;
 }
 
+/**
+ * The stored cells that belong to one area.
+ *
+ * The same answer `areaOfCell` gives, gathered. The map's own walk memoises
+ * that answer (`areaOfCellMemo` in src/main.js) because a cell's centre never
+ * moves; this one does not, so a test can ask it without a page.
+ *
+ * @param {Iterable<string>} cellIds
+ * @param {'region'|'country'|'continent'} kind
+ * @param {string} id
+ * @returns {Array<string>}
+ */
+export function cellsInArea(cellIds, kind, id) {
+  const out = [];
+  for (const cellId of cellIds) {
+    if (areaOfCell(kind, cellId) === id) out.push(cellId);
+  }
+  return out;
+}
+
 // Ground area of one cell at `lat`, in km².
 export function cellAreaKm2(level, lat) {
   const R = radiusOf(level);

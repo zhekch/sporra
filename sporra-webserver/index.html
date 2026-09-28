@@ -112,7 +112,14 @@
             <button type="button" id="hud-erase-inc" data-i18n-aria-label="hud-erase-inc.larger-erase-brush" aria-label="Larger erase brush">+</button>
           </span>
         </div>
-        <div data-i18n="hud-hint.tap-toggles-ctrl-paints" class="hud-hint" id="hud-hint">Tap toggles · tap a track to paint it · Ctrl paints · Option erases</div>
+        <div class="hud-row" id="hud-region-row">
+          <span data-i18n="hud.region">Region</span>
+          <span class="hud-region">
+            <b id="hud-region">—</b>
+            <button type="button" id="hud-region-clear" data-i18n="hud-region-clear.clear" data-i18n-aria-label="hud-region-clear.clear-this-region" aria-label="Clear this region" disabled>Clear</button>
+          </span>
+        </div>
+        <div data-i18n="hud-hint.tap-toggles-ctrl-paints" class="hud-hint" id="hud-hint">Tap toggles · tap a track to paint it · Ctrl paints · Option erases · Shift clears a region</div>
       </div>
     </div>
 
