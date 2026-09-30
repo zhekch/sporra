@@ -55,9 +55,9 @@ there. A branch per change left eleven stale worktrees and 337MB of duplicated
 `node_modules` behind, for work that had been merged days earlier; the cleanup
 cost more than the isolation was worth.
 
-**When a change is finished, commit it on `nightly`.** Do not wait to be asked,
-and do not commit it on `main`. Push only when asked, and then only
-`origin/nightly`. Personal data stays out of that commit, as below.
+**When a change is finished, commit it on `nightly` and push `origin/nightly`.**
+Do not wait to be asked for either, and do not commit or push `main`. Personal
+data stays out of that commit, as below.
 
 Landing `nightly` on `main` is the user's call, not yours — leave the merge to
 them. Afterwards `nightly` gets `git merge main` so the two never drift.
