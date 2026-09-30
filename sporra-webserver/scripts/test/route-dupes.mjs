@@ -151,6 +151,18 @@ check(preferredRoute(route({ id: 9, elevUp: 0 }), route({ id: 8, elevUp: 404 }))
   'and a row that knows the climb beats one that does not');
 check(preferredRoute(route({ id: 9 }), route({ id: 8 })).id === 8,
   'ties break on the older row, so the answer never changes between loads');
+// Pasting the tour again used to keep the older row, which is the one whose
+// clock was left running. The corrected copy is the one with a duration.
+const openClock = route({
+  id: 2, source: 'komoot', link: 'https://komoot.com/tour/1',
+  lengthM: 11800, lastAt: T('2025-04-03T11:13:53Z') + 163 * 3600,
+});
+const retimed = route({
+  id: 30, source: 'komoot', link: 'https://komoot.com/tour/1',
+  lengthM: 11800, lastAt: T('2025-04-03T11:13:53Z') + 6586,
+});
+check(preferredRoute(openClock, retimed).id === 30, 'a re-import with a real duration replaces the clock left running');
+check(preferredRoute(retimed, openClock).id === 30, 'whichever order the two copies are compared in');
 
 console.log('\nfolding a list');
 const list = [komoot, strava, route({ id: 3, firstAt: T('2025-06-01T08:00:00Z'), lastAt: T('2025-06-01T09:00:00Z') })];

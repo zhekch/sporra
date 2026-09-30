@@ -1152,13 +1152,17 @@ export function routesLookAlike(a, b) {
  * The ranks below it decide between two rows of the same app, and between two
  * sources this app has no opinion about — a link first, then a sport somebody
  * actually recorded over one this app guessed from the speed, which is what
- * separates the two Strava rows that are the same run.
+ * separates the two Strava rows that are the same run, then a clock that can be
+ * believed over one left running — so pasting the same tour again shows the
+ * corrected copy rather than the older absurd one — then known ascent, then
+ * more points.
  */
 export function preferredRoute(a, b) {
   const rank = [
     (r) => SOURCE_RANK[r.source] || 0,
     (r) => (r.link ? 1 : 0),
     (r) => (r.sportGuessed ? 0 : 1),
+    (r) => (recordedSeconds(r) > 0 ? 1 : 0),
     (r) => (r.elevUp > 0 ? 1 : 0),
     (r) => r.points || 0,
   ];

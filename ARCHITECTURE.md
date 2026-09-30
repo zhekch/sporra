@@ -679,8 +679,9 @@ which is what makes a browser-side fetch possible at all.
 Two calls: the tour (name, date, sport, distance) and its coordinates, which
 come back as `{lat, lng, alt, t}` with `t` in milliseconds from the start — so
 the tour's own date turns the list into real timestamps, and the usual cell
-folding and visit counting apply unchanged. **No GPX download is involved**;
-this is the same data one step earlier. Private tours need the share link (the
+folding and visit counting apply unchanged. When that clock is one gap rather
+than a ride, `time_in_motion` — the duration the tour page shows — replaces
+it. **No GPX download is involved**; this is the same data one step earlier. Private tours need the share link (the
 one carrying `share_token`); without it Komoot answers 403.
 
 Being undocumented, that API can change without notice — everything fails with
@@ -7310,11 +7311,18 @@ stationary. The floor sits ten times below the slowest genuine outing on the sam
 map (a 1.2 km/h walk with stops) and seven times above the worst glitch, so
 neither side is anywhere near it.
 
-At import, Komoot's own `duration` is now preferred over the last coordinate's
-offset. The duration is the tour's answer to the question; the last coordinate is
-a guess at it, and one stray fix — a phone waking up days later — ruins the
-guess. Nothing rewrites what is already stored, so the two bad rows keep their
-timestamps and are simply not counted.
+At import, a coordinate clock that fails the same speed test and has no pace
+of its own — the time outside its longest gap is shorter than a pause — is
+replaced by Komoot's `time_in_motion`. That is the number the tour page shows.
+`duration` is only the fallback, and only when it passes the test too: on the
+tours that prompted this it does not. One of them says 163 hours and 11.8 km,
+with every fix but the first sharing that timestamp, and 1 hour 49 minutes in
+motion. The points are spread across those 1 hour 49 minutes, because one
+timestamp has nothing to graph. A line whose coordinates already move at a
+believable pace is left on its own clock; a wall-clock `duration` that fails
+the test does not get to extend it. Nothing rewrites a route already stored.
+Pasting the tour again does, and the copy with a believable clock is the one
+that shows.
 
 ## The same ride, recorded twice
 
@@ -7381,7 +7389,9 @@ through rather than be guessed at.
 Below the source, deciding between two rows of the same app and between two
 unranked sources: a link, then a recorded activity over one this app guessed from
 the speed — which is what separates the two Strava rows that are the same run —
-then known ascent, then more points, then the older row. On a real map of 393
+then a clock that can be believed over one left running, then known ascent, then
+more points, then the older row. The clock is what makes pasting a corrected
+tour take the place of the copy whose recording was never stopped. On a real map of 393
 routes that chain folds 78 rows away: 46 Apple Health rows over Strava, 11 Komoot
 rows over Health.
 
