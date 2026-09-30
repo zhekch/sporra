@@ -816,8 +816,6 @@ export function thumbSegments(thumb) {
 // is the whole bug underneath.
 export const ROUTE_TILE_ZOOM = 18;
 
-const TILE_EPS = 1e-9;
-
 function tileXY(lng, lat, z) {
   const n = 2 ** z;
   const x = ((lng + 180) / 360) * n;
@@ -834,99 +832,195 @@ function lngLatAt(x, y, z) {
   return [lng, lat];
 }
 
-// The next integer strictly ahead of `a` in the direction of `b`, as a
-// fraction of the segment. `null` when this axis never crosses one.
-function nextGrid(a, b) {
-  const d = b - a;
-  if (!(Math.abs(d) > TILE_EPS)) return null;
-  const target = d > 0 ? Math.floor(a + TILE_EPS) + 1 : Math.ceil(a - TILE_EPS) - 1;
-  const t = (target - a) / d;
-  if (!(t > TILE_EPS) || t > 1) return null;
-  return { t, target };
-}
-
 const samePoint = (a, b) => Math.abs(a[0] - b[0]) <= 1e-12 && Math.abs(a[1] - b[1]) <= 1e-12;
 
+// Cells a straight segment enters after its first, at `zoom`, with the lng/lat
+// of each boundary it crosses. A straight line in Mercator never comes back
+// to a cell it has left; the return always happens at a later vertex.
+function cellsEntered(x0, y0, x1, y1, zoom) {
+  const out = [];
+  let ix = Math.floor(x0);
+  let iy = Math.floor(y0);
+  const ix1 = Math.floor(x1);
+  const iy1 = Math.floor(y1);
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const stepX = dx > 0 ? 1 : dx < 0 ? -1 : 0;
+  const stepY = dy > 0 ? 1 : dy < 0 ? -1 : 0;
+  const tDeltaX = dx === 0 ? Infinity : Math.abs(1 / dx);
+  const tDeltaY = dy === 0 ? Infinity : Math.abs(1 / dy);
+  let tMaxX = dx === 0 ? Infinity : dx > 0 ? (ix + 1 - x0) / dx : (ix - x0) / dx;
+  let tMaxY = dy === 0 ? Infinity : dy > 0 ? (iy + 1 - y0) / dy : (iy - y0) / dy;
+  // Starting exactly on a grid line and heading towards decreasing cells:
+  // floor() is the cell on the far side of that line, and tMax comes out 0,
+  // so the walk would stop before recording the cell the line is actually in.
+  if (!(tMaxX > 1e-15) && stepX !== 0) {
+    ix += stepX;
+    tMaxX = tDeltaX;
+  }
+  if (!(tMaxY > 1e-15) && stepY !== 0) {
+    iy += stepY;
+    tMaxY = tDeltaY;
+  }
+  let guard = 0;
+  while ((ix !== ix1 || iy !== iy1) && guard++ < 100000) {
+    let t;
+    if (tMaxX < tMaxY - 1e-15) {
+      t = tMaxX;
+      ix += stepX;
+      tMaxX += tDeltaX;
+    } else if (tMaxY < tMaxX - 1e-15) {
+      t = tMaxY;
+      iy += stepY;
+      tMaxY += tDeltaY;
+    } else {
+      t = tMaxX;
+      ix += stepX;
+      iy += stepY;
+      tMaxX += tDeltaX;
+      tMaxY += tDeltaY;
+    }
+    if (!(t > 0) || t > 1) break;
+    const [lng, lat] = lngLatAt(x0 + t * dx, y0 + t * dy, zoom);
+    out.push({ x: ix, y: iy, lng, lat, t });
+  }
+  return out;
+}
+
+// Where this line comes back into a tile it has already left, at any zoom up
+// to `zoom`. The point returned is where it *left* — the earlier of the two
+// crossings. Splitting there puts each visit in its own feature. `null` when
+// the line never comes back, which is every road that merely crosses a tile.
+function firstReturn(coords, zoom) {
+  const current = new Array(zoom + 1).fill(null);
+  const left = Array.from({ length: zoom + 1 }, () => new Set());
+  const leftAt = Array.from({ length: zoom + 1 }, () => new Map());
+
+  const enter = (x, y, lng, lat, index, t) => {
+    for (let z = zoom; z >= 1; z--) {
+      const shift = zoom - z;
+      const key = `${x >> shift},${y >> shift}`;
+      const prev = current[z];
+      if (prev === null) {
+        current[z] = key;
+        continue;
+      }
+      if (prev === key) continue;
+      // Leaving `prev` at this boundary. Coming back to it later is the bite.
+      left[z].add(prev);
+      leftAt[z].set(prev, { lng, lat, index, t });
+      if (left[z].has(key)) {
+        const at = leftAt[z].get(key);
+        const end = coords[coords.length - 1];
+        // Left at the first or last vertex: that "visit" has no interior, and
+        // splitting there would hand back the line unchanged.
+        if (!samePoint([at.lng, at.lat], coords[0]) && !samePoint([at.lng, at.lat], end)) return at;
+        left[z].delete(key);
+        leftAt[z].delete(key);
+      }
+      current[z] = key;
+    }
+    return null;
+  };
+
+  const [sx, sy] = tileXY(coords[0][0], coords[0][1], zoom);
+  // A line that *starts* on a grid line belongs to the cell it is about to
+  // travel through. floor() of the boundary itself lands in the cell just
+  // left, and the first real step then looks like a return.
+  let hx = sx;
+  let hy = sy;
+  if (coords.length > 1) {
+    const [nx, ny] = tileXY(coords[1][0], coords[1][1], zoom);
+    const vx = nx - sx;
+    const vy = ny - sy;
+    const len = Math.hypot(vx, vy) || 1;
+    const eps = 1e-6;
+    hx = sx + (vx / len) * eps;
+    hy = sy + (vy / len) * eps;
+  }
+  enter(Math.floor(hx), Math.floor(hy), coords[0][0], coords[0][1], 1, 0);
+
+  for (let i = 1; i < coords.length; i++) {
+    const a = coords[i - 1];
+    const b = coords[i];
+    if (Math.abs(a[0] - b[0]) > 180) continue;
+    const [x0, y0] = tileXY(a[0], a[1], zoom);
+    const [x1, y1] = tileXY(b[0], b[1], zoom);
+    for (const cell of cellsEntered(x0, y0, x1, y1, zoom)) {
+      const hit = enter(cell.x, cell.y, cell.lng, cell.lat, i, cell.t);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function cutPoint(coords, hit) {
+  const a = coords[hit.index - 1];
+  const b = coords[hit.index];
+  const t = Math.min(1, Math.max(0, hit.t));
+  const point = [hit.lng, hit.lat];
+  for (let k = 2; k < Math.max(a.length, b.length); k++) {
+    if (a[k] != null && b[k] != null) point[k] = a[k] + (b[k] - a[k]) * t;
+  }
+  return point;
+}
+
+// Two lines sharing `hit`, or null when the cut would not actually shorten either.
+function divideAt(coords, hit) {
+  const point = cutPoint(coords, hit);
+  const before = coords.slice(0, hit.index);
+  if (!samePoint(before[before.length - 1], point)) before.push(point);
+  const after = [point];
+  for (let i = hit.index; i < coords.length; i++) {
+    if (!samePoint(coords[i], point)) after.push(coords[i]);
+  }
+  if (before.length < 2 || after.length < 2) return null;
+  // The cut landed on an endpoint, so one half is the line we already had.
+  const whole = (line) => samePoint(line[0], coords[0]) && samePoint(line[line.length - 1], coords[coords.length - 1]);
+  if (whole(before) || whole(after)) return null;
+  return [before, after];
+}
+
 /**
- * One line, cut so each piece stays inside a single tile at `zoom`.
+ * One line, cut only where it comes back into a tile it has already left.
  *
- * The pieces share the vertex they were cut on, so the stroke is still
- * continuous — round caps meet there and it reads as one line. What they must
- * not share is a feature. Mapbox's line tessellator joins the two places a
- * *single* feature crosses out of a tile with a stroke along that tile's edge,
- * and the join is not in the coordinates: a vertex added to the same feature
- * does not stop it, and neither does a MultiLineString, which is still one
- * feature. Separate features cross each edge once, so there is nothing to join.
+ * Mapbox joins those two crossings with a stroke along the tile edge, and the
+ * join is not in the coordinates: a vertex added to the *same* feature does
+ * not stop it, and neither does a MultiLineString, which is still one feature.
+ * The two visits have to be two features. They share the point where the line
+ * left, so the stroke is continuous.
  *
- * A jump across the antimeridian is left alone. Walking it would cut the
- * segment on every tile of the planet, and it is not a ride this map stores.
+ * Cutting at *every* crossing was the first attempt. A valley of tiles then
+ * became hundreds of features per ride, most of them shorter than a pixel at
+ * the zoom where the whole ride is on screen, and simplification dropped those
+ * — the route drew as a dashed line, and pushing the collection stalled the
+ * map. A crossing you make once never closes, so those stay one feature.
+ *
+ * A jump across the antimeridian is left alone. Walking it would cross every
+ * tile of the planet, and it is not a ride this map stores.
  */
 export function splitLineAtTileBounds(coords, zoom = ROUTE_TILE_ZOOM) {
   if (!Array.isArray(coords) || coords.length < 2) return [];
-  const parts = [];
-  let part = [coords[0]];
-  const pushPart = () => {
-    if (part.length >= 2) parts.push(part);
-  };
-  for (let i = 1; i < coords.length; i++) {
-    const dest = coords[i];
-    const from0 = part[part.length - 1];
-    if (Math.abs(dest[0] - from0[0]) > 180) {
-      if (!samePoint(from0, dest)) part.push(dest);
-      continue;
-    }
-    let guard = 0;
-    let closed = false;
-    while (guard++ < 8192) {
-      const from = part[part.length - 1];
-      const [x0, y0] = tileXY(from[0], from[1], zoom);
-      const [x1, y1] = tileXY(dest[0], dest[1], zoom);
-      const hx = nextGrid(x0, x1);
-      const hy = nextGrid(y0, y1);
-      if (!hx && !hy) break;
-      const t = Math.min(hx ? hx.t : 2, hy ? hy.t : 2);
-      // The vertex itself is the crossing. It has to end the piece: the next
-      // segment may turn straight back into the tile it just left, and that
-      // there-and-back is the shape that gets closed.
-      if (t >= 1 - 1e-12) {
-        if (!samePoint(from, dest)) part.push(dest);
-        pushPart();
-        part = [dest];
-        closed = true;
-        break;
-      }
-      const x = hx && hx.t <= t + TILE_EPS ? hx.target : x0 + t * (x1 - x0);
-      const y = hy && hy.t <= t + TILE_EPS ? hy.target : y0 + t * (y1 - y0);
-      const [lng, lat] = lngLatAt(x, y, zoom);
-      const cut = [lng, lat];
-      for (let k = 2; k < Math.max(from.length, dest.length); k++) {
-        const av = from[k];
-        const bv = dest[k];
-        if (av != null && bv != null) cut[k] = av + (bv - av) * t;
-      }
-      if (samePoint(from, cut)) {
-        if (!samePoint(from, dest)) part.push(dest);
-        closed = true;
-        break;
-      }
-      part.push(cut);
-      pushPart();
-      part = [cut];
-    }
-    if (!closed && !samePoint(part[part.length - 1], dest)) part.push(dest);
+  const pending = [coords];
+  const done = [];
+  let guard = 0;
+  while (pending.length && guard++ < 10000) {
+    const line = pending.pop();
+    const hit = firstReturn(line, zoom);
+    const parts = hit && divideAt(line, hit);
+    if (!parts) done.push(line);
+    else pending.push(parts[1], parts[0]);
   }
-  pushPart();
-  return parts;
+  return done;
 }
 
 /**
- * Routes → one Feature per tile a segment crosses, all of them still carrying
- * the route's own id.
+ * Routes → a FeatureCollection. One feature per route, and a second wherever
+ * that route comes back into a tile it has left — see `splitLineAtTileBounds`.
  *
- * `promoteId` makes that id the feature id, and feature state is stored by
- * it, so selection, hover and the metric ramp light every piece together.
- * One feature per route is what made a track that crosses a tile edge and
- * comes back draw the edge as well — see `splitLineAtTileBounds`.
+ * Every piece carries the route's own id. `promoteId` makes that the feature
+ * id, and feature state is stored by it, so selection, hover and the metric
+ * ramp light every piece together.
  */
 export function routesToFC(routes) {
   const features = [];

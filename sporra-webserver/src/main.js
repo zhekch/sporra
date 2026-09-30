@@ -11122,9 +11122,9 @@ function installGrid() {
   const beforeRoutes = engine === MAPBOX ? ROUTE_SLOT_ID : beforeLabels;
   // `tolerance` rather than the 0.375 px default, and it is the one thing
   // standing between the glow and a row of spikes — see ROUTE_SIMPLIFY_PX.
-  // `maxzoom` is the grid `routesToFC` cuts on. A finer tile would be a new
-  // edge one piece of a route can leave and come back to, which Mapbox then
-  // draws as a stroke along that edge.
+  // `maxzoom` is the finest grid `routesToFC` watches for a return. A finer
+  // tile would be a new edge one piece can leave and come back to, which
+  // Mapbox then draws as a stroke along that edge.
   map.addSource('routes', {
     type: 'geojson', data: EMPTY, promoteId: 'id', tolerance: ROUTE_SIMPLIFY_PX,
     maxzoom: ROUTE_TILE_ZOOM,

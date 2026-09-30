@@ -1,10 +1,10 @@
 // A route that leaves a map tile and comes back must not be one feature.
 //
-// Mapbox joins the two crossings with a stroke along the tile edge, and that
-// stroke is not in the coordinates — it appears when one feature is clipped to
-// the tile twice. `routesToFC` cuts the line on the source's own tile grid so
-// each piece crosses an edge at most at its ends. The pieces still share the
-// route's id, which is what feature state addresses.
+// Mapbox joins the two crossings with a stroke along the tile edge. Cutting
+// the line at every crossing stops that, and also dashes the route: the short
+// pieces fall under the source's simplification and never get drawn. The cut
+// is only the return. A line that crosses a tile once stays one feature, which
+// is what keeps a few hundred routes from becoming tens of thousands.
 //
 //   node scripts/test/route-tiles.mjs
 
@@ -32,44 +32,24 @@ const latOfY = (y, z = ROUTE_TILE_ZOOM) => {
   return (Math.atan(Math.sinh(n)) * 180) / Math.PI;
 };
 
-// Points that merely sit on a grid line belong to both tiles. What a piece
-// must not do is have its interior in two of them.
-const interiorCells = (line) => {
-  const xs = new Set();
-  const ys = new Set();
-  for (const [lng, lat] of line) {
-    const [x, y] = tileXY(lng, lat);
-    if (Math.abs(x - Math.round(x)) > 1e-6) xs.add(Math.floor(x));
-    if (Math.abs(y - Math.round(y)) > 1e-6) ys.add(Math.floor(y));
-  }
-  return [xs.size, ys.size];
-};
-
-const onOneTile = (line) => {
-  const [nx, ny] = interiorCells(line);
-  return nx <= 1 && ny <= 1;
-};
-
 // The edge the bite was drawn on: z11 row 722, which is an integer row at
 // every finer zoom too. A few hundred metres south of it and back is the shape.
 const EDGE_Y = 722 * 2 ** (ROUTE_TILE_ZOOM - 11);
 const edgeLat = latOfY(EDGE_Y);
+// Both ends come back into the *same* tile. A return one column over is a
+// different tile, and that one does not close.
 const wiggle = [
-  [7.403, edgeLat + 0.004],
-  [7.395, edgeLat - 0.005],
-  [7.379, edgeLat + 0.004],
+  [7.40, edgeLat + 0.004],
+  [7.40, edgeLat - 0.005],
+  [7.401, edgeLat + 0.004],
 ];
 
 const pieces = splitLineAtTileBounds(wiggle);
 check(pieces.length > 1, 'a there-and-back across a tile edge is more than one piece', `${pieces.length}`);
-check(pieces.every(onOneTile), 'and no piece has its interior in two tiles');
+check(pieces.length <= 4, 'and only the return is cut, not every tile it crosses', `${pieces.length}`);
 
 const south = pieces.find((line) => line.some((p) => p[1] < edgeLat - 1e-8));
 check(!!south, 'the southern tip is still on a piece');
-check(
-  south && south[0][1] < edgeLat + 1e-5 && south[south.length - 1][1] < edgeLat + 1e-5,
-  'that piece meets the edge at both ends instead of running along it',
-);
 
 // The chord would be a long segment that stays on the edge latitude and skips
 // the tip. Nothing we emit is that segment.
@@ -105,13 +85,13 @@ check(
 const again = pieces.flatMap((line) => splitLineAtTileBounds(line));
 eq(again.length, pieces.length, 'cutting an already-cut line does not cut it again');
 
-// A straight diagonal crosses several tiles and still chains end to end.
-const diagonal = splitLineAtTileBounds([[7.40, 46.78], [7.42, 46.80]]);
-check(diagonal.length > 2, 'a straight run across several tiles is several pieces', `${diagonal.length}`);
-check(diagonal.every(onOneTile), 'each of them inside one tile');
+// A straight run crosses dozens of tiles and never comes back to one. Cutting
+// each of those was the dash, and the stall.
+const diagonal = splitLineAtTileBounds([[7.40, 46.78], [7.55, 46.90]]);
+eq(diagonal.length, 1, 'a straight run across many tiles stays one piece');
 eq(diagonal[0][0][0], 7.40, 'it still starts where the line started');
 const last = diagonal[diagonal.length - 1];
-eq(last[last.length - 1][1], 46.80, 'and ends where the line ended');
+eq(last[last.length - 1][1], 46.90, 'and ends where the line ended');
 
 // A line that never meets a grid line stays one piece, including its third
 // coordinate.
@@ -128,11 +108,11 @@ const fc = routesToFC([
   { id: 5, name: 'Thun', sport: 'Mountain cycling', geom: [wiggle, [[7.5, 46.7], [7.51, 46.71]]] },
   { id: 9, name: 'empty', sport: '', geom: [] },
 ]);
-check(fc.features.length > 2, 'the wiggle and the second segment both become features', `${fc.features.length}`);
+check(fc.features.length > 1 && fc.features.length <= 6, 'the return is cut and the second segment stays whole', `${fc.features.length}`);
 check(fc.features.every((f) => f.properties.id === 5 && f.id === 5), 'every piece keeps the route id');
 check(
-  fc.features.every((f) => f.geometry.type === 'LineString' && onOneTile(f.geometry.coordinates)),
-  'and each feature is one line on one tile',
+  fc.features.every((f) => f.geometry.type === 'LineString'),
+  'and each feature is one line',
 );
 eq(fc.features[0].properties.sport, 'Mountain cycling', 'the activity still rides on the feature');
 check(

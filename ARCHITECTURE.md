@@ -4928,18 +4928,23 @@ constant, and in Mapbox GL JS 3.31 as well as 3.28. The flat maps never draw
 it. The tiled coordinates do not contain it either. The line tessellator joins
 the two crossings of *one feature* with the edge it clipped that feature to.
 
-So a route is no longer one feature. `splitLineAtTileBounds` cuts every
-segment where it crosses the integer grid at `ROUTE_TILE_ZOOM` (18, the
-source's `maxzoom` — the map stops at 17.5 and still asks for these tiles),
-and `routesToFC` emits each piece as its own LineString. The pieces share the
-cut vertex, so the stroke stays continuous, and they share the route's id, so
-`promoteId` and feature state still light the whole line: selection, hover and
-the metric ramp are stored by that id. A vertex inserted into the *same*
-feature does not do this, and neither does a MultiLineString, which Mapbox
-still tiles as one feature. Coarser edges are a subset of the z18 grid and
-anything past `maxzoom` is those tiles drawn larger, so one cut covers every
-edge the source will clip to. The flat maps take the same features; they have
-nothing to join, and the line looks as it did.
+`splitLineAtTileBounds` cuts a segment only where it **comes back** into a
+tile it has already left, at any zoom up to `ROUTE_TILE_ZOOM` (18, the
+source's `maxzoom` — the map stops at 17.5 and still asks for these tiles).
+`routesToFC` emits each visit as its own LineString. The pieces share the
+point where the line left, so the stroke stays continuous, and they share the
+route's id, so `promoteId` and feature state still light the whole line:
+selection, hover and the metric ramp are stored by that id. A vertex inserted
+into the *same* feature does not do this, and neither does a MultiLineString,
+which Mapbox still tiles as one feature.
+
+Cutting at every crossing does stop the bite, and it is the wrong cut. A ride
+then becomes a feature per tile — hundreds of them, most shorter than a pixel
+once the whole ride is on screen. The source's own simplification drops those
+pieces, so the route draws as a dashed line, and handing the map tens of
+thousands of features stalls it. A tile crossed once never closes, so it stays
+part of the same feature. A road that does not loop back is one feature, as
+it was.
 
 **And the glow is the hover state.** `setHoveredRoute` writes one feature state,
 `hov`, and both of the glow's paint expressions already branch on it —
