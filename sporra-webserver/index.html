@@ -540,6 +540,10 @@
         <button data-i18n="route-metric-speed.speed" type="button" id="route-metric-speed">Speed</button>
         <button data-i18n="route-metric-elev.elevation" type="button" id="route-metric-elev">Elevation</button>
       </div>
+      <!-- The glass is on this sheet, not on #route-info. The pills are in
+           that box and stick out above this one; a backdrop-filter on the
+           shared parent would stop them blurring the map. -->
+      <div class="route-info-card">
       <div class="cell-info-head">
         <div>
           <div data-i18n="route-info-name.route" class="cell-info-title" id="route-info-name">Route</div>
@@ -571,6 +575,7 @@
       <div class="route-info-actions">
         <button data-i18n="route-zoom.zoom" type="button" class="modal-btn" id="route-zoom">Zoom</button>
         <button data-i18n="route-more.more-info" type="button" class="modal-btn primary" id="route-more">More info</button>
+      </div>
       </div>
     </div>
 

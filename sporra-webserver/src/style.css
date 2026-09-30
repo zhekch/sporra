@@ -300,9 +300,10 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   -webkit-backdrop-filter: blur(26px);
   backdrop-filter: blur(26px);
   border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow:
-    0 16px 44px rgba(0, 0, 0, 0.38),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  /* The border is the whole edge. A highlight drawn along the top only sat on
+     that side of it, so the panel read as a heavier rule there than on the
+     other three. The drop shadow is what lifts it. */
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.38);
   color: rgba(255, 255, 255, 0.92);
   transform-origin: top left;
   animation: hud-pop 0.22s ease;
@@ -1130,9 +1131,8 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   -webkit-backdrop-filter: blur(26px);
   backdrop-filter: blur(26px);
   border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow:
-    0 16px 44px rgba(0, 0, 0, 0.38),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  /* Same even edge as the edit panel above. */
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.38);
   color: rgba(255, 255, 255, 0.92);
   transform-origin: bottom left;
   animation: hud-pop 0.2s ease;
@@ -1909,9 +1909,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   -webkit-backdrop-filter: blur(26px);
   backdrop-filter: blur(26px);
   border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow:
-    0 16px 44px rgba(0, 0, 0, 0.38),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.38);
   color: rgba(255, 255, 255, 0.92);
   /* Selectable, unlike the rest of the map chrome. The header carries the cell's
      coordinates and they are worth copying — and the alternative, a copy button
@@ -1925,6 +1923,30 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 
 .cell-info[hidden] {
   display: none;
+}
+
+/* The route card's glass is the sheet, not this box. The Speed and Elevation
+   pills are children of it and stand above the sheet; a backdrop-filter here
+   would be a backdrop root, and those pills would blur the empty parent
+   instead of the map — a flat veil with the route sharp under the word. */
+#route-info {
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.route-info-card {
+  box-sizing: border-box;
+  padding: 14px 16px 12px;
+  border-radius: 24px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(26px);
+  backdrop-filter: blur(26px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.38);
 }
 
 @keyframes card-rise {
@@ -2005,11 +2027,12 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
    line rather than describe it. Anchored to the card so they follow it when
    the graph appears and the card grows.
 
-   Two chips, not one tray. Opaque, with a plain border: a transparent one
-   let the route show through the word. On a phone the location button is
-   lifted into this same strip, and a row that ran to the card's right edge
-   landed on top of it. That inset lives in the phone layout, where the
-   button actually stands here. */
+   The card's own glass, not a solid chip. A flat fill was a second material
+   sitting on the one it controls, and the veil is dense enough that the route
+   does not read through the word. On a phone the location button is lifted
+   into this same strip, and a row that ran to the card's right edge landed on
+   top of it. That inset lives in the phone layout, where the button actually
+   stands here. */
 .route-metric-pills {
   position: absolute;
   left: 0;
@@ -2029,14 +2052,21 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   margin: 0;
   padding: 7px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  background: #2c2c2a;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(26px);
+  backdrop-filter: blur(26px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   color: rgba(255, 255, 255, 0.75);
   font: inherit;
   font-size: 12.5px;
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
+}
+
+.route-metric-pills button:hover:not(:disabled) {
+  background: var(--glass-hover);
 }
 
 .route-metric-pills button.active {
@@ -2696,9 +2726,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   -webkit-backdrop-filter: blur(30px);
   backdrop-filter: blur(30px);
   border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow:
-    0 24px 60px rgba(0, 0, 0, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
   color: rgba(255, 255, 255, 0.92);
   animation: hud-pop 0.22s ease;
 }
@@ -4800,9 +4828,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   -webkit-backdrop-filter: blur(30px);
   backdrop-filter: blur(30px);
   border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow:
-    0 24px 60px rgba(0, 0, 0, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
   color: rgba(255, 255, 255, 0.92);
   animation: hud-pop 0.24s ease;
 }
@@ -4979,9 +5005,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 :root[data-theme='light'] .layers-menu {
   background: rgba(248, 250, 252, 0.7);
   border-color: rgba(15, 23, 42, 0.16);
-  box-shadow:
-    0 16px 44px rgba(15, 23, 42, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  box-shadow: 0 16px 44px rgba(15, 23, 42, 0.24);
   color: rgba(15, 23, 42, 0.94);
 }
 
@@ -5141,9 +5165,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 [data-theme='light'] .modal-card {
   background: rgba(248, 250, 252, 0.92);
   border-color: rgba(15, 23, 42, 0.16);
-  box-shadow:
-    0 16px 44px rgba(15, 23, 42, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  box-shadow: 0 16px 44px rgba(15, 23, 42, 0.24);
   color: rgba(15, 23, 42, 0.94);
 }
 
@@ -5153,6 +5175,13 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
    and a translucent sheet over a dimmed map is neither one thing nor the other. */
 [data-theme='light'] .cell-info {
   background: rgba(248, 250, 252, 0.7);
+}
+
+[data-theme='light'] .route-info-card {
+  background: rgba(248, 250, 252, 0.7);
+  border-color: rgba(15, 23, 42, 0.16);
+  box-shadow: 0 16px 44px rgba(15, 23, 42, 0.24);
+  color: rgba(15, 23, 42, 0.94);
 }
 
 [data-theme='light'] .cell-info-coord,
@@ -5171,14 +5200,17 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 }
 
 [data-theme='light'] .route-metric-pills button {
-  background: #f4f6f4;
+  background: rgba(248, 250, 252, 0.7);
   color: rgba(15, 23, 42, 0.72);
-  border-color: rgba(15, 23, 42, 0.28);
-  box-shadow: none;
+  border-color: rgba(15, 23, 42, 0.16);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.2);
+}
+
+[data-theme='light'] .route-metric-pills button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.9);
 }
 
 [data-theme='light'] .route-metric-pills button.active {
-  background: #f4f6f4;
   color: #0f172a;
   border-color: #0f172a;
 }
@@ -5508,9 +5540,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 [data-theme='light'] .auth-card {
   background: rgba(248, 250, 252, 0.92);
   border-color: rgba(15, 23, 42, 0.16);
-  box-shadow:
-    0 24px 60px rgba(15, 23, 42, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
   color: rgba(15, 23, 42, 0.94);
 }
 
@@ -5987,9 +6017,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   -webkit-backdrop-filter: blur(26px);
   backdrop-filter: blur(26px);
   border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow:
-    0 16px 44px rgba(0, 0, 0, 0.38),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.38);
   color: rgba(255, 255, 255, 0.92);
 }
 
@@ -6521,9 +6549,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 [data-theme='light'] :is(.maplibregl-popup-content, .mapboxgl-popup-content) {
   background: rgba(248, 250, 252, 0.78);
   border-color: rgba(15, 23, 42, 0.16);
-  box-shadow:
-    0 16px 44px rgba(15, 23, 42, 0.22),
-    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  box-shadow: 0 16px 44px rgba(15, 23, 42, 0.22);
   color: rgba(15, 23, 42, 0.94);
 }
 
@@ -7495,9 +7521,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   -webkit-backdrop-filter: blur(26px);
   backdrop-filter: blur(26px);
   border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow:
-    0 24px 60px rgba(0, 0, 0, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
   overflow: hidden;
   animation: search-in 0.16s ease;
 }
@@ -8683,9 +8707,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 [data-chrome='light'] .layers-menu {
   background: rgba(248, 250, 252, 0.9);
   border-color: rgba(15, 23, 42, 0.16);
-  box-shadow:
-    0 16px 44px rgba(15, 23, 42, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  box-shadow: 0 16px 44px rgba(15, 23, 42, 0.24);
   color: rgba(15, 23, 42, 0.94);
 }
 

@@ -2065,10 +2065,13 @@ tap that lands on several still asks, via the stack menu below; picking a row
 isolates that one and leaves the menu up.
 
 Above the card, two chips, **Speed** and **Elevation**, recolour the open route.
-Each one is opaque, with a plain border, so the route cannot show through the
-word. On a phone the location button is lifted into that strip, so the chips
-stop short of it; on a wide screen they take the width of the card, where the
-location button is in the opposite corner.
+They are the card's own glass — the same veil and the same blur — so the route
+does not read through the word and the chips are not a second material sitting
+on the card. The glass of that card is the inner sheet, not the box the chips
+are anchored to: a blur on the shared parent would be a backdrop root, and the
+chips would blur nothing. On a phone the location button is lifted into that
+strip, so the chips stop short of it; on a wide screen they take the width of
+the card, where the location button is in the opposite corner.
 Speed runs red where it was slow and green where it was fast; elevation runs
 green where it was low and red where it was high. The scale is this activity's
 own. Speed drops the slowest and fastest twentieth (`metricDomain` in
@@ -2104,8 +2107,10 @@ did. A press on it, or on the line, drops a dot in both places and a small
 label: speed, time since the start, and elevation, whichever this activity has
 and whichever is not zero. Opening the card does not drop the dot; the first
 press does. Switching pills keeps the place. A point that has left the map
-still in view — off the edge, or down behind the card — is put back in the
-middle of what is left, and the zoom is left alone. The metric line is not a
+still in view — off the edge, or down behind the card — is eased back into the
+middle of what is left (`SCRUB_EASE_MS`). Each step of a drag starts that glide
+again from where the camera already is, so it follows rather than cutting, and
+the zoom is left alone. The metric line is not a
 layer a tap asks, so a pile is still a pile: more than one route under the
 cursor opens the menu rather than scrubbing.
 
