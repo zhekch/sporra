@@ -19,6 +19,7 @@ import { t } from './i18n.js';
 const dayFmt = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 const NS = 'http://www.w3.org/2000/svg';
 // Tall enough to read a climb, short enough that the card still fits over a phone.
+// The high, the low and the clock sit outside this, in the rows around it.
 const GRAPH_H = 72;
 
 const day = (sec) => (sec ? dayFmt.format(new Date(sec * 1000)) : null);
@@ -53,7 +54,42 @@ function graphValue(samples, metric, index) {
   return null;
 }
 
-function runsOf(samples, metric) {
+// The same rounding the dot on the map uses, so the axis and the label agree.
+function formatSpeedKmh(ms) {
+  const kmh = ms * 3.6;
+  const text = kmh < 10 ? kmh.toFixed(1) : String(Math.round(kmh));
+  return `${text} km/h`;
+}
+
+function formatMetres(m) {
+  const rounded = Math.abs(m) >= 10 ? Math.round(m) : Math.round(m * 10) / 10;
+  return `${rounded} m`;
+}
+
+// Minutes and hours only. A ride of a few seconds still reads as a minute,
+// because "0 min" at both ends would say the clock never moved.
+function formatAxisTime(sec) {
+  const totalMin = Math.max(0, Math.round(sec / 60));
+  const shown = sec > 0 && totalMin === 0 ? 1 : totalMin;
+  const h = Math.floor(shown / 60);
+  const m = shown % 60;
+  if (h && m) return `${h} h ${m} min`;
+  if (h) return `${h} h`;
+  return `${shown} min`;
+}
+
+function readout(className, values) {
+  const row = document.createElement('div');
+  row.className = `route-metric-readout ${className}`;
+  for (const value of values) {
+    const span = document.createElement('span');
+    span.textContent = value;
+    row.append(span);
+  }
+  return row;
+}
+
+function runsOf(samples, metric, xOf) {
   const runs = [];
   let run = [];
   const cut = () => {
@@ -64,14 +100,89 @@ function runsOf(samples, metric) {
     const y = graphValue(samples, metric, i);
     const prev = samples[i - 1];
     if (prev && prev.seg !== samples[i].seg) cut();
-    if (y == null) {
+    const x = xOf(samples[i]);
+    if (y == null || x == null) {
       cut();
       continue;
     }
-    run.push({ i, x: samples[i].distM, y });
+    run.push({ i, x, y });
   }
   cut();
   return runs;
+}
+
+/**
+ * Draw one activity's graph into `graphEl`: the high value, the line, the low
+ * value, and — when the activity has a clock — the time since the start.
+ *
+ * @returns {{dot:SVGCircleElement, graphMap:object}|null}
+ */
+export function fillMetricGraph(graphEl, samples, metric) {
+  graphEl.replaceChildren();
+  if (!metric) return null;
+  // Time, when the activity has one: the numbers under the line are minutes
+  // and hours, and the line has to be drawn against the same clock or a
+  // pause would sit in the wrong place. Distance is the fallback for a
+  // trace that kept heights and lost its times.
+  const endSec = samples.reduce((m, s) => (s.elapsed > m ? s.elapsed : m), 0);
+  const byTime = endSec > 0;
+  const xOf = (s) => {
+    if (!s) return null;
+    if (byTime) return s.elapsed == null ? null : s.elapsed;
+    return Number.isFinite(s.distM) ? s.distM : null;
+  };
+  const runs = runsOf(samples, metric, xOf);
+  const ys = runs.flat().map((p) => p.y);
+  if (!ys.length) return null;
+  graphEl.setAttribute(
+    'aria-label',
+    metric === 'elev' ? t('route-metric-graph.elevation') : t('route-metric-graph.speed'),
+  );
+  const w = Math.max(1, graphEl.clientWidth);
+  const h = GRAPH_H;
+  const padX = 2;
+  const padY = 6;
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const spanY = maxY - minY || 1;
+  const maxX = byTime ? endSec : samples[samples.length - 1]?.distM || 1;
+  const spanX = maxX || 1;
+  const X = (x) => padX + (x / spanX) * (w - padX * 2);
+  const Y = (y) => padY + (1 - (y - minY) / spanY) * (h - padY * 2);
+  const value = metric === 'elev' ? formatMetres : formatSpeedKmh;
+  const graphMap = {
+    X,
+    Y,
+    xOf,
+    invert: (px) => ((px - padX) / (w - padX * 2)) * spanX,
+  };
+
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.setAttribute('width', String(w));
+  svg.setAttribute('height', String(h));
+  const base = h - 1;
+  for (const run of runs) {
+    if (run.length < 2) continue;
+    const d = run.map((p, n) => `${n ? 'L' : 'M'}${X(p.x).toFixed(1)} ${Y(p.y).toFixed(1)}`).join(' ');
+    const fill = document.createElementNS(NS, 'path');
+    fill.setAttribute('d', `${d} L${X(run[run.length - 1].x).toFixed(1)} ${base} L${X(run[0].x).toFixed(1)} ${base} Z`);
+    fill.setAttribute('class', 'route-metric-fill');
+    const line = document.createElementNS(NS, 'path');
+    line.setAttribute('d', d);
+    line.setAttribute('class', 'route-metric-line');
+    svg.append(fill, line);
+  }
+  const dot = document.createElementNS(NS, 'circle');
+  dot.setAttribute('r', '4.5');
+  dot.setAttribute('class', 'route-metric-dot');
+  dot.style.display = 'none';
+  svg.append(dot);
+  graphEl.append(readout('is-max', [value(maxY)]));
+  graphEl.append(svg);
+  graphEl.append(readout('is-min', [value(minY)]));
+  if (byTime) graphEl.append(readout('is-time', [formatAxisTime(0), formatAxisTime(endSec)]));
+  return { dot, graphMap };
 }
 
 /**
@@ -138,81 +249,48 @@ export function mountRouteInfo({ onClose, onZoom, onMore, onMetric, onScrub } = 
   function placeDot() {
     if (!dot || !graphMap) return;
     const y = graphValue(samples, metric, scrub);
-    if (scrub < 0 || y == null) {
+    const x = scrub < 0 ? null : graphMap.xOf(samples[scrub]);
+    if (y == null || x == null) {
       dot.style.display = 'none';
       return;
     }
     dot.style.display = '';
-    dot.setAttribute('cx', String(graphMap.X(samples[scrub].distM)));
+    dot.setAttribute('cx', String(graphMap.X(x)));
     dot.setAttribute('cy', String(graphMap.Y(y)));
   }
 
   function drawGraph() {
-    graphEl.replaceChildren();
-    dot = null;
-    graphMap = null;
+    // Unhide before measuring. A hidden graph has no width, and the line
+    // would be drawn into a box of nothing.
     if (!metric) {
+      graphEl.replaceChildren();
       graphEl.hidden = true;
-      return;
-    }
-    const runs = runsOf(samples, metric);
-    const ys = runs.flat().map((p) => p.y);
-    if (!ys.length) {
-      graphEl.hidden = true;
+      dot = null;
+      graphMap = null;
       return;
     }
     graphEl.hidden = false;
-    graphEl.setAttribute(
-      'aria-label',
-      metric === 'elev' ? t('route-metric-graph.elevation') : t('route-metric-graph.speed'),
-    );
-    const w = Math.max(1, graphEl.clientWidth);
-    const h = GRAPH_H;
-    const padX = 3;
-    const padY = 7;
-    const maxX = samples[samples.length - 1]?.distM || 1;
-    const minY = Math.min(...ys);
-    const spanY = Math.max(...ys) - minY || 1;
-    const X = (x) => padX + (x / maxX) * (w - padX * 2);
-    const Y = (y) => padY + (1 - (y - minY) / spanY) * (h - padY * 2);
-    graphMap = { X, Y };
-
-    const svg = document.createElementNS(NS, 'svg');
-    svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
-    svg.setAttribute('width', String(w));
-    svg.setAttribute('height', String(h));
-    const base = h - 1;
-    for (const run of runs) {
-      if (run.length < 2) continue;
-      const d = run.map((p, n) => `${n ? 'L' : 'M'}${X(p.x).toFixed(1)} ${Y(p.y).toFixed(1)}`).join(' ');
-      const fill = document.createElementNS(NS, 'path');
-      fill.setAttribute('d', `${d} L${X(run[run.length - 1].x).toFixed(1)} ${base} L${X(run[0].x).toFixed(1)} ${base} Z`);
-      fill.setAttribute('class', 'route-metric-fill');
-      const line = document.createElementNS(NS, 'path');
-      line.setAttribute('d', d);
-      line.setAttribute('class', 'route-metric-line');
-      svg.append(fill, line);
-    }
-    dot = document.createElementNS(NS, 'circle');
-    dot.setAttribute('r', '4.5');
-    dot.setAttribute('class', 'route-metric-dot');
-    svg.append(dot);
-    graphEl.append(svg);
-    placeDot();
+    const painted = fillMetricGraph(graphEl, samples, metric);
+    dot = painted?.dot ?? null;
+    graphMap = painted?.graphMap ?? null;
+    graphEl.hidden = !painted;
+    if (painted) placeDot();
   }
 
   function indexAt(clientX) {
     const svg = graphEl.querySelector('svg');
-    if (!svg || !samples.length) return -1;
+    if (!svg || !graphMap || !samples.length) return -1;
     const rect = svg.getBoundingClientRect();
-    if (!rect.width) return -1;
-    const u = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-    const maxX = samples[samples.length - 1].distM || 1;
-    const dist = u * maxX;
-    let best = 0;
+    const width = Number(svg.getAttribute('width'));
+    if (!rect.width || !width) return -1;
+    const px = ((clientX - rect.left) / rect.width) * width;
+    const x = graphMap.invert(px);
+    let best = -1;
     let bestD = Infinity;
     for (let i = 0; i < samples.length; i++) {
-      const d = Math.abs(samples[i].distM - dist);
+      const sx = graphMap.xOf(samples[i]);
+      if (sx == null) continue;
+      const d = Math.abs(sx - x);
       if (d < bestD) {
         bestD = d;
         best = i;
