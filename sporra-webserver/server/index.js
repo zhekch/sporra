@@ -103,7 +103,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.108.0';
+export const SERVER_VERSION = '0.108.1';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -219,7 +219,7 @@ import { userMessage } from './user-error.js';
 // so a Strava ride and an imported GPX are keyed and simplified identically.
 // Their *names* are left blank: the place-name dataset is a 2 MB browser chunk,
 // and POST /api/routes/places already exists to fill them in from the page.
-import { alignTrace, buildRoutes, guessSport, canonicalSport, routeThumb, splitOnGaps, trackName } from '../src/routes.js';
+import { alignTrace, buildRoutes, guessSport, canonicalSport, routeThumb, splitOnGaps, trackName, traceSupersedes } from '../src/routes.js';
 import { isKomootTourUrl } from '../src/komoot.js';
 // Everything above is about getting data *in*. This is the one thing that
 // copies it back out again, on a schedule, without being asked.
@@ -658,8 +658,13 @@ const q = {
   // dozens, next to a cells read that walks tens of thousands, so the honest
   // answer costs less than the shortcut would save. `geom` is deliberately not
   // in it: it cannot change without changing `key`, which changes the count.
+  // `trace` can. A workout already stored may come back with the times or the
+  // heights it was missing, and nothing else about the row moves — so the map
+  // would be told the old card was still current and the climb would never
+  // appear. The length is enough to see that arrival.
   routeEdits: db.prepare(`
-    SELECT id, name, place, sport, sport_guessed, source, elev_up, link, LENGTH(thumb) AS thumb
+    SELECT id, name, place, sport, sport_guessed, source, elev_up, link, LENGTH(thumb) AS thumb,
+           LENGTH(trace) AS trace
     FROM routes WHERE user_id = ? ORDER BY id
   `),
   hasCell: db.prepare('SELECT 1 FROM cell_sources WHERE user_id = ? AND cell_id = ? LIMIT 1'),
@@ -807,6 +812,10 @@ const q = {
   // ON CONFLICT DO UPDATE always reports a change, so "was this new?" has to be
   // asked before the insert rather than read off its result.
   hasRoute: db.prepare('SELECT 1 FROM routes WHERE user_id = ? AND key = ? LIMIT 1'),
+  // The trace backfill on a workout the server already knows. The key is the
+  // line, so this is that route and not a search.
+  routeByKey: db.prepare('SELECT id, trace FROM routes WHERE user_id = ? AND key = ?'),
+  setRouteTrace: db.prepare('UPDATE routes SET trace = ? WHERE user_id = ? AND id = ?'),
   // Read whole (geometry included) before a delete, so the answer can carry
   // the row away with it — see POST /api/routes/delete.
   routeById: db.prepare('SELECT * FROM routes WHERE user_id = ? AND id = ?'),
@@ -1612,6 +1621,38 @@ function traceJson(geom, raw) {
   return aligned ? JSON.stringify(aligned) : '';
 }
 
+// A workout the server has already counted can still arrive again, carrying
+// the times or the heights it was stored without. The cells stay put — adding
+// them twice is a place visited twice — and the line is replaced only where
+// the new trace actually says more.
+function backfillHealthTrace(user, w) {
+  const built = buildRoutes([w.track], { source: HEALTH_SOURCE });
+  for (const r of built) {
+    const geom = cleanGeom(r.geom);
+    if (!geom) continue;
+    const incoming = traceJson(geom, r.trace);
+    if (!incoming) continue;
+    const row = q.routeByKey.get(user.id, String(r.key).slice(0, 64));
+    if (!row) continue;
+    let stored = null;
+    if (row.trace) {
+      try {
+        stored = JSON.parse(row.trace);
+      } catch {
+        stored = null;
+      }
+    }
+    let next;
+    try {
+      next = JSON.parse(incoming);
+    } catch {
+      continue;
+    }
+    if (!traceSupersedes(stored, next)) continue;
+    q.setRouteTrace.run(incoming, user.id, row.id);
+  }
+}
+
 function routeBounds(geom) {
   let minLng = Infinity;
   let minLat = Infinity;
@@ -2032,10 +2073,15 @@ function healthWorkout(w) {
       const lng = +p?.[0];
       const lat = +p?.[1];
       const t = Math.trunc(+p?.[2]) || 0;
+      // The fourth number is the fix's own altitude, and only when the watch
+      // believed it. Absent is not sea level — 0 m is a real shoreline, and a
+      // point that did not carry a height must stay without one.
+      const rawEle = p?.length > 3 ? +p[3] : NaN;
+      const ele = Number.isFinite(rawEle) && rawEle >= -500 && rawEle <= 9000 ? rawEle : undefined;
       if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
       if (Math.abs(lng) > 180 || Math.abs(lat) > 90) continue;
       if (lng === 0 && lat === 0) continue;
-      line.push({ lng, lat, t });
+      line.push(ele === undefined ? { lng, lat, t } : { lng, lat, t, ele });
       if (line.length >= budget) break;
     }
     if (!line.length) continue;
@@ -3405,9 +3451,11 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
             continue;
           }
           // Cells are *added* to what is already there, so a workout taken
-          // twice is a place visited twice. This is the only guard against it
-          // and it has to come before any write.
+          // twice is a place visited twice. The guard has to come before that
+          // write. The trace is not a visit: a workout stored before its
+          // times or its heights were kept can still gain them on a re-send.
           if (q.hasWorkout.get(user.id, w.id)) {
+            backfillHealthTrace(user, w);
             known++;
             continue;
           }
@@ -3474,11 +3522,11 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
     //
     // This is the one destructive call in the connector, and it exists because
     // of what the other guards make impossible. Workout ids are remembered so a
-    // re-send cannot double-count, which also means a workout stored from a bad
-    // reading can never be corrected — the phone offers it, the server says
-    // "known", and the wrong line stays for ever. And cells are merged rather
-    // than replaced, so re-taking the same workouts on top of the old ones would
-    // count every visit twice.
+    // re-send cannot double-count. A re-send may fill a trace that is missing
+    // its times or its heights, and that is all it may fill: the cells are
+    // merged rather than replaced, so re-taking the same workouts on top of the
+    // old ones would count every visit twice, and a wrong line stays until this
+    // call drops it.
     //
     // So a re-read needs the old copy gone rather than merged with, and that is
     // exactly what this does: the `apple-health` cells, the `apple-health`

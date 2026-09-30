@@ -7,7 +7,7 @@
 //
 //   node scripts/test/route-trace.mjs
 
-import { alignTrace, buildRoute, haversine, nearestSample, routeSamples } from '../../src/routes.js';
+import { alignTrace, buildRoute, haversine, nearestSample, routeSamples, traceSupersedes } from '../../src/routes.js';
 import { metricColor } from '../../src/route-metric.js';
 
 let pass = 0;
@@ -80,6 +80,13 @@ check(slow[0] > fast[0] && fast[1] > slow[1], 'slow is redder than fast');
 const valley = channels(metricColor('elev', 0));
 const ridge = channels(metricColor('elev', 1));
 check(valley[1] > ridge[1] && ridge[0] > valley[0], 'low is greener than high, and high is redder');
+
+const timed = [[[null, T0], [null, T0 + 10]]];
+const climbed = [[[540, T0], [560, T0 + 10]]];
+check(traceSupersedes('', timed), 'a time fills an empty trace');
+check(traceSupersedes(timed, climbed), 'a height fills a trace that only had a time');
+check(!traceSupersedes(climbed, timed), 'a later send does not strip a height already kept');
+check(!traceSupersedes(climbed, climbed), 'a trace that already has both is left alone');
 
 console.log(`\n${fail ? 'FAILED' : 'passed'}: ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

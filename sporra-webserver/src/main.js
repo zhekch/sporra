@@ -5285,6 +5285,10 @@ function closeRouteInfo() {
   setSelectedRoute(null);
   clearMetricLine();
   routeInfo?.hide();
+  // Opening the card is what hid the other lines. Closing it puts them back.
+  // The day chip is a separate isolation — it has its own Hide — and a close
+  // while stepping through a day must not flatten that.
+  if (dayRouteAt < 0 && soloRoute != null) setSoloRoute(null);
 }
 
 // The route whose own line is currently hidden under the ramp. Remembered
@@ -5503,9 +5507,9 @@ function routesAt(point) {
 const routeAt = (point) => routesAt(point)[0] ?? null;
 
 // A tap on a route wins over the cell underneath it: you aimed at the line.
-// Isolated first, so the card's own button already says "Show all" — that is
-// the state the tap just produced. The stack menu, if it is what did the
-// picking, stays up.
+// Isolated while the card is open. Closing the card puts the others back; the
+// chip above the map is the control that does it without closing. The stack
+// menu, if it is what did the picking, stays up.
 function showRouteInfo(route) {
   closeCellInfo();
   closePhotoInfo();
@@ -6166,7 +6170,6 @@ function hideDayRoutes() {
   chipRouteWas = null;
   dayRouteAt = -1;
   setSoloRoute(null);
-  routeInfo?.setSolo(false);
   if (was && !was.on) setRoutesOn(false);
   updateTrackChip();
 }
@@ -10429,7 +10432,6 @@ function wireLayersControl() {
       return;
     }
     setSoloRoute(null);
-    routeInfo?.setSolo(false);
   });
   document.getElementById('trip-chip-clear').addEventListener('click', () => showTrack(null));
   // Sideways on the chip is the day either side of it; downwards on a trip is
@@ -11815,12 +11817,6 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       closeRouteInfo();
       stats.openRoute(routeList.find((r) => r.id === route.id) ?? route);
     },
-    // Toggle: a second press on an already-isolated route puts the rest back.
-    onOnly: (route) => {
-      setSoloRoute(soloRoute === route.id ? null : route.id);
-      routeInfo?.setSolo(soloRoute === route.id);
-    },
-    isSolo: (route) => soloRoute === route.id,
   });
   // Mounted whether or not this is the app: the markup is in the page either
   // way, and a card nothing can open costs one query per element. Making it

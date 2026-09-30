@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pointsToCells } from '../../src/locations.js';
+import { routeSamples } from '../../src/routes.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PORT = 3202;
@@ -58,15 +59,15 @@ async function waitForServer() {
 }
 
 let cookie = '';
-async function api(method, url, body) {
+async function api(method, url, body, headers = {}) {
   const res = await fetch(`${BASE}${url}`, {
     method,
-    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const setCookie = res.headers.get('set-cookie');
   if (setCookie) cookie = setCookie.split(';')[0];
-  return { status: res.status, body: await res.json().catch(() => null) };
+  return { status: res.status, etag: res.headers.get('etag'), body: await res.json().catch(() => null) };
 }
 
 const DEVICE = { id: 'A1B2C3D4-5E6F-7081-9203-A4B5C6D7E8F9', name: "Zhenya's iPhone", platform: 'iOS 26.1' };
@@ -183,6 +184,7 @@ try {
     LNG + i * 0.0012 + Math.sin(i / 4) * 0.0006,
     LAT + i * 0.0009 + Math.cos(i / 3) * 0.0005,
     wStart + i * 20,
+    540 + i,
   ]);
   const workout = {
     id: 'F0E1D2C3-B4A5-4697-8899-AABBCCDDEEFF',
@@ -208,6 +210,10 @@ try {
   check((saved?.lengthM ?? 0) > 1000, 'and is measured', `got ${saved?.lengthM}`);
   check((saved?.thumb ?? '').split(' ').length > 10, 'with an outline for the list', `got "${saved?.thumb}"`);
   check((saved?.points ?? 0) > 10, 'and a line that survived simplification', `got ${saved?.points}`);
+  const samples = routeSamples(saved?.geom, saved?.trace);
+  check(samples.some((s) => s.speed != null), 'and a speed, from the time on each point');
+  check(samples.some((s) => s.ele != null), 'and a height, from the altitude on each point');
+  check(samples.every((s) => s.ele == null || s.ele >= 540), 'a missing height is not stored as sea level');
 
   const cellsAfterWorkout = (await api('GET', '/api/cells')).body.rows.length;
 
@@ -221,6 +227,45 @@ try {
     cellsAfterWorkout,
     'so the row count is unchanged',
   );
+
+  // A workout stored before heights were kept. The same id comes back with an
+  // altitude on each point. The cells must not be counted again; the trace must.
+  const upStart = T0 + 12 * DAY;
+  const upLine = Array.from({ length: 40 }, (_, i) => [
+    LNG + 0.08 + i * 0.0007,
+    LAT + 0.04 + i * 0.0004,
+    upStart + i * 12,
+  ]);
+  const upId = 'TRACE-UPGRADE-0001-0002-000000000001';
+  const up1 = await api('POST', '/api/device/workouts', {
+    device: DEVICE,
+    workouts: [{ id: upId, sport: 'cycling', start: upStart, end: upStart + 40 * 12, segments: [upLine] }],
+  });
+  eq(up1.body.taken, 1, 'a workout without heights is taken');
+  const beforeUpgrade = (await api('GET', '/api/cells')).body.rows.length;
+  const beforeTrace = await api('GET', '/api/routes?geom=1');
+  const plain = beforeTrace.body.routes.find((r) => r.firstAt === upStart);
+  check(routeSamples(plain?.geom, plain?.trace).some((s) => s.speed != null), 'its times are already a speed');
+  check(routeSamples(plain?.geom, plain?.trace).every((s) => s.ele == null), 'and it has no height yet');
+  const up2 = await api('POST', '/api/device/workouts', {
+    device: DEVICE,
+    workouts: [{
+      id: upId,
+      sport: 'cycling',
+      start: upStart,
+      end: upStart + 40 * 12,
+      segments: [upLine.map((p, i) => [...p, 610 + i])],
+    }],
+  });
+  eq(up2.body.known, 1, 'sending it again is still the same workout');
+  eq(up2.body.taken, 0, 'and is not counted a second time');
+  eq((await api('GET', '/api/cells')).body.rows.length, beforeUpgrade, 'so no cell is added for the height');
+  // The count, the length and the date are unchanged, which is exactly the
+  // signature that used to answer 304 and leave the card on the empty trace.
+  const refreshed = await api('GET', '/api/routes?geom=1', undefined, { 'If-None-Match': beforeTrace.etag ?? '' });
+  check(refreshed.status === 200, 'the map is given the new trace rather than told nothing changed', `got ${refreshed.status}`);
+  const raised = (refreshed.body?.routes ?? []).find((r) => r.firstAt === upStart);
+  check(routeSamples(raised?.geom, raised?.trace).some((s) => s.ele != null), 'the height arrives on the trace it already had');
 
   // --- A pause is not a straight line -----------------------------------------
   // The app splits a route wherever the watch stopped recording, so a paused
@@ -309,7 +354,7 @@ try {
   eq(status.body.devices.length, 1, 'one phone is listed');
   eq(dev?.name, "Zhenya's iPhone", 'under the name it gave');
   eq(dev?.totalFixes, 7, 'with every fix it has ever sent');
-  eq(dev?.totalWorkouts, 3, 'and the workouts it brought');
+  eq(dev?.totalWorkouts, 4, 'and the workouts it brought');
   eq(dev?.cursor, T0 + 3 * DAY + 60, 'and how far it has got');
   check(dev?.firstSeen > 0 && dev?.lastSeen >= dev?.firstSeen, 'and when it started and last spoke');
 

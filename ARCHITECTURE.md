@@ -859,9 +859,13 @@ browser importer uses.
   old workout as readily as a new one, and the app's query anchor is lost on
   reinstall. `device_workouts` holds the `HKWorkout.uuid`s instead, which is what
   makes a first sync of eight years of rides safe to give up halfway through.
-- **The barometer's ascent is kept.** `HKMetadataKeyElevationAscended` is a
-  better number than anything derivable from GPS altitude. When Health does not
-  offer one, `buildRoute` works it out from the line like every other source.
+- **Each fix keeps its clock, and its height when the watch has one.** The
+  wire is longitude, latitude, epoch seconds, and — only when
+  `verticalAccuracy` is not negative — the altitude in metres. A missing
+  height is left missing; 0 m is a shoreline, not a stand-in. The speed on
+  the card is that distance over that time. `HKMetadataKeyElevationAscended`
+  is still the climb total, which is a better number than summing the fixes,
+  and when Health does not offer one `buildRoute` works it out from the line.
 - **The activity name is sent as a lower-case synonym**, not a finished label, so
   `canonicalSport` in `src/routes.js` stays the single place that decides how an
   activity is spelled — the same door a Komoot "racebike" and a Strava "Ride" go
@@ -955,10 +959,13 @@ an afternoon one.
 
 `POST /api/device/health/reset` is the one destructive call in the connector, and
 the guards above are what make it necessary. Workout ids are remembered so a
-re-send cannot double-count — which also means a workout stored from a bad
-reading can never be corrected, because the phone offers it and the server
-answers "known". And cells are merged rather than replaced, so re-taking the same
-workouts on top of the old ones would count every visit twice.
+re-send cannot double-count. Cells are merged rather than replaced, so re-taking
+the same workouts on top of the old ones would count every visit twice. The
+trace is the exception: a workout stored before its times or its heights were
+kept can gain them when the phone offers it again, and that write does not add
+a cell. It does not replace a trace that already has both, and it does not move
+the line. A wrong line still needs the reset, because the cells and the
+geometry are what the id is guarding.
 
 It drops the `apple-health` cell rows, the `apple-health` routes and the
 remembered ids. Nothing else: a cell another source also vouches for keeps that
@@ -2035,9 +2042,10 @@ reads "12 Sep 2024, 14:32"; one that ran past midnight names both ends. There is
 no separate count of points. The shape is the line.
 
 Opening the card draws that one route and leaves the rest off — the same thing
-Search and the routes list already did. The button on the card, and the chip on
-the map, put the others back. A tap that lands on several still asks, via the
-stack menu below; picking a row isolates that one and leaves the menu up.
+Search and the routes list already did. Closing the card puts the others back.
+The chip on the map is the control that does it while the card stays open. A
+tap that lands on several still asks, via the stack menu below; picking a row
+isolates that one and leaves the menu up.
 
 Above the card, two pills, **Speed** and **Elevation**, recolour the open route.
 Speed runs red where it was slow and green where it was fast; elevation runs
@@ -8570,7 +8578,9 @@ mutable columns (name, place, sport, source, ascent, link) and hashes them. Read
 and hashed rather than summed, because every sum collides on the case that
 matters: two routes swapping names, or a rename to a title of the same length.
 It is one short row per route on a map that has dozens, next to a cells read
-that walks tens of thousands.
+that walks tens of thousands. The length of `trace` is in that hash too: a
+workout the server already knew can come back with the times or the heights it
+was stored without, and none of the aggregates move when it does.
 
 *Setting your home.* Home is an **input** to every trip and is not a row at all
 — it lives in the preferences blob. Moving it changes which days count as away

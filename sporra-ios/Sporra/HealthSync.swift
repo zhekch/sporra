@@ -340,11 +340,24 @@ final class HealthSync {
             // pause: the clock runs on, but the distance never opens up.
             if let previous, location.distance(from: previous) < Self.thinM { continue }
             previous = location
-            out.append([
+            // Longitude, latitude, then the clock. The fourth number is this
+            // fix's own altitude, and only when the watch believes it: a
+            // negative vertical accuracy is CoreLocation saying the height is
+            // not a measurement, and sending 0 there would draw the sea
+            // through a valley. The climb total is a different field — it
+            // colours nothing on the line.
+            var point = [
                 (location.coordinate.longitude * 1e5).rounded() / 1e5,
                 (location.coordinate.latitude * 1e5).rounded() / 1e5,
                 Double(Int(location.timestamp.timeIntervalSince1970)),
-            ])
+            ]
+            if location.verticalAccuracy >= 0 {
+                let metres = location.altitude
+                if metres.isFinite, metres >= -500, metres <= 9000 {
+                    point.append((metres * 10).rounded() / 10)
+                }
+            }
+            out.append(point)
         }
         return out
     }

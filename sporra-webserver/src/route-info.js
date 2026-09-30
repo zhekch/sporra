@@ -80,12 +80,10 @@ function runsOf(samples, metric) {
  * @param {() => void} opts.onClose
  * @param {(route:object) => void} opts.onZoom
  * @param {(route:object) => void} opts.onMore  open it in the routes dialog
- * @param {(route:object) => void} [opts.onOnly] draw only this route (toggle)
- * @param {(route:object) => boolean} [opts.isSolo] is it the isolated one
  * @param {(metric:'speed'|'elev'|null) => void} [opts.onMetric]
  * @param {(index:number) => void} [opts.onScrub] a point picked on the graph
  */
-export function mountRouteInfo({ onClose, onZoom, onMore, onOnly, isSolo, onMetric, onScrub } = {}) {
+export function mountRouteInfo({ onClose, onZoom, onMore, onMetric, onScrub } = {}) {
   const $ = (id) => document.getElementById(id);
   const card = $('route-info');
   const nameEl = $('route-info-name');
@@ -94,7 +92,6 @@ export function mountRouteInfo({ onClose, onZoom, onMore, onOnly, isSolo, onMetr
   const closeBtn = $('route-info-close');
   const zoomBtn = $('route-zoom');
   const moreBtn = $('route-more');
-  const onlyBtn = $('route-only');
   const pills = $('route-metric-pills');
   const speedBtn = $('route-metric-speed');
   const elevBtn = $('route-metric-elev');
@@ -109,13 +106,6 @@ export function mountRouteInfo({ onClose, onZoom, onMore, onOnly, isSolo, onMetr
   let dot = null;
   let graphMap = null;
   let dragging = false;
-
-  // The button says what pressing it will do, so it has to flip once the route
-  // is already the only one showing.
-  function setSolo(on) {
-    onlyBtn.textContent = on ? 'Show all' : 'Only this';
-    onlyBtn.classList.toggle('active', !!on);
-  }
 
   function hide() {
     card.hidden = true;
@@ -251,7 +241,6 @@ export function mountRouteInfo({ onClose, onZoom, onMore, onOnly, isSolo, onMetr
   function show(r) {
     route = r;
     scrub = -1;
-    setSolo(!!isSolo?.(r));
     nameEl.textContent = r.name || 'Route';
     const started = day(r.firstAt);
     // The place is the most useful thing to know at a glance, so it leads the
@@ -306,10 +295,6 @@ export function mountRouteInfo({ onClose, onZoom, onMore, onOnly, isSolo, onMetr
     if (route) onMore?.(route);
   });
 
-  onlyBtn.addEventListener('click', () => {
-    if (route) onOnly?.(route);
-  });
-
   speedBtn.addEventListener('click', () => choose('speed'));
   elevBtn.addEventListener('click', () => choose('elev'));
 
@@ -332,7 +317,6 @@ export function mountRouteInfo({ onClose, onZoom, onMore, onOnly, isSolo, onMetr
   return {
     show,
     hide,
-    setSolo,
     setScrub,
     visible: () => !card.hidden,
     current: () => route,

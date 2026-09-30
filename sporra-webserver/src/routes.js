@@ -195,6 +195,24 @@ export function segmentLength(points) {
  * @param {unknown} trace
  * @returns {Array<Array<[number|null, number]>>|null}
  */
+const traceHasTime = (trace) =>
+  Array.isArray(trace) && trace.some((seg) => Array.isArray(seg) && seg.some((p) => +p?.[1] > 0));
+const traceHasEle = (trace) =>
+  Array.isArray(trace) && trace.some((seg) => Array.isArray(seg) && seg.some((p) => p?.[0] != null && Number.isFinite(+p[0])));
+
+/**
+ * Whether a re-sent recording should replace the trace already stored.
+ *
+ * Only by adding something the stored one lacks — a time, or a height. A trace
+ * that already has both is the recording, and a later send must not overwrite
+ * it. An empty one is not a recording yet.
+ */
+export function traceSupersedes(stored, next) {
+  if (!traceHasTime(next) && !traceHasEle(next)) return false;
+  if (!traceHasTime(stored) && !traceHasEle(stored)) return true;
+  return (!traceHasTime(stored) && traceHasTime(next)) || (!traceHasEle(stored) && traceHasEle(next));
+}
+
 export function alignTrace(geom, trace) {
   if (!Array.isArray(geom) || !Array.isArray(trace) || !trace.length || geom.length !== trace.length) return null;
   const out = [];

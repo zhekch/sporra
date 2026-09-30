@@ -1922,12 +1922,11 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 
-/* Three equal columns. `flex: 1` alone did not do it: a flex item's default
+/* Equal columns. `flex: 1` alone did not do it: a flex item's default
    `min-width: auto` refuses to shrink below its own text, so "Zoom to route"
-   stayed wider than its siblings however the basis was set. Releasing that is
+   stayed wider than its sibling however the basis was set. Releasing that is
    what makes the widths actually equal — and it is why the first button is
-   labelled "Zoom": at a 320px card three equal columns are ~90px each, and the
-   longer label does not fit in one. */
+   labelled "Zoom": the longer label does not fit in its half of a 320px card. */
 .route-info-actions .modal-btn {
   flex: 1 1 0;
   min-width: 0;

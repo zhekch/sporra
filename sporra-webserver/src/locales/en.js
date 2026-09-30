@@ -389,7 +389,6 @@ export default {
   "route-metric-graph.speed": "Speed along the route",
   "route-metric-speed.speed": "Speed",
   "route-more.more-info": "More info",
-  "route-only.only-this": "Only this",
   "route-solo-clear.hide": "Hide",
   "route-solo-clear.show-all": "Show all",
   "route-solo-next.the-activity-after": "The activity after",
