@@ -165,9 +165,10 @@ import { loadPlaces, describeRoute, nearestTown, searchPlaces } from './places.j
 import { createBlobLayer, blobsSupported, BLOB_ALPHA, BLOB_HEAT_ALPHA } from './blob-canvas.js';
 import { indexCells } from './cell-index.js';
 import {
-  rollUp, attachNeighbourhoods, neighbourhoodOf, dominantSource, foldInCell, removeCell,
-  storedUnder as storedUnderKey,
+  rollUp, rollUpSteps, attachNeighbourhoodsSteps, neighbourhoodOf, dominantSource, foldInCell,
+  removeCell, storedUnder as storedUnderKey,
 } from './rollup.js';
+import { runSliced, parseCells, fillCells } from './cells-load.js';
 // The one place that asks the map where its camera is, and the only arithmetic
 // that knows a camera can be turned or leaned. Everything downstream still
 // receives a rectangle of Mercator metres.
@@ -2604,6 +2605,9 @@ const cellStatsOf = (id, byType) => cellStats(cellMeta.get(id) ?? [], byType);
  *   Type over a map that is showing something else.
  */
 function recomputeLit(byType = HEAT_MODES[heatMode]?.categorical) {
+  // Whatever a sliced rebuild was doing, this one is newer — see recomputeLitSliced.
+  litGen++;
+  litPending = false;
   // A full rebuild already accounts for anything sitting in the queue.
   paintQueue.length = 0;
   eraseQueue.length = 0;
@@ -2611,47 +2615,86 @@ function recomputeLit(byType = HEAT_MODES[heatMode]?.categorical) {
   // mode that colours by it — but with something hidden it is also what says
   // whether the cell is drawn at all, so rollUp pays for that pass either way.
   const rolled = span('roll-up', () => rollUp(visited, cellStatsOf, { byType, hidden: hiddenSources }));
-  litSets = rolled.litSets;
-  litIndex = [];
-  const { sourceCells, shown } = rolled;
+  drain(finishRollUpSteps(rolled, byType));
+  adoptRollUp(rolled, byType);
+}
 
+// Bumped by every synchronous rebuild. A sliced one remembers the value it
+// started under and gives up if it has moved: something newer — an edit made
+// while the cells were still arriving — has already rebuilt from a later state.
+let litGen = 0;
+// A sliced rebuild is running. The incremental paint path declines while it
+// is, because it would be folding a cell into the levels about to be replaced.
+let litPending = false;
+
+function drain(gen) {
+  for (;;) {
+    const step = gen.next();
+    if (step.done) return step.value;
+  }
+}
+
+/**
+ * The same rebuild as recomputeLit, a slice at a time — for signing in, where
+ * half a million cells rolled up in one go froze the camera's fly-in for most of
+ * a second. The new levels are only put in place once they are complete, so
+ * the map keeps showing the old ones until then rather than a half-built set.
+ *
+ * @returns {Promise<boolean>} false when something newer replaced it
+ */
+async function recomputeLitSliced(byType = HEAT_MODES[heatMode]?.categorical) {
+  const gen = ++litGen;
+  litPending = true;
+  const wanted = () => gen === litGen;
+  const t0 = performance.now();
+  try {
+    const rolled = await runSliced(rollUpSteps(visited, cellStatsOf, { byType, hidden: hiddenSources }), wanted);
+    if (!rolled || !wanted()) return false;
+    const done = await runSliced(finishRollUpSteps(rolled, byType), wanted);
+    if (!done || !wanted()) return false;
+    paintQueue.length = 0;
+    eraseQueue.length = 0;
+    adoptRollUp(rolled, byType);
+    span(`roll-up, sliced, ${Math.round(performance.now() - t0)} ms wall`, () => {});
+    return true;
+  } finally {
+    if (gen === litGen) litPending = false;
+  }
+}
+
+/**
+ * Everything a roll-up needs before it can be shown — the palette slots, the
+ * neighbourhoods and the per-level ranges — worked out on the new levels while
+ * they are still private. A generator so the sliced rebuild can stop between
+ * levels; returns true when finished.
+ */
+function* finishRollUpSteps(rolled, byType) {
+  const { litSets: sets, sourceCells } = rolled;
+  let order = [];
   if (byType) {
     // Hand out palette slots by how much of the map each source accounts for.
-    sourceOrder = [...sourceCells.entries()]
+    order = [...sourceCells.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .map(([src]) => src);
-    // Forget anything hidden that no cell claims any more. A source removed for
-    // good in Settings → Sources while it happened to be switched off would
-    // otherwise stay in the list for ever, and it is not a harmless entry: it
-    // keeps `filtering` true, which costs every roll-up the extra pass and
-    // permanently disables the paint shortcut in rollUpPainted, invisibly and
-    // for nothing. Only when there is a tally to check against — an empty one
-    // means the cells have not arrived yet, not that the sources are gone.
-    if (hiddenSources.size && sourceOrder.length) {
-      const present = new Set(sourceOrder);
-      let dropped = false;
-      for (const src of hiddenSources) {
-        if (!present.has(src)) dropped = hiddenSources.delete(src) || dropped;
-      }
-      if (dropped) saveHiddenSources();
-    }
-    const slot = new Map(sourceOrder.map((src, i) => [src, i]));
-    for (const lit of litSets) {
+    const slot = new Map(order.map((src, i) => [src, i]));
+    let k = 0;
+    for (const lit of sets) {
       for (const e of lit.values()) {
         e.src = slot.get(dominantSource(e)) ?? TYPE_MAX;
         // The tally has done its job; drop it so the entries stay small.
         delete e.srcMap;
         delete e.src1;
         delete e.n1;
+        if (++k % 4096 === 0) yield;
       }
     }
-  } else {
-    sourceOrder = [];
   }
+  rolled.sourceOrder = order;
 
-  span('neighbourhoods', () => attachNeighbourhoods(litSets));
+  yield* attachNeighbourhoodsSteps(sets);
 
-  litRange = litSets.map((lit) => {
+  rolled.litRange = [];
+  for (const lit of sets) {
     const r = { maxHits: 1, hotHits: 2, minTime: 0, maxTime: 0, minAge: 0, maxAge: 0 };
     r.hotHits = hotOf(lit);
     // What the dates on this level actually look like, for the same reason
@@ -2668,8 +2711,37 @@ function recomputeLit(byType = HEAT_MODES[heatMode]?.categorical) {
         if (e.age > r.maxAge) r.maxAge = e.age;
       }
     }
-    return r;
-  });
+    rolled.litRange.push(r);
+    yield;
+  }
+  return true;
+}
+
+/** Put a finished roll-up on the map. Synchronous, and cheap: only assignments. */
+function adoptRollUp(rolled, byType) {
+  litSets = rolled.litSets;
+  litIndex = [];
+  litRange = rolled.litRange;
+  const { shown } = rolled;
+  sourceOrder = rolled.sourceOrder;
+
+  if (byType) {
+    // Forget anything hidden that no cell claims any more. A source removed for
+    // good in Settings → Sources while it happened to be switched off would
+    // otherwise stay in the list for ever, and it is not a harmless entry: it
+    // keeps `filtering` true, which costs every roll-up the extra pass and
+    // permanently disables the paint shortcut in rollUpPainted, invisibly and
+    // for nothing. Only when there is a tally to check against — an empty one
+    // means the cells have not arrived yet, not that the sources are gone.
+    if (hiddenSources.size && sourceOrder.length) {
+      const present = new Set(sourceOrder);
+      let dropped = false;
+      for (const src of hiddenSources) {
+        if (!present.has(src)) dropped = hiddenSources.delete(src) || dropped;
+      }
+      if (dropped) saveHiddenSources();
+    }
+  }
 
   visibleCells = shown ?? visited;
   typeRollUpStale = !byType;
@@ -2693,6 +2765,9 @@ function rollUpPainted(id) {
   // is on, and you are painting — to be worth a rebuild rather than a second
   // answer to the same question here.
   if (hiddenSources.size) return false;
+  // The levels this would fold into are about to be replaced by a rebuild that
+  // started before the cell existed. Declining sends the caller to a full one.
+  if (litPending) return false;
   const [L] = parseCellId(id);
   if (!(L <= MAX_LEVEL)) return true; // same skip as recomputeLit()
 
@@ -3355,31 +3430,53 @@ async function remarkCells(snapshot) {
 // Runs after login, after the initial session check and after an import; safe
 // to call before or after the map style loads (updateGrid no-ops until the
 // sources exist, then installGrid renders).
+// Which load of the cells is the current one. Two can overlap — a sync that
+// finishes while the sign-in's own load is still filing rows — and only the
+// later may finish; the earlier stops at its next slice.
+let hydrateGen = 0;
+
+/**
+ * Load the account's cells and put them on the map, without stopping it.
+ *
+ * The parse happens in a worker and everything after it in slices — see
+ * src/cells-load.js for what this cost when it was one task. The map keeps
+ * showing what it had until the new roll-up is complete, rather than going
+ * blank while the rows are filed.
+ *
+ * While `paintHeldForPrefs` is set this stops after filing the rows: the sign-in
+ * rolls them up itself once the preferences are in, and doing it here as well
+ * was the second half-second freeze of every sign-in.
+ */
 async function hydrateVisited() {
-  visited.clear();
-  cellMeta.clear();
+  const gen = ++hydrateGen;
+  const current = () => gen === hydrateGen;
+  const loading = busy('Loading your map…');
   try {
-    const { sources = [], rows = [] } = (await auth.getCells()) ?? {};
-    for (const [id, srcIdx, addedAt, firstAt, lastAt, hits, fixes = 0] of rows) {
-      visited.add(id);
-      const entry = { source: sources[srcIdx] ?? 'unknown', addedAt, firstAt, lastAt, hits, fixes };
-      const list = cellMeta.get(id);
-      if (list) list.push(entry);
-      else cellMeta.set(id, [entry]);
+    let parsed = null;
+    try {
+      parsed = await parseCells(await auth.getCellsBuffer());
+    } catch (e) {
+      console.warn('Loading cells failed:', e);
     }
-  } catch (e) {
-    console.warn('Loading cells failed:', e);
+    if (!current()) return;
     visited.clear();
     cellMeta.clear();
+    if (parsed) await runSliced(fillCells(parsed, visited, cellMeta), current);
+    if (!current()) return;
+    closeCellInfo();
+    closeRouteInfo();
+    if (!paintHeldForPrefs) {
+      await recomputeLitSliced();
+      if (!current()) return;
+      updateGrid(true);
+      updateTiles();
+      updateHud(currentLevel);
+    }
+    // The guessed home is read off the cells, so it only exists once they do.
+    syncHomeMarker();
+  } finally {
+    loading();
   }
-  closeCellInfo();
-  closeRouteInfo();
-  recomputeLit();
-  updateGrid(true);
-  updateTiles();
-  updateHud(currentLevel);
-  // The guessed home is read off the cells, so it only exists once they do.
-  syncHomeMarker();
 }
 
 // Ancestor of a stored cell at a coarser level (identity at the same level).
@@ -12895,6 +12992,9 @@ const authState = mountAuth({
     // `paintHeldForPrefs`. The cells still load, the routes still load; it is
     // only the paint that waits, so this costs a fetch rather than a render.
     paintHeldForPrefs = true;
+    // Up for the whole of it, not just the fetch: on a large map the roll-up
+    // after the rows arrive is the longer half.
+    const loading = busy('Loading your map…');
     try {
       await hydrateVisited();
       await loadRoutes(routesOn);
@@ -12903,14 +13003,18 @@ const authState = mountAuth({
       await syncPrefs();
     } finally {
       paintHeldForPrefs = false;
-      // The first paint, now in the right colour. The same tail
-      // `hydrateVisited` runs, because its own call was the one held —
-      // `recomputeLit` included, since adopting preferences can change the
-      // colour *mode* and the ranges are computed per mode.
-      recomputeLit();
-      updateGrid(true);
-      updateTiles();
-      updateHud(currentLevel);
+      // The first paint, now in the right colour — and the only roll-up of the
+      // sign-in: `hydrateVisited` leaves it to this one while the paint is
+      // held, since adopting preferences can change the colour *mode* and the
+      // ranges are computed per mode. Sliced, so the fly-in keeps its frames.
+      try {
+        await recomputeLitSliced();
+        updateGrid(true);
+        updateTiles();
+        updateHud(currentLevel);
+      } finally {
+        loading();
+      }
     }
     // Only for the menu's status line — the sync itself runs on the server
     // whether or not this page is open.

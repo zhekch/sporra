@@ -100,7 +100,31 @@ export function dominantSource(e) {
  *   included (the palette is handed out in that order); `shown` is the stored
  *   ids actually drawn, or null when nothing is hidden and that is all of them.
  */
-export function rollUp(visited, statsOf, { byType = false, hidden = new Set() } = {}) {
+export function rollUp(visited, statsOf, opts) {
+  return drain(rollUpSteps(visited, statsOf, opts));
+}
+
+// Run a step generator to the end, synchronously.
+function drain(gen) {
+  for (;;) {
+    const step = gen.next();
+    if (step.done) return step.value;
+  }
+}
+
+// How many entries between the points where a sliced run may stop. Checking the
+// clock is not free; a few thousand entries is well under a millisecond.
+const STEP = 2048;
+
+/**
+ * `rollUp`, as a generator that yields every few thousand entries — for a caller
+ * that wants to give the browser frames while it runs (src/cells-load.js,
+ * `runSliced`). Nothing it builds is visible until it returns: the levels are
+ * its own until then, so stopping between two yields leaves no half-rolled map
+ * behind.
+ */
+export function* rollUpSteps(visited, statsOf, { byType = false, hidden = new Set() } = {}) {
+  let k = 0;
   const litSets = Array.from({ length: MAX_LEVEL + 1 }, () => new Map());
   const sourceCells = new Map();
   const filtering = hidden.size > 0;
@@ -136,6 +160,7 @@ export function rollUp(visited, statsOf, { byType = false, hidden = new Set() } 
       litSets[L].set(key, (e = entry(col, row, hits, time, age, 1, [id])));
     }
     if (byType && own) addSource(e, own, ownN);
+    if (++k % STEP === 0) yield;
   }
 
   // Then each level from the one below it. A level can also hold cells stored
@@ -158,6 +183,7 @@ export function rollUp(visited, statsOf, { byType = false, hidden = new Set() } 
       (p.kids ??= []).push(key);
       c.parent = p;
       if (byType) mergeSources(p, c);
+      if (++k % STEP === 0) yield;
     }
   }
 
@@ -184,8 +210,17 @@ export function neighbourhoodOf(level, e) {
 
 /** Fill in `near` on every entry of every level. */
 export function attachNeighbourhoods(litSets) {
+  drain(attachNeighbourhoodsSteps(litSets));
+}
+
+/** The same, yielding every few thousand entries. */
+export function* attachNeighbourhoodsSteps(litSets) {
+  let k = 0;
   for (let l = 0; l < litSets.length; l++) {
-    for (const e of litSets[l].values()) e.near = neighbourhoodOf(l, e);
+    for (const e of litSets[l].values()) {
+      e.near = neighbourhoodOf(l, e);
+      if (++k % STEP === 0) yield;
+    }
   }
 }
 

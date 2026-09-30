@@ -61,6 +61,28 @@ async function api(method, url, body) {
   return data;
 }
 
+/** `api('GET', url)`, answering with the body as an ArrayBuffer when it is ok. */
+async function apiBuffer(url) {
+  let res;
+  try {
+    res = await fetch(url);
+  } catch {
+    setReachable(false, 'offline');
+    throw new Error('Cannot reach the server — your changes are not being saved.');
+  }
+  setReachable(res.status < 500, res.status >= 500 ? 'error' : undefined);
+  if (!res.ok) {
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      /* empty / non-JSON response */
+    }
+    throw new Error(data?.error || `Request failed (${res.status})`);
+  }
+  return res.arrayBuffer();
+}
+
 // The build the server reports, kept from the session check so Settings can
 // show it without a request of its own. Null until that check has answered, and
 // null forever if it never does — a version we do not know is not one to invent.
@@ -209,6 +231,9 @@ export const auth = {
   // Timestamps are epoch seconds; 0 means the source didn't carry a date.
   // `hits` counts separate visits, `fixes` the raw points behind them.
   getCells: () => api('GET', '/api/cells'),
+  // The same answer as bytes, unparsed — for src/cells-load.js, which hands it
+  // to a worker rather than parse 26 MB of JSON on the thread drawing the map.
+  getCellsBuffer: () => apiBuffer('/api/cells'),
   // Incremental map edits. Removing a cell clears it for every source.
   // Split so a region clear, which can be the whole of a canton's history,
   // stays under the server's cap. See mutateBatches.

@@ -8931,6 +8931,40 @@ on the same answer and a narrow desktop window is not mistaken for one.
   erase sweep no longer leaves stale ids under a cell until the gesture's
   closing rebuild, because an entry only carries the ids stored at exactly its
   own cell.
+- **And none of it stops the map.** Even at 317 ms, the roll-up was one task,
+  and it was not the only one: the 26 MB `/api/cells` answer was parsed on the
+  main thread, 595k rows were filed into `visited` and `cellMeta` in one loop,
+  and the roll-up then ran **twice** — once in `hydrateVisited`, while the paint
+  was being held for the preferences, and again when the hold was released.
+  Measured in WebKit on a 3× phone signing into that account: a 712 ms freeze and
+  then a 503 ms one, in the middle of the camera flying in. Now
+  (`src/cells-load.js`):
+  - the body is fetched as bytes (`getCellsBuffer`) and handed to a worker
+    (`src/cells-worker.js`), transferred rather than copied, which parses it
+    and hands back columns — one string of ids and a typed array per number,
+    transferred the same way. A browser that cannot start the worker parses the
+    same columns on the main thread (`parseCellsBuffer`): slower, never wrong.
+  - the rows are filed, and the roll-up and everything after it
+    (`finishRollUpSteps`) run, as generators driven by `runSliced`, which gives
+    the browser a frame every `SLICE_MS`. The new levels stay private until
+    they are complete, and `adoptRollUp` puts them in place in one step, so the
+    map shows the old picture until the new one is whole — never a half-rolled
+    one.
+  - the roll-up runs once: `hydrateVisited` stops after filing the rows while
+    `paintHeldForPrefs` is set.
+  - an edit made while this is running wins. Every synchronous `recomputeLit`
+    bumps `litGen`, a sliced rebuild that finds it moved gives up, and
+    `rollUpPainted` declines while one is in flight (`litPending`), so the
+    brush takes the full rebuild instead of folding a cell into levels about to
+    be replaced. Overlapping loads of the cells resolve the same way, through
+    `hydrateGen`.
+  - the ring at the top of the screen says *Loading your map…* from the first
+    byte to the first paint.
+
+  Same measurement after: the worst frame of the whole load is 60–78 ms, and
+  those frames are the basemap starting up, before any cell has arrived. The
+  cells land about a second after the answer does, over ordinary frames.
+  `scripts/test/cells-load.mjs` holds the columns to the loop they replaced.
 
 **Measuring it.** Load with `?perf` and the console gets the roll-up, every
 blob paint, every `moveend`, and one line per gesture giving the frame count,
