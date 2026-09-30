@@ -10714,23 +10714,92 @@ menuScroll?.addEventListener('scroll', refreshMenuOverflow, { passive: true });
 // or removes a row.
 if (menuScroll) new ResizeObserver(refreshMenuOverflow).observe(menuScroll);
 
-function setMenuOpen(open) {
-  layersMenu.hidden = !open;
+// What the button last asked for. `hidden` lags it on the way out: the panel
+// stays up for the fade, and reading the attribute in that window would treat
+// a menu that is leaving as one that is still open.
+let menuWantsOpen = false;
+let menuFrame = 0;
+let menuCloseTimer = 0;
+let menuOnDone = null;
+
+/** How long the panel takes to move, or 0 when motion is switched off. */
+function menuMotionMs() {
+  const first = (getComputedStyle(layersMenu).transitionDuration || '0s').split(',')[0].trim();
+  const n = parseFloat(first);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return first.endsWith('ms') ? n : n * 1000;
+}
+
+function detachMenuClose() {
+  cancelAnimationFrame(menuFrame);
+  clearTimeout(menuCloseTimer);
+  if (!menuOnDone) return;
+  layersMenu.removeEventListener('transitionend', menuOnDone);
+  menuOnDone = null;
+}
+
+function settleMenuClosed() {
+  detachMenuClose();
+  layersMenu.classList.remove('is-shown', 'is-closing');
+  layersMenu.hidden = true;
+  document.body.classList.remove('menu-open');
   refreshChrome();
-  if (!open) for (const close of menuClosers) close();
-  // On phones the menu becomes a bottom sheet and the buttons underneath it
-  // get out of the way.
-  document.body.classList.toggle('menu-open', open);
-  if (open) {
-    updateLayersUi();
-    refreshMenuOverflow();
+}
+
+function setMenuOpen(open) {
+  if (open === menuWantsOpen) {
+    // Already there, or the opening frame has been asked for and not painted.
+    if (!open) return;
+    if (layersMenu.classList.contains('is-shown') || !layersMenu.hidden) return;
   }
+  menuWantsOpen = open;
+  detachMenuClose();
+  if (open) {
+    layersMenu.classList.remove('is-closing');
+    layersMenu.hidden = false;
+    // On phones the menu becomes a bottom sheet and the buttons underneath it
+    // get out of the way. Before the reveal, so the sheet is the thing that
+    // fades in rather than a button-width panel that then jumps.
+    document.body.classList.add('menu-open');
+    refreshChrome();
+    updateLayersUi();
+    const reveal = () => {
+      if (!menuWantsOpen) return;
+      layersMenu.classList.add('is-shown');
+      refreshMenuOverflow();
+    };
+    // Same turn when there is nothing to interpolate: a frame of the closed
+    // pose would be a blank panel. Otherwise that pose has to be painted once,
+    // or the transition has nowhere to start and the panel pops in.
+    if (menuMotionMs() === 0) reveal();
+    else menuFrame = requestAnimationFrame(reveal);
+    return;
+  }
+  for (const close of menuClosers) close();
+  const wasShown = layersMenu.classList.contains('is-shown');
+  layersMenu.classList.remove('is-shown');
+  const ms = wasShown ? menuMotionMs() : 0;
+  if (ms === 0) {
+    settleMenuClosed();
+    return;
+  }
+  // Still the sheet, still in the way of the map, until the fade has ended.
+  layersMenu.classList.add('is-closing');
+  menuOnDone = (e) => {
+    if (e.target !== layersMenu || e.propertyName !== 'opacity') return;
+    if (menuWantsOpen) return;
+    settleMenuClosed();
+  };
+  layersMenu.addEventListener('transitionend', menuOnDone);
+  menuCloseTimer = window.setTimeout(() => {
+    if (!menuWantsOpen) settleMenuClosed();
+  }, ms + 50);
 }
 
 function wireLayersControl() {
   layersBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    setMenuOpen(layersMenu.hidden);
+    setMenuOpen(!menuWantsOpen);
   });
   // Click-away closes the menu — but "away" has to be decided when the press
   // lands, not when the click resolves. A control inside the menu that redraws
@@ -10763,7 +10832,7 @@ function wireLayersControl() {
     true,
   );
   document.addEventListener('click', (e) => {
-    if (layersMenu.hidden || pressedInsideMenu) return;
+    if (!menuWantsOpen || pressedInsideMenu) return;
     if (layersMenu.contains(e.target) || layersBtn.contains(e.target)) return;
     setMenuOpen(false);
   });

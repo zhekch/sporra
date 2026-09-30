@@ -1134,8 +1134,42 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   /* Same even edge as the edit panel above. */
   box-shadow: 0 16px 44px rgba(0, 0, 0, 0.38);
   color: rgba(255, 255, 255, 0.92);
-  transform-origin: bottom left;
-  animation: hud-pop 0.2s ease;
+  opacity: 1;
+  translate: 0 0;
+  /* Both directions. The old `hud-pop` only played on the way in; the way out
+     was the `hidden` attribute, and `display: none` has no frames in it. The
+     panel fades and slides the short way back to its button, and
+     `setMenuOpen()` applies `hidden` only once that has finished. */
+  transition:
+    opacity 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+    translate 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* The pose it rests in before `.is-shown`, and the one it leaves through.
+   Upward, because the button it belongs to is underneath it. A wide screen
+   flips that — the menu hangs below the pill, so it leaves upward. */
+.layers-menu:not(.is-shown) {
+  opacity: 0;
+  translate: 0 12px;
+}
+
+/* The first frame of an opening is this pose with the element already in the
+   tree, so a click in that frame must fall through to the map. While it is
+   actually leaving it still covers the ground, and a tap then belongs to it. */
+.layers-menu:not(.is-shown):not(.is-closing) {
+  pointer-events: none;
+}
+
+@media (min-width: 561px) {
+  .layers-menu:not(.is-shown) {
+    translate: 0 -10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .layers-menu {
+    transition: none;
+  }
 }
 
 .layers-menu[hidden] {
@@ -4780,7 +4814,6 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   .layers-menu {
     width: 100%;
     box-sizing: border-box;
-    transform-origin: bottom center;
   }
 
   /* No narrower cap here any more. The base rule already measures the space
