@@ -51,7 +51,8 @@ glass look. Click hexagons to mark places you've visited.
   region, which is the same stand-in the region level already draws. A tap
   on a **track**, when that overlay is on, paints the cells the line touches
   from the previous station or junction to the next. **Add** asks for a start
-  and a destination on the map, and whether the trip is by car or by train.
+  and a destination — a city typed from the gazetteer already in the app, or
+  a tap on the map — and whether the trip is by car or by train.
   The line is drawn first; Confirm paints the cells it crosses, one undo, the
   same as a track. Car routes come from the FOSSGIS OSRM server
   (`routing.openstreetmap.de`, full geometry, one request at a time, with the

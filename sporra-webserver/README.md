@@ -62,7 +62,7 @@ number of approaches that were tried and abandoned.
   from the previous station or junction to the next. A second track running
   alongside does not split it. The stretch stays marked
   for half a minute. Further taps wait their turn. **Add** in that same panel
-  takes a start and a destination you tap on the map, by car or by train,
+  takes a start and a destination, a city you type or a point you tap, by car or by train,
   draws the line, and colours those cells in when you confirm.
 - **Trails.** The waymarked routes — the ones somebody has signed and painted
   onto a post — from Waymarked Trails, over whatever basemap you are on. Switch

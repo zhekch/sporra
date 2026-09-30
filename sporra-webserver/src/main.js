@@ -162,7 +162,7 @@ import { routesToFC, totalLength, formatDistance, formatDuration, canonicalSport
 import { metricCollection } from './route-metric.js';
 import { paletteFor, randomPalette } from './route-colors.js';
 import { reconcilePrefs, remoteToken, readHome } from './prefs.js';
-import { loadPlaces, describeRoute, nearestTown } from './places.js';
+import { loadPlaces, describeRoute, nearestTown, searchPlaces } from './places.js';
 import { createBlobLayer, blobsSupported, BLOB_ALPHA, BLOB_HEAT_ALPHA } from './blob-canvas.js';
 // The one place that asks the map where its camera is, and the only arithmetic
 // that knows a camera can be turned or leaned. Everything downstream still
@@ -3898,8 +3898,10 @@ function paintRailAt(e) {
   return true;
 }
 
-// Add, in the edit panel. Two taps name the ends, car or train names the
-// line, and Confirm is the edit — the same cells a track paints, one undo.
+// Add, in the edit panel. A city from the gazetteer, or a tap, names each
+// end. Car or train names the line, and Confirm is the edit — the same cells
+// a track paints, one undo. The names never leave the machine: it is the same
+// list that titles a route.
 let routeOn = false;
 let routeAim = 'start';
 let routeMode = 'car';
@@ -3908,9 +3910,63 @@ let routeEnd = null;
 let routeLine = null;
 let routeStatus = 'hud-route.tap-for-a-start';
 let routeSeq = 0;
+const routeHitList = { start: [], end: [] };
+const routeQuerySeq = { start: 0, end: 0 };
 
-function routePlaceLabel(p) {
-  return p ? `${p.lat.toFixed(3)}, ${p.lng.toFixed(3)}` : t('hud-route.tap-the-map');
+function routeField(which) {
+  return document.getElementById(which === 'start' ? 'hud-route-start-input' : 'hud-route-end-input');
+}
+
+function routeHitsBox(which) {
+  return document.getElementById(which === 'start' ? 'hud-route-start-hits' : 'hud-route-end-hits');
+}
+
+function routeCoord(p) {
+  return `${p.lat.toFixed(3)}, ${p.lng.toFixed(3)}`;
+}
+
+function routeLabel(p) {
+  return p ? (p.name || routeCoord(p)) : '';
+}
+
+function clearRouteHits(which) {
+  const all = which ? [which] : ['start', 'end'];
+  for (const w of all) {
+    routeHitList[w] = [];
+    const box = routeHitsBox(w);
+    if (!box) continue;
+    box.replaceChildren();
+    box.hidden = true;
+  }
+}
+
+function showRouteHits(which, list) {
+  const box = routeHitsBox(which);
+  if (!box) return;
+  routeHitList[which] = list;
+  box.replaceChildren();
+  if (!list.length) {
+    const note = document.createElement('p');
+    note.className = 'hud-route-miss';
+    note.textContent = t('hud-route.no-city');
+    box.append(note);
+    box.hidden = false;
+    return;
+  }
+  for (const p of list) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'hud-route-hit';
+    btn.textContent = p.name;
+    btn.addEventListener('mousedown', (e) => {
+      // Down, not click: the field blurs on the way to a click, and the list
+      // would be gone before the name could be taken.
+      e.preventDefault();
+      chooseRouteCity(which, p);
+    });
+    box.append(btn);
+  }
+  box.hidden = false;
 }
 
 function renderRouteTool() {
@@ -3920,10 +3976,6 @@ function renderRouteTool() {
   if (add) add.hidden = routeOn;
   document.getElementById('hud-route-start')?.classList.toggle('is-live', routeOn && routeAim === 'start');
   document.getElementById('hud-route-end')?.classList.toggle('is-live', routeOn && routeAim === 'end');
-  const startValue = document.getElementById('hud-route-start-value');
-  const endValue = document.getElementById('hud-route-end-value');
-  if (startValue) startValue.textContent = routePlaceLabel(routeStart);
-  if (endValue) endValue.textContent = routePlaceLabel(routeEnd);
   document.getElementById('hud-route-car')?.classList.toggle('active', routeMode === 'car');
   document.getElementById('hud-route-train')?.classList.toggle('active', routeMode === 'train');
   const carCredit = document.getElementById('hud-route-credit-car');
@@ -3983,10 +4035,16 @@ function openRouteTool() {
   routeLine = null;
   routeStatus = 'hud-route.tap-for-a-start';
   routeSeq += 1;
+  for (const which of ['start', 'end']) {
+    const input = routeField(which);
+    if (input) input.value = '';
+  }
+  clearRouteHits();
   renderRouteTool();
   syncRouteDraft();
   paintRegionOutline();
   updateBrush();
+  routeField('start')?.focus();
 }
 
 function closeRouteTool() {
@@ -3996,23 +4054,73 @@ function closeRouteTool() {
   routeEnd = null;
   routeLine = null;
   routeSeq += 1;
+  for (const which of ['start', 'end']) {
+    const input = routeField(which);
+    if (input) input.value = '';
+  }
+  clearRouteHits();
   renderRouteTool();
   syncRouteDraft();
   paintRegionOutline();
   updateBrush();
 }
 
-function placeRoutePoint(lngLat) {
-  const p = { lng: lngLat.lng, lat: lngLat.lat };
-  if (!routeStart || routeAim === 'start') {
-    routeStart = p;
+function commitRouteEnd(which, place, advance) {
+  if (which === 'start') {
+    routeStart = place;
     routeAim = routeEnd ? null : 'end';
   } else {
-    routeEnd = p;
-    routeAim = null;
+    routeEnd = place;
+    routeAim = routeStart ? null : 'start';
   }
   routeLine = null;
+  const input = routeField(which);
+  if (input) input.value = routeLabel(place);
+  // A typed city is the first of two names. Focusing the empty one keeps the
+  // keyboard where the next word goes. A tap is already aimed, and pulling
+  // the keyboard up over the map would take the second tap away.
+  if (advance) {
+    const next = which === 'start' ? 'end' : 'start';
+    const nextPlace = next === 'start' ? routeStart : routeEnd;
+    if (!nextPlace) routeField(next)?.focus();
+  }
   void loadRouteLine();
+}
+
+function chooseRouteCity(which, p) {
+  clearRouteHits(which);
+  commitRouteEnd(which, { lng: p.lng, lat: p.lat, name: p.name }, true);
+}
+
+async function onRouteQuery(which) {
+  const input = routeField(which);
+  if (!input || !routeOn) return;
+  const q = input.value.trim();
+  const place = which === 'start' ? routeStart : routeEnd;
+  if (q !== routeLabel(place)) {
+    if (which === 'start') routeStart = null;
+    else routeEnd = null;
+    routeLine = null;
+    routeAim = which;
+    routeStatus = which === 'end' ? 'hud-route.tap-for-a-destination' : 'hud-route.tap-for-a-start';
+    renderRouteTool();
+    syncRouteDraft();
+  }
+  const seq = ++routeQuerySeq[which];
+  if (q.length < 2) {
+    clearRouteHits(which);
+    return;
+  }
+  await loadPlaces();
+  if (seq !== routeQuerySeq[which] || routeField(which)?.value.trim() !== q) return;
+  if (document.activeElement !== routeField(which)) return;
+  showRouteHits(which, searchPlaces(q, 5).filter((p) => p.kind === 'town'));
+}
+
+function placeRoutePoint(lngLat) {
+  const which = !routeStart || routeAim === 'start' ? 'start' : 'end';
+  clearRouteHits(which);
+  commitRouteEnd(which, { lng: lngLat.lng, lat: lngLat.lat }, false);
 }
 
 function setRouteMode(next) {
@@ -4051,6 +4159,7 @@ async function loadRouteLine() {
     if (res.ok && Array.isArray(points) && points.length >= 2) {
       routeLine = points;
       routeStatus = 'hud-route.confirm-to-colour-it-in';
+      revealRouteLine(points);
     } else {
       routeLine = null;
       const missing = res.status === 404 || body?.error === 'none';
@@ -4065,6 +4174,44 @@ async function loadRouteLine() {
   }
   renderRouteTool();
   syncRouteDraft();
+}
+
+// A typed pair is usually off the screen you were looking at. A pair already
+// in view — two taps in one town — stays where it was put.
+function revealRouteLine(points) {
+  if (!map?.fitBounds || !map.getBounds || points.length < 2) return;
+  let minLng = Infinity;
+  let minLat = Infinity;
+  let maxLng = -Infinity;
+  let maxLat = -Infinity;
+  for (const p of points) {
+    const lng = p[0];
+    const lat = p[1];
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+    minLng = Math.min(minLng, lng);
+    minLat = Math.min(minLat, lat);
+    maxLng = Math.max(maxLng, lng);
+    maxLat = Math.max(maxLat, lat);
+  }
+  if (!Number.isFinite(minLng)) return;
+  const view = map.getBounds();
+  if (view?.contains?.([minLng, minLat]) && view.contains([maxLng, maxLat])) return;
+  const panel = document.getElementById('hud-panel')?.getBoundingClientRect();
+  const pad = 56;
+  let left = pad;
+  let top = pad;
+  let bottom = pad;
+  if (panel && panel.width > 0 && panel.height > 0) {
+    if (panel.left < window.innerWidth * 0.5 && panel.top < window.innerHeight * 0.55) {
+      left = Math.max(pad, panel.right + 16);
+    }
+    if (panel.bottom > window.innerHeight * 0.55) bottom = Math.max(pad, window.innerHeight - panel.top + 16);
+  }
+  map.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
+    padding: { left, top, right: pad, bottom },
+    duration: 600,
+    maxZoom: 12,
+  });
 }
 
 function confirmRoute() {
@@ -12076,16 +12223,27 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
   });
   document.getElementById('hud-route-cancel').addEventListener('click', closeRouteTool);
   document.getElementById('hud-route-confirm').addEventListener('click', confirmRoute);
-  document.getElementById('hud-route-start').addEventListener('click', () => {
-    routeAim = 'start';
-    routeStatus = 'hud-route.tap-for-a-start';
-    renderRouteTool();
-  });
-  document.getElementById('hud-route-end').addEventListener('click', () => {
-    routeAim = 'end';
-    routeStatus = routeStart ? 'hud-route.tap-for-a-destination' : 'hud-route.tap-for-a-start';
-    renderRouteTool();
-  });
+  for (const which of ['start', 'end']) {
+    const input = routeField(which);
+    input.addEventListener('focus', () => {
+      if (!routeOn) return;
+      routeAim = which;
+      renderRouteTool();
+    });
+    input.addEventListener('input', () => { void onRouteQuery(which); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        clearRouteHits(which);
+        return;
+      }
+      if (e.key !== 'Enter') return;
+      const hit = routeHitList[which][0];
+      if (!hit) return;
+      e.preventDefault();
+      chooseRouteCity(which, hit);
+    });
+    input.addEventListener('blur', () => clearRouteHits(which));
+  }
   document.getElementById('hud-route-car').addEventListener('click', () => setRouteMode('car'));
   document.getElementById('hud-route-train').addEventListener('click', () => setRouteMode('train'));
   paintBrushUi();
