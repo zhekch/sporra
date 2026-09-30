@@ -5818,12 +5818,18 @@ function routeFramePadding() {
   return { top: FRAME_PAD, bottom: Math.min(bottom, room), left: FRAME_PAD, right: FRAME_PAD };
 }
 
+// How long the camera takes to catch a scrubbed point. Short enough that a
+// fast drag does not leave the puck at the edge, long enough that the move
+// is a glide rather than a cut.
+const SCRUB_EASE_MS = 380;
+
 // A scrubbed point that has walked off the map still in view — past the edge,
-// or down behind the card — is put back in the middle of what is left. A nudge
-// lost the race with the drag: the finger keeps moving while the pan is still
-// settling, and the dot left the screen. The zoom stays where the frame put it.
+// or down behind the card — is eased back into the middle of what is left.
+// Each step of the drag starts that glide again from wherever the camera has
+// got to, so it follows the finger instead of queueing up pans, and instead
+// of cutting there. The zoom stays where the frame put it.
 function revealSample(sample) {
-  if (!sample || !map?.jumpTo) return;
+  if (!sample || !map?.easeTo) return;
   const padding = routeFramePadding();
   const pad = typeof padding === 'number'
     ? { top: padding, bottom: padding, left: padding, right: padding }
@@ -5836,7 +5842,12 @@ function revealSample(sample) {
     && p.y <= window.innerHeight - pad.bottom - margin;
   if (inside) return;
   releaseCameraLock();
-  map.jumpTo({ center: [sample.lng, sample.lat], padding });
+  map.easeTo({
+    center: [sample.lng, sample.lat],
+    padding,
+    duration: SCRUB_EASE_MS,
+    easing: (t) => 1 - (1 - t) ** 3,
+  });
 }
 
 /**
