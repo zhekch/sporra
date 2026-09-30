@@ -71,6 +71,12 @@ const geom = [
   Array.from({ length: 40 }, (_, i) => [7.44 + i * 0.001, 46.94 + i * 0.0008]),
   Array.from({ length: 12 }, (_, i) => [7.5 + i * 0.001, 46.98 + i * 0.0008]),
 ];
+// One pair per stored point. A shorter series is a trace that has drifted, and
+// it has to be dropped rather than graphed against the wrong bend.
+const traceFor = (baseEle, t0) => [
+  geom[0].map((_, i) => [baseEle + i * 0.5, t0 + i]),
+  geom[1].map((_, i) => [baseEle + 100 + i, t0 + 1000 + i]),
+];
 
 try {
   if (!(await waitForServer())) throw new Error(`server never came up:\n${serverErr}`);
@@ -97,6 +103,7 @@ try {
         key: 'k-known', name: 'Bern → Thun', place: 'Bern → Thun', source: 'komoot',
         sport: 'Cycling', sportGuessed: false, elevUp: 640,
         firstAt: 1746345600, lastAt: 1746358800, lengthM: 62700, geom,
+        trace: traceFor(540, 1746345600),
       },
       {
         key: 'k-guessed', name: 'Hike', place: 'Frutigen', source: 'gpx',
@@ -126,6 +133,11 @@ try {
     check(guessed.sportGuessed === true, 'a worked-out sport is flagged as a guess',
       `got ${guessed.sportGuessed}`);
     check(known.elevUp === 640, 'climb survived', `got ${known.elevUp}`);
+    check(Array.isArray(known.trace) && known.trace.length === 2 && known.trace[0].length === 40
+      && known.trace[1].length === 12 && known.trace[0][0][0] === 540,
+      'trace survived lined up with the line',
+      `got ${JSON.stringify(known.trace)?.slice(0, 80)}`);
+    check(!('trace' in guessed), 'a route saved without a trace comes back without one');
     check(known.source === 'komoot', 'source survived', `got "${known.source}"`);
     check(known.place === 'Bern → Thun', 'place survived', `got "${known.place}"`);
     check(Math.round(known.lengthM) === 62700, 'length survived', `got ${known.lengthM}`);
@@ -138,10 +150,29 @@ try {
     // Editing by hand promotes a guess to a fact.
     const upd = await api('POST', '/api/routes/update', { id: guessed.id, sport: 'Ski touring' });
     check(upd.status === 200, 'POST /api/routes/update');
-    const after = (await api('GET', '/api/routes')).body?.routes?.find((r) => r.id === guessed.id);
+    const meta = (await api('GET', '/api/routes')).body?.routes ?? [];
+    const after = meta.find((r) => r.id === guessed.id);
+    const metaKnown = meta.find((r) => r.id === known.id);
     check(after?.sport === 'Ski touring', 'the edit stuck', `got "${after?.sport}"`);
     check(after?.sportGuessed === false, 'editing clears the guess flag', `got ${after?.sportGuessed}`);
+    check(metaKnown && known.trace && !('trace' in metaKnown),
+      'the list without geometry omits the trace',
+      `got ${JSON.stringify(metaKnown)?.slice(0, 120)}`);
   }
+
+  const bad = await api('POST', '/api/routes', {
+    routes: [{
+      key: 'k-badtrace', name: 'Short trace', source: 'gpx', sport: 'Walking',
+      elevUp: 10, firstAt: 1744000000, lastAt: 1744001000, lengthM: 5000, geom,
+      trace: [[[1, 1]]],
+    }],
+  });
+  check(bad.status === 200 && bad.body?.added === 1, 'a route with a bad trace is still saved',
+    `status=${bad.status} added=${bad.body?.added}`);
+  const badBack = (await api('GET', '/api/routes?geom=1')).body?.routes?.find((r) => r.name === 'Short trace');
+  check(!!badBack && badBack.geom?.length === 2 && badBack.trace == null,
+    'a trace that does not line up is dropped, and the route is kept',
+    `geom=${badBack?.geom?.length} trace=${JSON.stringify(badBack?.trace)?.slice(0, 40)}`);
 
   // --- Re-importing the same file -------------------------------------------
   // The question this answers: drop in a GPX you already imported, back when
@@ -160,6 +191,7 @@ try {
       key: 'k-reimport', name: 'Bern → Thun', source: 'gpx', place: 'Bern → Thun',
       sport: 'Hike', sportGuessed: false, elevUp: 640,
       firstAt: 1745000000, lastAt: 1745010000, lengthM: 12000, geom,
+      trace: traceFor(400, 1745000000),
     }],
   });
   check(redo.body?.added === 0 && redo.body?.updated === 1, 're-import updates rather than duplicating',
@@ -172,6 +204,9 @@ try {
   check(one[0]?.sport === 'Hike', 'the missing activity was filled in', `got "${one[0]?.sport}"`);
   check(one[0]?.place === 'Bern → Thun', 'the missing place was filled in', `got "${one[0]?.place}"`);
   check(one[0]?.name === 'Bern → Thun', 'a placeholder date name was replaced', `got "${one[0]?.name}"`);
+  const filled = (await api('GET', '/api/routes?geom=1')).body?.routes?.find((r) => r.id === one[0]?.id);
+  check(filled?.trace?.[0]?.[0]?.[0] === 400 && filled.trace[0].length === 40,
+    're-import fills an empty trace', `got ${JSON.stringify(filled?.trace)?.slice(0, 60)}`);
 
   // …but a value you chose yourself is not something an import may overwrite.
   await api('POST', '/api/routes/update', { id: one[0].id, name: 'My favourite loop', sport: 'Ski touring' });
@@ -180,6 +215,7 @@ try {
       key: 'k-reimport', name: 'Bern → Thun', source: 'gpx', place: 'Somewhere else',
       sport: 'Hike', sportGuessed: false, elevUp: 999,
       firstAt: 1745000000, lastAt: 1745010000, lengthM: 12000, geom,
+      trace: traceFor(900, 1745000000),
     }],
   });
   const kept = (await api('GET', '/api/routes')).body?.routes?.find((r) => r.id === one[0].id);
@@ -187,6 +223,10 @@ try {
   check(kept?.sport === 'Ski touring', 're-import does not overwrite an activity you set', `got "${kept?.sport}"`);
   check(kept?.place === 'Bern → Thun', 're-import does not overwrite a place already worked out', `got "${kept?.place}"`);
   check(kept?.elevUp === 640, 're-import does not re-derive a climb it already has', `got ${kept?.elevUp}`);
+  const keptGeom = (await api('GET', '/api/routes?geom=1')).body?.routes?.find((r) => r.id === one[0].id);
+  check(keptGeom?.trace?.[0]?.[0]?.[0] === 400,
+    're-import does not replace a trace it already has',
+    `got ${JSON.stringify(keptGeom?.trace)?.slice(0, 40)}`);
 
   // A guessed activity, though, should yield to one the file actually states.
   await api('POST', '/api/routes', {

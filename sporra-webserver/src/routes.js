@@ -183,6 +183,102 @@ export function segmentLength(points) {
   return m;
 }
 
+/**
+ * A trace that lines up with `geom`, or null when it does not.
+ *
+ * Same segments, same lengths. A height is metres to one decimal, or null when
+ * the file never said; a time is epoch seconds, or 0. Anything else is refused
+ * outright — a trace that has drifted from its line would graph a hill in the
+ * wrong place, which is worse than no graph.
+ *
+ * @param {unknown} geom
+ * @param {unknown} trace
+ * @returns {Array<Array<[number|null, number]>>|null}
+ */
+export function alignTrace(geom, trace) {
+  if (!Array.isArray(geom) || !Array.isArray(trace) || !trace.length || geom.length !== trace.length) return null;
+  const out = [];
+  for (let s = 0; s < geom.length; s++) {
+    const line = geom[s];
+    const series = trace[s];
+    if (!Array.isArray(line) || !Array.isArray(series) || line.length < 2 || line.length !== series.length) {
+      return null;
+    }
+    const seg = [];
+    for (let i = 0; i < series.length; i++) {
+      const pair = series[i];
+      if (!Array.isArray(pair)) return null;
+      const ele = pair[0] == null || pair[0] === '' ? null : +pair[0];
+      const t = Math.trunc(+pair[1]) || 0;
+      if (ele !== null && !Number.isFinite(ele)) return null;
+      if (t < 0) return null;
+      seg.push([ele === null ? null : Math.round(ele * 10) / 10, t]);
+    }
+    out.push(seg);
+  }
+  return out;
+}
+
+/**
+ * One stored route as the points the card graphs, in the order they were ridden.
+ *
+ * Speed is the span that *ended* here, and only inside a segment. The break
+ * between two segments is a pause the line already refused to draw across, and
+ * it is not a velocity. Distance likewise does not charge the jump.
+ *
+ * @param {unknown} geom
+ * @param {unknown} trace
+ * @returns {Array<{lng:number,lat:number,distM:number,ele:number|null,t:number,elapsed:number|null,speed:number|null,seg:number}>}
+ */
+export function routeSamples(geom, trace) {
+  const aligned = alignTrace(geom, trace);
+  if (!aligned || !Array.isArray(geom)) return [];
+  const out = [];
+  let dist = 0;
+  let firstT = 0;
+  for (let s = 0; s < geom.length; s++) {
+    const line = geom[s];
+    const series = aligned[s];
+    let prev = null;
+    for (let i = 0; i < line.length; i++) {
+      const lng = +line[i][0];
+      const lat = +line[i][1];
+      const ele = series[i][0];
+      const t = series[i][1];
+      if (t && !firstT) firstT = t;
+      let speed = null;
+      if (prev) {
+        const metres = haversine(prev, { lng, lat });
+        dist += metres;
+        const dt = prev.t && t ? t - prev.t : 0;
+        if (dt > 0) speed = metres / dt;
+      }
+      const point = { lng, lat, distM: dist, ele, t, elapsed: null, speed, seg: s };
+      out.push(point);
+      prev = point;
+    }
+  }
+  if (firstT) {
+    for (const p of out) p.elapsed = p.t ? p.t - firstT : null;
+  }
+  return out;
+}
+
+/** Index of the stored point nearest a tap, or -1 when there is nothing to hit. */
+export function nearestSample(samples, lng, lat) {
+  let best = -1;
+  let bestD = Infinity;
+  const here = { lng, lat };
+  for (let i = 0; i < samples.length; i++) {
+    const d = haversine(here, samples[i]);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
 // --- Simplifying ----------------------------------------------------------------
 // Douglas–Peucker on a local planar projection: over one activity the scale
 // error is far below the tolerance, and it keeps the whole thing in meters.
@@ -299,11 +395,17 @@ export function buildRoute(track, { source, fileName = '', index = 0 } = {}) {
   let firstAt = track.firstAt || 0;
   let lastAt = track.lastAt || 0;
   const geom = [];
+  // Elevation and time, one pair per stored point, in the same segments as
+  // `geom`. Kept beside the line rather than inside it: the key below is a
+  // hash of the coordinates, and a re-import of the same file has to stay the
+  // same route. A missing height stays null — 0 m is a real shoreline.
+  const trace = [];
 
   for (const seg of segments) {
     lengthM += segmentLength(seg);
     points += seg.length;
     const line = [];
+    const series = [];
     for (const p of seg) {
       if (p.lng < minLng) minLng = p.lng;
       if (p.lng > maxLng) maxLng = p.lng;
@@ -314,8 +416,11 @@ export function buildRoute(track, { source, fileName = '', index = 0 } = {}) {
         if (p.t > lastAt) lastAt = p.t;
       }
       line.push([round(p.lng), round(p.lat)]);
+      const ele = Number.isFinite(p.ele) ? Math.round(p.ele * 10) / 10 : null;
+      series.push([ele, p.t ? Math.trunc(p.t) : 0]);
     }
     geom.push(line);
+    trace.push(series);
   }
   if (lengthM < ROUTE_MIN_LENGTH_M) return null;
 
@@ -357,6 +462,7 @@ export function buildRoute(track, { source, fileName = '', index = 0 } = {}) {
     points,
     bounds: [minLng, minLat, maxLng, maxLat],
     geom,
+    trace,
     // Recognising a route by its shape is quicker than reading its name, and a
     // list of 22 can't carry the real geometry — see routeThumb.
     thumb: routeThumb(geom),

@@ -173,11 +173,14 @@ export async function listActivities({ token, after, limit = MAX_ACTIVITIES_PER_
  * Returns [] when the streams have been stripped (some very old activities).
  */
 export async function activityPoints({ token, activity }) {
-  const q = new URLSearchParams({ keys: 'latlng,time', key_by_type: 'true' });
+  const q = new URLSearchParams({ keys: 'latlng,time,altitude', key_by_type: 'true' });
   const j = await call(`${API}/activities/${encodeURIComponent(activity.id)}/streams?${q}`, auth(token), 'activity');
   const latlng = j?.latlng?.data;
   if (!Array.isArray(latlng) || !latlng.length) return [];
   const times = Array.isArray(j?.time?.data) ? j.time.data : null;
+  // Absent on a ride recorded without a barometer. A missing stream is not a
+  // failed activity — the line and the clock are still there.
+  const alts = Array.isArray(j?.altitude?.data) ? j.altitude.data : null;
   const points = [];
   for (const [i, pair] of latlng.entries()) {
     if (!Array.isArray(pair)) continue;
@@ -188,7 +191,9 @@ export async function activityPoints({ token, activity }) {
     if (lat === 0 && lng === 0) continue;
     // `time` counts seconds from the start of the activity.
     const offset = times && Number.isFinite(+times[i]) ? Math.trunc(+times[i]) : 0;
-    points.push({ lat, lng, t: activity.startedAt + offset });
+    const p = { lat, lng, t: activity.startedAt + offset };
+    if (alts && Number.isFinite(+alts[i])) p.ele = +alts[i];
+    points.push(p);
   }
   return points;
 }

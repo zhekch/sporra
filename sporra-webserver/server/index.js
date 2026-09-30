@@ -103,7 +103,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.107.0';
+export const SERVER_VERSION = '0.108.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -219,7 +219,7 @@ import { userMessage } from './user-error.js';
 // so a Strava ride and an imported GPX are keyed and simplified identically.
 // Their *names* are left blank: the place-name dataset is a 2 MB browser chunk,
 // and POST /api/routes/places already exists to fill them in from the page.
-import { buildRoutes, guessSport, canonicalSport, routeThumb, splitOnGaps, trackName } from '../src/routes.js';
+import { alignTrace, buildRoutes, guessSport, canonicalSport, routeThumb, splitOnGaps, trackName } from '../src/routes.js';
 import { isKomootTourUrl } from '../src/komoot.js';
 // Everything above is about getting data *in*. This is the one thing that
 // copies it back out again, on a schedule, without being asked.
@@ -382,6 +382,7 @@ db.exec(`
     max_lng  REAL NOT NULL DEFAULT 0,
     max_lat  REAL NOT NULL DEFAULT 0,
     geom     TEXT NOT NULL,             -- JSON [[ [lng,lat], … ], …] (one array per segment)
+    trace    TEXT NOT NULL DEFAULT '',  -- JSON [[ [ele|null, epoch s], … ], …], aligned with geom
     UNIQUE (user_id, key)
   );
   CREATE INDEX IF NOT EXISTS routes_user ON routes(user_id);
@@ -489,6 +490,7 @@ for (const [table, column, decl] of [
   ['routes', 'sport_guessed', 'INTEGER NOT NULL DEFAULT 0'],
   ['routes', 'thumb', "TEXT NOT NULL DEFAULT ''"],
   ['routes', 'link', "TEXT NOT NULL DEFAULT ''"],
+  ['routes', 'trace', "TEXT NOT NULL DEFAULT ''"],
   ['device_links', 'last_photo_scan', 'INTEGER NOT NULL DEFAULT 0'],
   ['device_links', 'total_photos', 'INTEGER NOT NULL DEFAULT 0'],
   ['users', 'is_admin', 'INTEGER NOT NULL DEFAULT 0'],
@@ -717,7 +719,7 @@ const q = {
   `),
   routesGeom: db.prepare(`
     SELECT id, name, place, sport, sport_guessed, elev_up, source, added_at, first_at, last_at, length_m, points,
-           min_lng, min_lat, max_lng, max_lat, thumb, link, geom
+           min_lng, min_lat, max_lng, max_lat, thumb, link, geom, trace
     FROM routes WHERE user_id = ?
     ORDER BY (CASE WHEN first_at > 0 THEN first_at ELSE added_at END) DESC, id DESC
   `),
@@ -741,11 +743,14 @@ const q = {
   //   • source   — never. Re-filing a route under a different app is an edit.
   //
   // The geometry, dates and length are what the key is built from, so they are
-  // identical by definition and there is nothing to update.
+  // identical by definition and there is nothing to update. The trace is not
+  // part of that key — it is the heights and times the line was stored
+  // without — so a re-import may fill an empty one and must not replace one
+  // that is already there.
   insRoute: db.prepare(`
     INSERT INTO routes(user_id, key, name, place, sport, sport_guessed, elev_up, source, added_at, first_at, last_at,
-                       length_m, points, min_lng, min_lat, max_lng, max_lat, thumb, link, geom)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       length_m, points, min_lng, min_lat, max_lng, max_lat, thumb, link, geom, trace)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id, key) DO UPDATE SET
       elev_up = CASE WHEN elev_up = 0 AND excluded.elev_up > 0 THEN excluded.elev_up ELSE elev_up END,
       -- A guess is a placeholder, so re-importing the file replaces it outright:
@@ -773,7 +778,8 @@ const q = {
                WHEN excluded.name = '' OR excluded.name = 'Route' THEN name
                WHEN name = 'Route' OR name GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
                  THEN excluded.name
-               ELSE name END
+               ELSE name END,
+      trace = CASE WHEN trace = '' AND excluded.trace != '' THEN excluded.trace ELSE trace END
   `),
   // Backfill for routes stored before place names existed. Only ever fills a
   // blank in: a place already worked out is not second-guessed.
@@ -1590,6 +1596,22 @@ function cleanGeom(geom) {
   return out.length ? out : null;
 }
 
+// A trace that does not line up with the line is stored as nothing. The route
+// itself still lands — the coordinates are what make it a route — and the card
+// says the heights were not kept rather than graphing them in the wrong place.
+function traceJson(geom, raw) {
+  let parsed = raw;
+  if (typeof raw === 'string' && raw) {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return '';
+    }
+  }
+  const aligned = alignTrace(geom, parsed);
+  return aligned ? JSON.stringify(aligned) : '';
+}
+
 function routeBounds(geom) {
   let minLng = Infinity;
   let minLat = Infinity;
@@ -1629,6 +1651,16 @@ function routeOut(r) {
       out.geom = JSON.parse(r.geom);
     } catch {
       out.geom = [];
+    }
+  }
+  // Only the geometry query selects this column. An empty one is the same as
+  // a route saved before heights were kept, and the card treats both as absent.
+  if (r.trace) {
+    try {
+      const parsed = JSON.parse(r.trace);
+      if (Array.isArray(parsed) && parsed.length) out.trace = parsed;
+    } catch {
+      /* a damaged trace is the same as none */
     }
   }
   return out;
@@ -1850,6 +1882,7 @@ async function stravaSync(row) {
             routeThumb(geom),
             '',
             JSON.stringify(geom),
+            traceJson(geom, r.trace),
           );
         }
       });
@@ -3005,6 +3038,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
               String(r.thumb ?? '') || routeThumb(geom),
               isKomootTourUrl(r.link) ? String(r.link).slice(0, 300) : '',
               JSON.stringify(geom),
+              traceJson(geom, r.trace),
             );
             // A route already here is refreshed rather than duplicated — see
             // insRoute — so it counts as updated, not as skipped.
@@ -3411,6 +3445,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
                 routeThumb(geom),
                 '',
                 JSON.stringify(geom),
+                traceJson(geom, r.trace),
               );
               routes++;
             }

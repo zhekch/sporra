@@ -2030,6 +2030,49 @@ to the full entry in the routes dialog. The card used to carry Edit and Remove
 too, which made it a second place that knew how to change a route; everything
 that changes one now lives in exactly one place.
 
+The day and the clock are one line. A ride that finished the day it started
+reads "12 Sep 2024, 14:32"; one that ran past midnight names both ends. There is
+no separate count of points. The shape is the line.
+
+Opening the card draws that one route and leaves the rest off — the same thing
+Search and the routes list already did. The button on the card, and the chip on
+the map, put the others back. A tap that lands on several still asks, via the
+stack menu below; picking a row isolates that one and leaves the menu up.
+
+Above the card, two pills, **Speed** and **Elevation**, recolour the open route.
+Speed runs red where it was slow and green where it was fast; elevation runs
+green where it was low and red where it was high. The scale is this activity's
+own. Speed drops the slowest and fastest twentieth (`metricDomain` in
+`src/route-metric.js`), so a stop or one bad fix does not paint the whole line
+one colour, and a climb of only a few metres (`ELEV_FLAT_M`, 8) or a speed range
+under `SPEED_FLAT_MS` (0.4 m/s) stays a single yellow rather than inventing a
+ramp out of noise. It is not a `line-gradient`. That expression is one ramp for
+the whole layer and it restarts on every feature, and a pause has already split
+the route into several. The open route is drawn again as one short line per span
+on the `route-metric` source, casing under it, and the activity-coloured line,
+its glow and the 3D ghost are taken out from under it with a `met` feature
+state — the same opacity case the stack uses. Feature state does not survive
+`setData`, so `met` is put back wherever the highlight is. Other routes, when
+Show all is on, keep their activity colours. Only the open one is ramped, and
+the ramp leaves with the card.
+
+Under Duration, the same series is a graph against distance. A press on it, or
+on the line, drops a dot in both places and a small label: speed, time since the
+start, and elevation, whichever this activity has. Opening the card does not
+drop the dot; the first press does. Switching pills keeps the place. A point
+that would land behind the card is panned up until it sits just above the pills,
+and the zoom is left alone. The metric line is not a layer a tap asks, so a pile
+is still a pile: more than one route under the cursor opens the menu rather than
+scrubbing.
+
+Zoom frames the line in the map that is still visible above the card. The bottom
+inset is the top of the pills down to the bottom of the window, plus a small
+gap, measured after the card is showing — Search and the list open the card
+before they fly, because a hidden card has no height. Activities saved before
+per-point heights were kept have neither pill. The card says to import the file
+again. Re-importing fills the gap and does not duplicate, and it does not
+replace a trace that is already there.
+
 **Where the tap lands on twenty lines it asks instead.** A winter of skiing is
 forty runs down the same piste and a commute is the same street four hundred
 times; on the map those are one thick line, and a tap used to open whichever of
@@ -2043,7 +2086,11 @@ pick. It stays open after a pick, because a stack is something you go through
 rather than choose from once. **Hovering a row lights its line on the map**,
 which is what makes the list usable when six rows are the same word — and it
 costs nothing of ours, being the `hov` feature state the pointer already writes,
-answered by paint expressions the glow layers already carry.
+answered by paint expressions the glow layers already carry. Once a row has been
+picked, that route is the only line in the source, so a hover draws the row
+under the pointer on its own and puts back whatever was showing when the pointer
+leaves. The ramp is emptied for that moment: it belongs to the open route, and
+leaving it up would paint the wrong line.
 
 What counts as under the tap is `ROUTE_TAP_PAD_PX`: an 8-pixel box around the
 point rather than the point itself, because a hairline is hard to hit with a
@@ -2378,8 +2425,15 @@ because then it is a fact. Routes saved before any of this existed are filled in
 once at startup from the length and clock already in the row — on the author's
 own map that took 1 of 21 routes with an activity to 19. Only blanks are
 touched: the one route Komoot had labelled kept its own label even where the
-guess disagreed. Elevation cannot be backfilled the same way — the stored
-geometry is flat, so a climb figure needs the file re-importing.
+guess disagreed. A climb total cannot be backfilled from the row either — it
+needs the file. The line used to be flat in the same way: only coordinates were
+stored, so speed and height along it could not be drawn afterwards. They are
+kept now as `routes.trace`, one `[elevation, time]` pair per stored point, lined
+up with `geom` and left empty when the file had neither. The route's key does
+not include them, so the same file is still the same route, and a re-import
+fills an empty trace without touching one that already landed. Speed is not
+stored. It is the distance over the time of that one span, and the break
+between two segments is a pause, not a velocity.
 
 `npm test` covers both, including the ski-day case and the place names
 ("Brunnen") that must not be read as a sport.
@@ -2442,11 +2496,15 @@ loaded, and the result is sent back once.
 
 - **Thinned on import** (`src/routes.js`): Douglas–Peucker at `ROUTE_EPSILON_M`
   (6 m) turns an hour of 1 Hz recording into a couple of hundred points — about
-  4 KB — without losing a corner it actually turned. The tolerance doubles until
-  a route fits under `ROUTE_MAX_POINTS`, and lines shorter than
-  `ROUTE_MIN_LENGTH_M` aren't routes at all.
+  4 KB — without losing a corner it actually turned. The points that survive
+  keep the elevation and the time they arrived with; those live in `trace`,
+  beside the coordinates, because the key is a hash of the coordinates. The
+  tolerance doubles until a route fits under `ROUTE_MAX_POINTS`, and lines
+  shorter than `ROUTE_MIN_LENGTH_M` aren't routes at all.
 - **Re-import safe**: a route's key is a hash of its own (simplified) geometry
-  and dates, so importing the same file twice stores it once.
+  and dates, so importing the same file twice stores it once. A file that now
+  carries heights fills an empty `trace` and leaves a trace that is already
+  there alone.
 - **Lazy**: the map fetches route *metadata* on load and the geometry only once
   the layer is switched on.
 - **Drawn above the basemap's own lines**, unlike the visited wash which reads

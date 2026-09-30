@@ -1794,6 +1794,125 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   text-align: right;
 }
 
+/* The two choices sit above the card, on the map, because they change the
+   line rather than describe it. Anchored to the card so they follow it when
+   the graph appears and the card grows. */
+.route-metric-pills {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  display: flex;
+  gap: 6px;
+}
+
+.route-metric-pills[hidden] {
+  display: none;
+}
+
+.route-metric-pills button {
+  flex: 1;
+  appearance: none;
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(28, 28, 28, 0.92);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.9);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.route-metric-pills button.active {
+  background: #fff;
+  color: #14120e;
+  border-color: transparent;
+}
+
+.route-metric-pills button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.route-metric-graph {
+  height: 72px;
+  margin-top: 4px;
+  touch-action: none;
+  user-select: none;
+  cursor: crosshair;
+}
+
+.route-metric-graph[hidden] {
+  display: none;
+}
+
+.route-metric-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.route-metric-fill {
+  fill: currentColor;
+  opacity: 0.16;
+  stroke: none;
+}
+
+.route-metric-dot {
+  fill: #fff;
+  stroke: #14120e;
+  stroke-width: 2;
+}
+
+.route-metric-empty {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.route-metric-empty[hidden] {
+  display: none;
+}
+
+/* The dot a scrub drops on the line, and the three numbers beside it. It sits
+   on the map, so its own dark glass is what keeps it readable on a pale one. */
+.route-metric-pin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.route-metric-pin-dot {
+  width: 11px;
+  height: 11px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #14120e;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.route-metric-pin-label {
+  padding: 4px 8px;
+  border-radius: 9px;
+  background: rgba(20, 18, 14, 0.9);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
 /* Tap-a-route card: same glass as the cell card, with actions at the bottom */
 .route-info-actions {
   display: flex;
@@ -4776,6 +4895,27 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 
 [data-theme='light'] .route-info-actions {
   border-top-color: rgba(15, 23, 42, 0.12);
+}
+
+[data-theme='light'] .route-metric-pills button {
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+  border-color: rgba(15, 23, 42, 0.14);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
+}
+
+[data-theme='light'] .route-metric-pills button.active {
+  background: #0f172a;
+  color: #fff;
+}
+
+[data-theme='light'] .route-metric-dot {
+  fill: #0f172a;
+  stroke: #fff;
+}
+
+[data-theme='light'] .route-metric-empty {
+  color: rgba(15, 23, 42, 0.62);
 }
 
 /* The photo card's own surfaces. The white-on-glass values above disappear

@@ -500,6 +500,12 @@
     </div>
 
     <div class="cell-info" id="route-info" hidden>
+      <!-- Above the card, not in it. Which of the two the line is coloured by.
+           Hidden when this activity was saved before either was kept. -->
+      <div class="route-metric-pills" id="route-metric-pills" hidden>
+        <button data-i18n="route-metric-speed.speed" type="button" id="route-metric-speed">Speed</button>
+        <button data-i18n="route-metric-elev.elevation" type="button" id="route-metric-elev">Elevation</button>
+      </div>
       <div class="cell-info-head">
         <div>
           <div data-i18n="route-info-name.route" class="cell-info-title" id="route-info-name">Route</div>
@@ -512,6 +518,8 @@
         </button>
       </div>
       <div class="cell-info-rows" id="route-info-rows"></div>
+      <div class="route-metric-graph" id="route-metric-graph" hidden></div>
+      <p data-i18n="route-metric-empty.import-the-file-again" class="route-metric-empty" id="route-metric-empty" hidden>Speed and elevation aren't kept for this activity yet. Import the file again and they will be.</p>
       <!-- The suggestions for the Activity field. The editing form itself
            moved into the routes dialog (Routes and statistics → a route →
            Edit); this list is what that form's input reads from, so it stays

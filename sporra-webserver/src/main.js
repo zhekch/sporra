@@ -157,7 +157,8 @@ import { mountAdmin, mountAsUser } from './admin-ui.js';
 import { createHistory, plural } from './history.js';
 import { showToast } from './toast.js';
 import { busy } from './busy.js';
-import { routesToFC, totalLength, formatDistance, canonicalSport, duplicateRoutes } from './routes.js';
+import { routesToFC, totalLength, formatDistance, formatDuration, canonicalSport, duplicateRoutes, routeSamples, nearestSample } from './routes.js';
+import { metricCollection } from './route-metric.js';
 import { paletteFor, randomPalette } from './route-colors.js';
 import { reconcilePrefs, remoteToken, readHome } from './prefs.js';
 import { loadPlaces, describeRoute, nearestTown } from './places.js';
@@ -2264,6 +2265,14 @@ const routeWidth = (scale, hover = 1) => [
       w * scale],
   ]),
 ];
+// The ramp is not a feature of the routes source, so it cannot ask `sel`. It
+// is only ever the route the card has open, which is already the selected width.
+const metricWidth = (extra) => [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  ...ROUTE_WIDTH_STOPS.flatMap(([zoom, w]) => [zoom, w * ROUTE_SELECTED_SCALE * extra]),
+];
 
 function applyTileVis() {
   map.setPaintProperty('tile-fill', 'fill-opacity', tileFillOpacity());
@@ -4309,8 +4318,13 @@ const ROUTE_LAYERS = [...ROUTE_GLOW_IDS, 'route-line'];
 // rings did not quietly make every tap on the map four times the work.
 const ROUTE_TAP_LAYERS = [ROUTE_GLOW_IDS[0], 'route-line'];
 /** Everything drawn for a route, ghost included, for showing and hiding. */
-const routeDrawLayers = () =>
-  (map.getLayer(ROUTE_GHOST_ID) ? [ROUTE_GHOST_ID, ...ROUTE_LAYERS] : ROUTE_LAYERS);
+const routeDrawLayers = () => {
+  const ids = map.getLayer(ROUTE_GHOST_ID) ? [ROUTE_GHOST_ID, ...ROUTE_LAYERS] : [...ROUTE_LAYERS];
+  // Hidden with the rest when Activities is switched off. Not a tap target:
+  // the line underneath is the one a click is about.
+  if (map.getLayer('route-metric-line')) ids.push('route-metric-casing', 'route-metric-line');
+  return ids;
+};
 
 let routesOn = localStorage.getItem(ROUTES_KEY) === 'on';
 let routeList = []; // newest first; carries `geom` only once routeGeom is true
@@ -4978,11 +4992,16 @@ const visibleRoutes = () => {
   return listedRoutes().filter((r) => !hiddenSports.has(sportKey(r)));
 };
 
-/** Draw only this route, or (with null) go back to everything. */
-function setSoloRoute(id) {
+/**
+ * Draw only this route, or (with null) go back to everything.
+ *
+ * `keepStack` is the stack menu hovering a row. The ordinary call closes that
+ * menu, because a list reload is not the pile you opened — a hover is.
+ */
+function setSoloRoute(id, { keepStack = false } = {}) {
   soloRoute = id ?? null;
   updateSoloChip();
-  syncRoutes();
+  syncRoutes({ keepStack });
 }
 
 // The chip is the only way out of isolation that doesn't mean opening a menu,
@@ -5093,13 +5112,19 @@ const routeColorExpr = (mix) => {
 // case here empties the line, all eight glow rings and the ghost together.
 const routeAlphaExpr = () => {
   const base = routeMatchExpr(hexAlpha);
-  return stackOnly ? ['case', inStack(), base, 0] : base;
+  const shown = stackOnly ? ['case', inStack(), base, 0] : base;
+  // `met` is the route whose speed or elevation is drawn as its own line. The
+  // activity colour under that line would show through at every join.
+  return ['case', ['boolean', ['feature-state', 'met'], false], 0, shown];
 };
 const inStack = () => ['in', ['id'], ['literal', [...stackOnly]]];
 // The see-through-buildings copy, which is flat rather than per-activity — so
-// the one thing that can move it is a stack card emptying everything else.
-const routeGhostOpacity = () =>
-  (stackOnly ? ['case', inStack(), ROUTE_GHOST_OPACITY, 0] : ROUTE_GHOST_OPACITY);
+// the one thing that can move it is a stack card emptying everything else, or
+// the same route being drawn again in its ramp.
+const routeGhostOpacity = () => {
+  const shown = stackOnly ? ['case', inStack(), ROUTE_GHOST_OPACITY, 0] : ROUTE_GHOST_OPACITY;
+  return ['case', ['boolean', ['feature-state', 'met'], false], 0, shown];
+};
 
 /**
  * Every route currently drawn in a colour that is not its activity's.
@@ -5181,12 +5206,13 @@ async function namePlaces() {
 }
 
 // Push the current list at the map and keep the menu's count honest.
-function syncRoutes() {
+function syncRoutes({ keepStack = false } = {}) {
   // Whatever is about to be drawn, it is not what the stack menu was opened
   // against: an activity hidden, a route deleted, the list reloaded after a sync
   // all pass through here. A menu offering a line that is no longer on the map
-  // is worse than one that closed.
-  closeRouteStack();
+  // is worse than one that closed. A hover inside that menu is the exception:
+  // it is redrawing one of the rows, not replacing the list.
+  if (!keepStack) closeRouteStack();
   updateSoloChip();
   updateRoutesUi();
   const src = map.getSource('routes');
@@ -5208,6 +5234,8 @@ function syncRoutes() {
   if (hoveredRoute != null && routesOn && routeGeom) {
     map.setFeatureState({ source: 'routes', id: hoveredRoute }, { hov: true });
   } else hoveredRoute = null;
+  // After setData, which is what throws feature state away — the ramp included.
+  paintMetricLayer();
 }
 
 function setRoutesOn(on) {
@@ -5255,7 +5283,189 @@ function setHoveredRoute(id) {
 
 function closeRouteInfo() {
   setSelectedRoute(null);
+  clearMetricLine();
   routeInfo?.hide();
+}
+
+// The route whose own line is currently hidden under the ramp. Remembered
+// here because the card's close button hides itself before it tells us, and
+// by then `routeInfo.current()` is already null.
+let metricRouteId = null;
+let metricSamples = [];
+let metricMarker = null;
+// What isolation was, before a stack row under the pointer borrowed it.
+// `undefined` means no row is borrowing it.
+let stackSoloBefore;
+
+/** Drop the ramp, the dot, and the feature state that was hiding the real line. */
+function clearMetricLine() {
+  metricSamples = [];
+  const src = map?.getSource?.('route-metric');
+  if (src) src.setData(EMPTY);
+  liftMetricHide();
+  clearMarker();
+}
+
+function liftMetricHide() {
+  if (metricRouteId == null || !map?.getSource?.('routes')) {
+    metricRouteId = null;
+    return;
+  }
+  map.removeFeatureState({ source: 'routes', id: metricRouteId }, 'met');
+  metricRouteId = null;
+}
+
+/**
+ * Draw the open route in the colour of the pill that is selected.
+ *
+ * Only while that route is actually on the map. A stack row under the pointer
+ * is drawn alone, and leaving the previous ramp up would paint the wrong line.
+ */
+function paintMetricLayer() {
+  const src = map?.getSource?.('route-metric');
+  if (!src) return;
+  const route = routeInfo?.current();
+  const metric = routeInfo?.metric();
+  const visible = !!(route && metric && routesOn && routeGeom
+    && visibleRoutes().some((r) => r.id === route.id));
+  if (!visible) {
+    src.setData(EMPTY);
+    liftMetricHide();
+  } else {
+    metricSamples = routeSamples(route.geom, route.trace);
+    src.setData(metricCollection(metricSamples, metric));
+    if (metricRouteId != null && metricRouteId !== route.id) {
+      map.removeFeatureState({ source: 'routes', id: metricRouteId }, 'met');
+    }
+    metricRouteId = route.id;
+    map.setFeatureState({ source: 'routes', id: route.id }, { met: true });
+  }
+  if (metricMarker) {
+    const showDot = visible && (routeInfo?.scrubIndex() ?? -1) >= 0;
+    metricMarker.getElement().style.display = showDot ? '' : 'none';
+  }
+}
+
+function clearMarker() {
+  metricMarker?.remove();
+  metricMarker = null;
+}
+
+// Under a minute the clock is still seconds. `formatDuration` rounds to the
+// minute and answers nothing at all for zero, which is the start of the line.
+function formatSince(sec) {
+  if (sec == null || !Number.isFinite(sec) || sec < 0) return null;
+  if (sec < 60) return `${Math.round(sec)} s`;
+  return formatDuration(sec) ?? '0 min';
+}
+
+function formatSpeed(ms) {
+  if (ms == null || !Number.isFinite(ms)) return null;
+  const kmh = ms * 3.6;
+  const text = kmh < 10 ? kmh.toFixed(1) : String(Math.round(kmh));
+  return `${text} km/h`;
+}
+
+// The first point of a segment has no incoming span. The label uses the one
+// that leaves, same as the graph, so the start of the line is not a blank.
+function sampleSpeed(samples, index) {
+  const here = samples[index];
+  if (!here) return null;
+  if (here.speed != null) return here.speed;
+  const next = samples[index + 1];
+  if (next && next.seg === here.seg) return next.speed;
+  return null;
+}
+
+function placeMetricMarker() {
+  const index = routeInfo?.scrubIndex() ?? -1;
+  const sample = metricSamples[index];
+  if (!sample || !map) {
+    clearMarker();
+    return;
+  }
+  const bits = [
+    formatSpeed(sampleSpeed(metricSamples, index)),
+    formatSince(sample.elapsed),
+    sample.ele == null ? null : `${Math.round(sample.ele)} m`,
+  ].filter(Boolean);
+  if (!metricMarker) {
+    const el = document.createElement('div');
+    el.className = 'route-metric-pin';
+    const label = document.createElement('div');
+    label.className = 'route-metric-pin-label';
+    const dot = document.createElement('div');
+    dot.className = 'route-metric-pin-dot';
+    el.append(label, dot);
+    metricMarker = new gl.Marker({ element: el, anchor: 'bottom' }).setLngLat([sample.lng, sample.lat]).addTo(map);
+  }
+  const label = metricMarker.getElement().querySelector('.route-metric-pin-label');
+  label.hidden = !bits.length;
+  label.textContent = bits.join(' · ');
+  metricMarker.getElement().style.display = '';
+  metricMarker.setLngLat([sample.lng, sample.lat]);
+}
+
+// How far down the screen the open card reaches, pills included. Absolute
+// pills sit outside the card's own height, so both boxes are measured.
+function routeOcclusionTop() {
+  const card = document.getElementById('route-info');
+  if (!card || card.hidden) return null;
+  let top = card.getBoundingClientRect().top;
+  const pills = document.getElementById('route-metric-pills');
+  if (pills && !pills.hidden) top = Math.min(top, pills.getBoundingClientRect().top);
+  return top;
+}
+
+const FRAME_PAD = 70;
+const FRAME_AIR = 16;
+
+function routeFramePadding() {
+  const topEdge = routeOcclusionTop();
+  if (topEdge == null) return FRAME_PAD;
+  // A card taller than the window would ask for more padding than the canvas
+  // has, and fitBounds refuses that outright.
+  const bottom = Math.max(FRAME_PAD, window.innerHeight - topEdge + FRAME_AIR);
+  const room = Math.max(FRAME_PAD, window.innerHeight - FRAME_PAD * 2 - 40);
+  return { top: FRAME_PAD, bottom: Math.min(bottom, room), left: FRAME_PAD, right: FRAME_PAD };
+}
+
+// A scrubbed point that would land behind the card is slid up until it sits
+// just above the pills. Panning, not zooming: the frame was already chosen.
+function revealSample(sample) {
+  if (!sample || !map) return;
+  const p = map.project([sample.lng, sample.lat]);
+  const edge = 28;
+  let dx = 0;
+  let dy = 0;
+  if (p.x < edge) dx = p.x - edge;
+  else if (p.x > window.innerWidth - edge) dx = p.x - (window.innerWidth - edge);
+  const floor = routeOcclusionTop();
+  const limit = floor == null ? window.innerHeight - edge : floor - FRAME_AIR;
+  if (p.y > limit) dy = p.y - limit;
+  else if (p.y < edge) dy = p.y - edge;
+  if (!dx && !dy) return;
+  releaseCameraLock();
+  map.panBy([dx, dy], { duration: 280 });
+}
+
+/**
+ * The graph and the line are one scrub.
+ *
+ * Called with the samples from a map tap, or with just the index from the
+ * graph — the graph already knows which route is open and must not be told
+ * back, or the two would call each other.
+ */
+function scrubRoute(route, samples, index) {
+  if (typeof samples === 'number') {
+    index = samples;
+    samples = metricSamples.length ? metricSamples : routeSamples(route.geom, route.trace);
+  }
+  if (!samples?.length || index < 0 || !samples[index]) return;
+  metricSamples = samples;
+  routeInfo?.setScrub(index);
+  placeMetricMarker();
+  revealSample(samples[index]);
 }
 
 /**
@@ -5293,10 +5503,15 @@ function routesAt(point) {
 const routeAt = (point) => routesAt(point)[0] ?? null;
 
 // A tap on a route wins over the cell underneath it: you aimed at the line.
+// Isolated first, so the card's own button already says "Show all" — that is
+// the state the tap just produced. The stack menu, if it is what did the
+// picking, stays up.
 function showRouteInfo(route) {
   closeCellInfo();
   closePhotoInfo();
+  clearMarker();
   setSelectedRoute(route.id);
+  setSoloRoute(route.id, { keepStack: !!routeStackPopup });
   routeInfo?.show(route);
 }
 
@@ -5462,6 +5677,11 @@ function showRouteStack(e, found) {
   // closing it after the new set was assigned wiped the new set, and the second
   // tap of a session was the last one that recoloured anything.
   closeRouteStack();
+  // The activity card isolates. A pile cannot be a pile while one line is the
+  // only thing in the source, so the previous card goes and the rest come back.
+  closeRouteInfo();
+  setSoloRoute(null, { keepStack: true });
+  stackSoloBefore = undefined;
 
   const groups = routeStackGroups(found);
   // The colours are handed out down the card as it will be read — group by
@@ -5516,26 +5736,48 @@ function showRouteStack(e, found) {
     }
     for (const route of group.list) {
       const row = routeStackRow(route);
-      row.addEventListener('mouseenter', () => setHoveredRoute(route.id));
-      row.addEventListener('focus', () => setHoveredRoute(route.id));
+      // The glow is not enough once a route has been picked: that one is the
+      // only line in the source, so the row under the pointer has to be drawn
+      // on its own or there is nothing to light up. Remembered once, so moving
+      // between rows does not forget what to put back.
+      const borrow = () => {
+        if (stackSoloBefore === undefined) stackSoloBefore = soloRoute;
+        setHoveredRoute(route.id);
+        setSoloRoute(route.id, { keepStack: true });
+      };
+      row.addEventListener('mouseenter', borrow);
+      row.addEventListener('focus', borrow);
       row.addEventListener('click', () => {
         // Which one you are looking at, kept on the row as well as on the map:
         // the line is highlighted under a menu that may be covering it.
         for (const other of items.querySelectorAll('.route-stack-row')) {
           other.classList.toggle('picked', other === row);
         }
+        // The pick is the new isolation. Restoring the hover's "before" would
+        // put the previous route back the moment the pointer leaves.
+        stackSoloBefore = undefined;
         showRouteInfo(route);
       });
       box.append(row);
     }
     items.append(box);
   }
+  const endStackHover = () => {
+    // Only when the hover is still what the map is drawing. Show all, or a
+    // pick, has already chosen and must not be put back by the pointer leaving.
+    const was = hoveredRoute;
+    setHoveredRoute(null);
+    if (stackSoloBefore === undefined) return;
+    const back = stackSoloBefore;
+    stackSoloBefore = undefined;
+    if (soloRoute === was) setSoloRoute(back, { keepStack: true });
+  };
   // One listener for leaving the list rather than one per row. Moving from a row
   // to the row below it *leaves* the first one, and clearing the highlight there
   // would blink the map between every pair of rows.
-  items.addEventListener('mouseleave', () => setHoveredRoute(null));
+  items.addEventListener('mouseleave', endStackHover);
   items.addEventListener('focusout', (ev) => {
-    if (!items.contains(ev.relatedTarget)) setHoveredRoute(null);
+    if (!items.contains(ev.relatedTarget)) endStackHover();
   });
 
   const popup = new gl.Popup({
@@ -5560,9 +5802,19 @@ function showRouteStack(e, found) {
   // it.
   popup.on('close', () => {
     if (routeStackPopup && routeStackPopup !== popup) return;
+    const was = hoveredRoute;
     setHoveredRoute(null);
     clearStackColors();
     setStackOnly(null);
+    // The pointer may still have been on a row. Put back what was showing
+    // before that row borrowed the map — and only then. Anything that already
+    // changed which route is isolated (a pick, Show all) wins.
+    if (stackSoloBefore !== undefined && was != null && soloRoute === was) {
+      const back = stackSoloBefore;
+      stackSoloBefore = undefined;
+      setSoloRoute(back, { keepStack: true });
+    }
+    stackSoloBefore = undefined;
   });
   routeStackPopup = popup;
   popup.addTo(map);
@@ -6282,7 +6534,7 @@ function zoomToRoute(route) {
       [b[0], b[1]],
       [b[2], b[3]],
     ],
-    { padding: 70, maxZoom: 15.5, duration: 700 },
+    { padding: routeFramePadding(), maxZoom: 15.5, duration: 700 },
   );
 }
 
@@ -10909,6 +11161,29 @@ function installGrid() {
       'line-width': routeWidth(1),
     },
   }, beforeRoutes);
+  // The open route, again, one span at a time, in the colour of the selected
+  // pill. Above the activity-coloured line — both inserted in front of the
+  // same anchor, casing first — and not a tap target. A click is still about
+  // the route underneath, which is what keeps a pile of them a pile.
+  map.addSource('route-metric', { type: 'geojson', data: EMPTY, tolerance: 0 });
+  map.addLayer({
+    id: 'route-metric-casing', type: 'line', source: 'route-metric',
+    layout: { ...lineLayout, ...groundLine },
+    paint: {
+      'line-color': 'rgba(20, 16, 12, 0.85)',
+      'line-width': metricWidth(1.45),
+      'line-opacity': 1,
+    },
+  }, beforeRoutes);
+  map.addLayer({
+    id: 'route-metric-line', type: 'line', source: 'route-metric',
+    layout: { ...lineLayout, ...groundLine },
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': metricWidth(1),
+      'line-opacity': 1,
+    },
+  }, beforeRoutes);
 
   // Where the trips are measured from. Off by default, and on top of the whole
   // stack when it is on — no `beforeId`, unlike everything else here. It is one
@@ -11063,6 +11338,10 @@ function installGrid() {
   updateTiles();
   updateSelection();
   syncRoutes();
+  // A style rebuild drops HTML markers with the map they were added to. The
+  // scrub survives in the card, so the dot is put back where it was.
+  clearMarker();
+  if ((routeInfo?.scrubIndex() ?? -1) >= 0) placeMetricMarker();
   if (firstInstall) {
     firstInstall = false;
     animateFade(0, 1, 0, 0, 800); // gentle first reveal
@@ -11160,7 +11439,20 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         // under it; otherwise view mode inspects the cell. More than one under
         // the same tap is a question rather than an answer — see showRouteStack.
         const stack = photo ? [] : routesAt(e.point);
-        if (photo) { /* the card is the whole of the tap */ }
+        // The card is already open on this one line. A tap on it moves the
+        // scrub; it does not rebuild the card, and it does not answer a pile.
+        const scrubbing = !photo && routeInfo?.visible() && stack.length === 1
+          && stack[0].id === routeInfo.current()?.id;
+        let scrubbed = false;
+        if (scrubbing) {
+          const samples = routeSamples(stack[0].geom, stack[0].trace);
+          const idx = nearestSample(samples, e.lngLat.lng, e.lngLat.lat);
+          if (idx >= 0) {
+            scrubRoute(stack[0], samples, idx);
+            scrubbed = true;
+          }
+        }
+        if (photo || scrubbed) { /* the card is the whole of the tap */ }
         else if (stack.length > 1) showRouteStack(e, stack);
         else if (stack.length) showRouteInfo(stack[0]);
         // Then the train tracks, in the same order they are drawn in: a line you
@@ -11512,6 +11804,11 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
   routeInfo = mountRouteInfo({
     onClose: () => closeRouteInfo(),
     onZoom: zoomToRoute,
+    onMetric: () => paintMetricLayer(),
+    onScrub: (index) => {
+      const route = routeInfo?.current();
+      if (route) scrubRoute(route, index);
+    },
     // Everything that changes a route lives in one place now; the card hands
     // over to it rather than being a second editor.
     onMore: (route) => {
@@ -11862,9 +12159,11 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     onRoute: async (route) => {
       if (!routesOn) setRoutesOn(true);
       if (!routeGeom) await loadRoutes(true);
-      setSoloRoute(route.id);
-      zoomToRoute(route);
-      showRouteInfo(routeList.find((r) => r.id === route.id) ?? route);
+      // The card first, so the flight can measure it. A hidden card has no
+      // height, and the line would be framed into the space the card then covers.
+      const found = routeList.find((r) => r.id === route.id) ?? route;
+      showRouteInfo(found);
+      zoomToRoute(found);
     },
     // However it was opened — the button or Cmd-K — the trips fill in behind
     // the field rather than in front of it. Deriving them is a sweep of the map
@@ -12086,12 +12385,12 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       stats.close();
       if (!routesOn) setRoutesOn(true);
       if (!routeGeom) await loadRoutes(true);
-      // Isolated by default: coming from the list you picked one route out of
-      // eighty-two, and dropping it into all eighty-two is not showing it to
-      // you. The chip on the map puts the others back.
-      setSoloRoute(route.id);
-      zoomToRoute(route);
-      showRouteInfo(routeList.find((r) => r.id === route.id) ?? route);
+      // The card first, for the same reason Search does: the flight has to see
+      // the menu it is keeping the line out from under. Isolation comes with
+      // the card.
+      const found = routeList.find((r) => r.id === route.id) ?? route;
+      showRouteInfo(found);
+      zoomToRoute(found);
     },
     // A trip is ground, not a line: there is nothing to select, so showing one
     // means drawing its track and framing it. The chip names it, because the

@@ -451,12 +451,14 @@ const KML_COORDS = /<coordinates>([\s\S]*?)<\/coordinates>/i;
 const KML_SPAN = /<begin>([^<]*)<\/begin>\s*<end>([^<]*)<\/end>/i;
 const KML_STAMP = /<TimeStamp\b[^>]*>\s*<when>([^<]*)<\/when>/i;
 
-// "lng,lat[,alt]" tuples separated by whitespace.
+// "lng,lat[,alt]" tuples separated by whitespace. The third number is the
+// height; a line that never carried one simply has no third number, and that
+// stays distinct from a real 0 m.
 function kmlCoords(text, t) {
   const out = new PointSink();
   for (const tok of text.trim().split(/\s+/)) {
-    const [lng, lat] = tok.split(',').map(Number);
-    out.add(lat, lng, t);
+    const [lng, lat, alt] = tok.split(',').map(Number);
+    out.add(lat, lng, t, Number.isFinite(alt) ? alt : undefined);
   }
   return out.points;
 }
@@ -481,7 +483,9 @@ function kmlTracks(text, tracks) {
       const coords = [...gx[1].matchAll(/<gx:coord>([^<]*)<\/gx:coord>/gi)].map((c) => c[1].trim().split(/\s+/));
       const paired = whens.length === coords.length;
       const seg = new PointSink();
-      coords.forEach(([lng, lat], i) => seg.add(+lat, +lng, paired ? whens[i] : 0));
+      coords.forEach(([lng, lat, alt], i) => {
+        seg.add(+lat, +lng, paired ? whens[i] : 0, Number.isFinite(+alt) ? +alt : undefined);
+      });
       addTrack(tracks, name, [seg.points], paired ? null : at);
       recorded = true;
     }
