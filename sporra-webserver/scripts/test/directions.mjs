@@ -46,7 +46,7 @@ check(carUrl.searchParams.get('geometries') === 'geojson', 'car asks for coordin
 const trainUrl = new URL(trainRequestUrl(thun, bern));
 check(trainUrl.origin + trainUrl.pathname === 'https://api.transitous.org/api/v6/plan', 'train asks Transitous');
 check(trainUrl.searchParams.get('fromPlace') === '46.758,7.621', 'train sends latitude first');
-check(trainUrl.searchParams.get('transitModes') === 'TRANSIT', 'train allows transit');
+check(trainUrl.searchParams.get('transitModes') === 'RAIL,SUBURBAN', 'train asks for rail');
 check(trainUrl.searchParams.get('directModes') === '', 'train does not ask for a direct walk');
 check(trainUrl.searchParams.get('preTransitModes') === 'WALK', 'the walk to the station stays');
 check(trainUrl.searchParams.get('detailedLegs') === 'true', 'train asks for the leg geometry');
@@ -83,6 +83,55 @@ check(transit && near(transit[2], -126.453, 43.252), 'the shared join is not rep
 check(transit && near(transit[3], -126.4, 43.3), 'a leg with no shape still joins its stops');
 check(lineFromTransitous({ itineraries: [] }) === null, 'no itinerary is no line');
 check(lineFromTransitous({}) === null, 'an empty answer is no line');
+
+const coach = lineFromTransitous({
+  itineraries: [{
+    legs: [
+      {
+        mode: 'WALK',
+        from: { lat: 50.107, lon: 8.663 },
+        to: { lat: 50.107, lon: 8.662 },
+        legGeometry: { points: '', precision: 6, length: 0 },
+      },
+      {
+        mode: 'COACH',
+        from: { lat: 50.107, lon: 8.662 },
+        to: { lat: 51.443, lon: 5.48 },
+        legGeometry: { points: '_p~iF~ps|U_ulLnnqC_mqNvxq`@', precision: 5, length: 3 },
+      },
+    ],
+  }],
+});
+check(coach === null, 'a coach is not drawn as the train');
+
+const rail = lineFromTransitous({
+  itineraries: [{
+    legs: [
+      {
+        mode: 'WALK',
+        from: { lat: 50.11, lon: 8.66 },
+        to: { lat: 50.107, lon: 8.663 },
+        legGeometry: { points: '', precision: 6, length: 0 },
+      },
+      {
+        mode: 'NIGHT_RAIL',
+        from: { lat: 50.107, lon: 8.663 },
+        to: { lat: 52.089, lon: 5.11 },
+        legGeometry: { points: '', precision: 6, length: 0 },
+      },
+      {
+        mode: 'REGIONAL_RAIL',
+        from: { lat: 52.089, lon: 5.11 },
+        to: { lat: 51.443, lon: 5.481 },
+        legGeometry: { points: '', precision: 6, length: 0 },
+      },
+    ],
+  }],
+});
+check(rail?.length === 4 && near(rail[0], 8.66, 50.11) && near(rail[3], 5.481, 51.443), 'a night train and a regional train are one line');
+check(lineFromTransitous({
+  itineraries: [{ legs: [{ mode: 'WALK', from: { lat: 50, lon: 8 }, to: { lat: 50.01, lon: 8.01 }, legGeometry: { points: '', precision: 6 } }] }],
+}) === null, 'a walk with no train is no line');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

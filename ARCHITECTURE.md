@@ -56,9 +56,12 @@ glass look. Click hexagons to mark places you've visited.
   same as a track. Car routes come from the FOSSGIS OSRM server
   (`routing.openstreetmap.de`, full geometry, one request at a time, with the
   OpenStreetMap credit the map already carries and a link on the panel). Train
-  routes come from Transitous (`api.transitous.org`), including the walk to
-  and from the station, and the panel links to their sources. A direct walk is
-  not asked for: that server would otherwise drop a train that loses to it.
+  routes come from Transitous (`api.transitous.org`), rail only — long-distance,
+  regional, suburban and metro, including the walk to and from the station —
+  and the panel links to their sources. A coach is not a train: asking for
+  every public mode returned the bus that arrives soonest, drawn along the
+  street, so a bus or coach leg is refused. A direct walk is not asked for:
+  that server would otherwise drop a train that loses to it.
   Both are fetched by this server, with a User-Agent that names Sporra, rather
   than by the page. A halt or a stop position
   is not an end, and neither is the OSM way boundary in the middle of a

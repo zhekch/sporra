@@ -10,10 +10,34 @@
 // journey that loses to the fastest direct one, and a walk across a city would
 // hide the train. The walk to the first stop and from the last one stays,
 // because those are how the tapped points meet the service. Empty
-// `directModes` is that choice.
+// `directModes` is that choice. `TRANSIT` is every public mode, and the first
+// itinerary is whichever arrives soonest — between two cities that is often a
+// coach, drawn along the streets. The button is Train, so the request is the
+// rail group (long-distance, regional, suburban, metro). A leg that comes
+// back as a bus or a coach is refused rather than coloured in.
 
 export const CAR_ROUTER = 'https://routing.openstreetmap.de/routed-car/route/v1/driving';
 export const TRAIN_ROUTER = 'https://api.transitous.org/api/v6/plan';
+
+// `RAIL` is MOTIS's own group: high-speed, long-distance, night, regional,
+// metro and subway. Suburban (an S-Bahn) sits outside that group, and a trip
+// to the main station often starts on one, so it is named beside it. Trams
+// and coaches are left out: both are drawn along the street.
+const TRAIN_MODES = 'RAIL,SUBURBAN';
+
+// What a leg is allowed to be once the answer comes back. The group name
+// itself rarely appears on a leg; the specific mode does.
+const RAIL_LEG = new Set([
+  'RAIL',
+  'HIGHSPEED_RAIL',
+  'LONG_DISTANCE',
+  'NIGHT_RAIL',
+  'REGIONAL_RAIL',
+  'REGIONAL_FAST_RAIL',
+  'SUBURBAN',
+  'SUBWAY',
+  'METRO',
+]);
 
 // Two taps on the same junction are not a trip. Thirty metres is inside one
 // cell of this grid, so a shorter request would colour nothing new.
@@ -104,7 +128,7 @@ export function trainRequestUrl(from, to) {
   // for the engine that wrote the parameter.
   url.searchParams.set('fromPlace', `${from.lat},${from.lng}`);
   url.searchParams.set('toPlace', `${to.lat},${to.lng}`);
-  url.searchParams.set('transitModes', 'TRANSIT');
+  url.searchParams.set('transitModes', TRAIN_MODES);
   url.searchParams.set('directModes', '');
   url.searchParams.set('preTransitModes', 'WALK');
   url.searchParams.set('postTransitModes', 'WALK');
@@ -139,6 +163,16 @@ export function lineFromOsrm(body) {
 export function lineFromTransitous(body) {
   const legs = body?.itineraries?.[0]?.legs;
   if (!Array.isArray(legs) || !legs.length) return null;
+  // The request already asks for rail. This is the same refusal on the way
+  // back: a coach that slipped into the first itinerary used to be painted
+  // as the train, along the road it drives.
+  const labelled = legs.some((leg) => typeof leg?.mode === 'string' && leg.mode);
+  const onRails = legs.some((leg) => RAIL_LEG.has(leg?.mode));
+  const offRails = legs.some((leg) => {
+    const mode = leg?.mode;
+    return typeof mode === 'string' && mode && mode !== 'WALK' && !RAIL_LEG.has(mode);
+  });
+  if (offRails || (labelled && !onRails)) return null;
   const line = [];
   for (const leg of legs) {
     const geom = leg?.legGeometry;
