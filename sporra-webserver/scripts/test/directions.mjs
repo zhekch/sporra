@@ -49,6 +49,7 @@ check(trainUrl.searchParams.get('fromPlace') === '46.758,7.621', 'train sends la
 check(trainUrl.searchParams.get('transitModes') === 'RAIL,SUBURBAN', 'train asks for rail');
 check(trainUrl.searchParams.get('directModes') === '', 'train does not ask for a direct walk');
 check(trainUrl.searchParams.get('preTransitModes') === 'WALK', 'the walk to the station stays');
+check(trainUrl.searchParams.get('radius') === '4000', 'a station a few kilometres off still counts');
 check(trainUrl.searchParams.get('detailedLegs') === 'true', 'train asks for the leg geometry');
 
 const osrm = lineFromOsrm({
@@ -128,7 +129,7 @@ const rail = lineFromTransitous({
     ],
   }],
 });
-check(rail?.length === 4 && near(rail[0], 8.66, 50.11) && near(rail[3], 5.481, 51.443), 'a night train and a regional train are one line');
+check(rail?.length === 3 && near(rail[0], 8.663, 50.107) && near(rail[2], 5.481, 51.443), 'the line is the trains, and the walk across town is left off', JSON.stringify(rail));
 check(lineFromTransitous({
   itineraries: [{ legs: [{ mode: 'WALK', from: { lat: 50, lon: 8 }, to: { lat: 50.01, lon: 8.01 }, legGeometry: { points: '', precision: 6 } }] }],
 }) === null, 'a walk with no train is no line');

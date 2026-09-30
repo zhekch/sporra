@@ -8,13 +8,17 @@
 // Train is Transitous, which is MOTIS over open timetable feeds. A direct
 // walking route is left off the request on purpose: MOTIS drops any transit
 // journey that loses to the fastest direct one, and a walk across a city would
-// hide the train. The walk to the first stop and from the last one stays,
-// because those are how the tapped points meet the service. Empty
-// `directModes` is that choice. `TRANSIT` is every public mode, and the first
-// itinerary is whichever arrives soonest — between two cities that is often a
-// coach, drawn along the streets. The button is Train, so the request is the
-// rail group (long-distance, regional, suburban, metro). A leg that comes
-// back as a bus or a coach is refused rather than coloured in.
+// hide the train. Empty `directModes` is that choice. A city centre is not a
+// station, and the default walk only reaches about a kilometre, so Bern to
+// Basel came back as no train at all. `radius` lets every station within a
+// few kilometres of the tapped point count, and the line that is drawn is the
+// train between those stations: the walk across town is how the point met the
+// service, and colouring it would paint the streets. `TRANSIT` is every
+// public mode, and the first itinerary is whichever arrives soonest — between
+// two cities that is often a coach, drawn along the streets. The button is
+// Train, so the request is the rail group (long-distance, regional, suburban,
+// metro). A leg that comes back as a bus or a coach is refused rather than
+// coloured in.
 
 export const CAR_ROUTER = 'https://routing.openstreetmap.de/routed-car/route/v1/driving';
 export const TRAIN_ROUTER = 'https://api.transitous.org/api/v6/plan';
@@ -24,6 +28,11 @@ export const TRAIN_ROUTER = 'https://api.transitous.org/api/v6/plan';
 // to the main station often starts on one, so it is named beside it. Trams
 // and coaches are left out: both are drawn along the street.
 const TRAIN_MODES = 'RAIL,SUBURBAN';
+
+// How far a named city, or a tap, may sit from the station it means. Four
+// kilometres reaches Basel SBB from the centre of Basel, and Gare de Lyon
+// from the centre of Paris, and still leaves the next town's station out.
+const STATION_RADIUS_M = 4000;
 
 // What a leg is allowed to be once the answer comes back. The group name
 // itself rarely appears on a leg; the specific mode does.
@@ -132,6 +141,7 @@ export function trainRequestUrl(from, to) {
   url.searchParams.set('directModes', '');
   url.searchParams.set('preTransitModes', 'WALK');
   url.searchParams.set('postTransitModes', 'WALK');
+  url.searchParams.set('radius', String(STATION_RADIUS_M));
   url.searchParams.set('detailedLegs', 'true');
   url.searchParams.set('timetableView', 'false');
   url.searchParams.set('numItineraries', '1');
@@ -175,6 +185,9 @@ export function lineFromTransitous(body) {
   if (offRails || (labelled && !onRails)) return null;
   const line = [];
   for (const leg of legs) {
+    // The walk is how a city centre reaches its station. The cells to colour
+    // are the railway, so that walk is left off the line.
+    if (leg?.mode === 'WALK') continue;
     const geom = leg?.legGeometry;
     let pts = [];
     if (geom && typeof geom.points === 'string' && geom.points) {

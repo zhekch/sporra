@@ -58,8 +58,9 @@ glass look. Click hexagons to mark places you've visited.
   (`routing.openstreetmap.de`, full geometry, one request at a time, with the
   OpenStreetMap credit the map already carries and a link on the panel). Train
   routes come from Transitous (`api.transitous.org`), rail only — long-distance,
-  regional, suburban and metro, including the walk to and from the station —
-  and the panel links to their sources. A coach is not a train: asking for
+  regional, suburban and metro. A station within four kilometres of the point
+  counts, so a city centre still finds its station, and the line that is drawn
+  is the train between those stations. The panel links to their sources. A coach is not a train: asking for
   every public mode returned the bus that arrives soonest, drawn along the
   street, so a bus or coach leg is refused. A direct walk is not asked for:
   that server would otherwise drop a train that loses to it.
