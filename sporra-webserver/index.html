@@ -116,10 +116,42 @@
           <span data-i18n="hud.region">Region</span>
           <span class="hud-region">
             <b id="hud-region">—</b>
-            <button type="button" id="hud-region-clear" data-i18n="hud-region-clear.clear" data-i18n-aria-label="hud-region-clear.clear-this-region" aria-label="Clear this region" disabled>Clear</button>
+            <button type="button" id="hud-region-clear" data-i18n="hud-region-clear.clear" data-i18n-aria-label="hud-region-clear.clear-this-region" aria-label="Highlight this region. Tap it on the map to clear it." aria-pressed="false" disabled>Clear</button>
           </span>
         </div>
-        <div data-i18n="hud-hint.tap-toggles-ctrl-paints" class="hud-hint" id="hud-hint">Tap toggles · tap a track to paint it · Ctrl paints · Option erases · Shift clears a region</div>
+        <div class="hud-route" id="hud-route">
+          <div class="hud-row" id="hud-route-row">
+            <span data-i18n="hud.route">Route</span>
+            <button type="button" class="hud-route-add" id="hud-route-add" data-i18n="hud-route-add.add">Add</button>
+          </div>
+          <div class="hud-route-form" id="hud-route-form" hidden>
+            <button type="button" class="hud-route-end" id="hud-route-start">
+              <span data-i18n="hud-route-start.start">Start</span>
+              <b id="hud-route-start-value"></b>
+            </button>
+            <button type="button" class="hud-route-end" id="hud-route-end">
+              <span data-i18n="hud-route-end.destination">Destination</span>
+              <b id="hud-route-end-value"></b>
+            </button>
+            <div class="seg" id="hud-route-mode" role="group" data-i18n-aria-label="hud-route-mode.transport">
+              <button type="button" class="seg-btn active" id="hud-route-car" data-i18n="hud-route-car.car">Car</button>
+              <button type="button" class="seg-btn" id="hud-route-train" data-i18n="hud-route-train.train">Train</button>
+            </div>
+            <p class="hud-route-status" id="hud-route-status"></p>
+            <p class="hud-route-credit" id="hud-route-credit-car">
+              <a href="https://project-osrm.org/" target="_blank" rel="noreferrer">OSRM</a>
+              · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a>
+            </p>
+            <p class="hud-route-credit" id="hud-route-credit-train" hidden>
+              <a href="https://transitous.org/sources/" target="_blank" rel="noreferrer">Transitous</a>
+            </p>
+            <div class="hud-route-actions">
+              <button type="button" id="hud-route-cancel" data-i18n="hud-route-cancel.cancel">Cancel</button>
+              <button type="button" id="hud-route-confirm" data-i18n="hud-route-confirm.confirm" disabled>Confirm</button>
+            </div>
+          </div>
+        </div>
+        <div data-i18n="hud-hint.tap-toggles-ctrl-paints" class="hud-hint" id="hud-hint">Tap toggles · tap a track to paint it · Ctrl paints · Option erases · Shift highlights a region, then tap it to clear</div>
       </div>
     </div>
 

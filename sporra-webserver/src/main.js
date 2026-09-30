@@ -23,6 +23,7 @@ import {
   sampleOnSegment,
   holdPointerSample,
 } from './hexgrid.js';
+import { placesApart } from './directions.js';
 import {
   loadCountries,
   countriesLoaded,
@@ -2883,24 +2884,20 @@ const areaFC = {
 let litRegionIds = null;
 let litCountryIds = null;
 
-// Past this zoom, region outlines are being read rather than glanced at, and the
-// overview set's ~1 km simplification starts to show — a canton border cutting
-// a straight line across the lake it actually follows. Only reachable with
-// Detail pinned to Region: on Auto, this level never survives past ~z5.
-//
-// A whole zoom level earlier than it was (7). At z6 a canton already fills
-// enough of the screen that the straight line across the lake is the thing you
-// notice, and waiting for z7 meant zooming past the view the outlines were
-// worth having in. The cost is real and is the reason it was ever set high: the
-// wider view holds more countries, so more of them are fetched, and there is
-// more geometry to tile at once.
-const REGION_FINE_ZOOM = 6;
-// …and back to the overview geometry below this. The gap is deliberate: swapping
-// resolution re-tiles the source, so a zoom that hovers on the threshold would
-// re-tile on every wobble. Same idea as LEVEL_HYSTERESIS, for the same reason —
-// and it is the zoom-out that matters on an older device, where the point of
-// dropping back to a few hundred points is that the map stays smooth.
-const REGION_COARSE_ZOOM = 5.4;
+// The bottom of the region level's own band (levelBoundary(REGION_LEVEL)).
+// The detailed boundaries used to wait for z6, which is already the next hex
+// level, so on Auto a canton spent the whole of its time on screen drawn from
+// the overview set — a border cutting a straight line across the lake it
+// follows. This level is the one that exists to show those shapes, so it
+// draws the national survey from the moment it appears. The wider view holds
+// more countries and more geometry; that cost is the fetch, and it is one
+// country at a time, for the ones actually on screen.
+const REGION_FINE_ZOOM = LEVEL0_ZOOM - REGION_LEVEL * LEVEL_STEP;
+// Back to the overview geometry once the zoom has left the band, where a
+// several-thousand-point canton is smaller than a pixel. The gap is the same
+// margin as LEVEL_HYSTERESIS: swapping resolution re-tiles the source, so a
+// zoom that hovers on one number would re-tile on every wobble.
+const REGION_COARSE_ZOOM = REGION_FINE_ZOOM - 0.28;
 
 // Boundary credits. Natural Earth is public domain and asks for nothing;
 // geoBoundaries composites national survey data (swisstopo for Switzerland) and
@@ -3548,13 +3545,16 @@ function editClick(lngLat) {
   updateHud(currentLevel);
 }
 
-// The region the pointer is in, and whether Shift is asking to clear it.
-// The name stays put once the pointer leaves the canvas: the Clear button
-// sits over some other piece of ground, and following the pointer onto it
-// would wipe whatever happens to be under the panel.
+// The region the pointer is in, whether Shift is previewing it, and whether
+// a clear has been pinned. The name stays put once the pointer leaves the
+// canvas: the Clear button sits over some other piece of ground, and
+// following the pointer onto it would name whatever happens to be under the
+// panel. The pin is what Clear, or a Shift-click, leaves up: the cells go
+// only when a later tap lands in that same region.
 let aimedRegion = null;
 let aimedCell = null;
 let regionShift = false;
+let regionArmed = null;
 let regionClearing = false;
 
 let regionWarm = null;
@@ -3571,28 +3571,37 @@ function warmRegionData() {
   return regionWarm;
 }
 
-// Shift-click. The datasets may still be on their way — edit mode does not
-// wait for them, because painting a cell does not need a canton — so this
-// one does the waiting, then clears the region the click actually landed in.
-async function clearRegionAt(lngLat) {
-  if (regionClearing) return;
-  if (!countriesLoaded() || !regionsLoaded()) {
-    regionClearing = true;
+// The datasets may still be on their way — edit mode does not wait for them,
+// because painting a cell does not need a canton. A clear does, so the click
+// that asks for one waits here first.
+async function ensureRegions() {
+  if (countriesLoaded() && regionsLoaded()) return true;
+  if (regionClearing) return false;
+  regionClearing = true;
+  paintRegionUi();
+  const stop = busy('Loading regions');
+  try {
+    await warmRegionData();
+    return true;
+  } catch (e) {
+    console.warn('Loading regions failed:', e);
+    showToast('Could not load regions', { tone: 'quiet' });
+    return false;
+  } finally {
+    stop();
+    regionClearing = false;
     paintRegionUi();
-    const stop = busy('Loading regions');
-    try {
-      await warmRegionData();
-    } catch (e) {
-      console.warn('Loading regions failed:', e);
-      showToast('Could not load regions', { tone: 'quiet' });
-      return;
-    } finally {
-      stop();
-      regionClearing = false;
-      paintRegionUi();
-    }
   }
-  await clearRegion(regionUnder(lngLat));
+}
+
+// Shift-click pins the region under the pointer. It does not erase: the
+// outline is the thing you are about to clear, and the tap after this one
+// is what takes the cells.
+async function armRegionAt(lngLat) {
+  if (regionClearing) return;
+  if (!(await ensureRegions())) return;
+  noteRegionAim(lngLat);
+  armRegion(regionUnder(lngLat));
 }
 
 function noteRegionAim(lngLat) {
@@ -3615,26 +3624,88 @@ function paintRegionUi() {
   const label = document.getElementById('hud-region');
   const btn = document.getElementById('hud-region-clear');
   if (!label || !btn) return;
-  label.textContent = aimedRegion?.name ?? '—';
-  label.title = aimedRegion?.name ?? '';
-  btn.disabled = !aimedRegion || regionClearing;
+  // While a clear is pinned, the name is that region even if the pointer has
+  // wandered. The button is how you pin it, and how you take the pin off.
+  const shown = regionArmed ?? aimedRegion;
+  label.textContent = shown?.name ?? '—';
+  label.title = shown?.name ?? '';
+  btn.disabled = regionClearing || (!regionArmed && !aimedRegion);
+  btn.setAttribute('aria-pressed', regionArmed ? 'true' : 'false');
 }
 
-// Shift draws the region's own border and takes the brush circle off, because
-// the next click clears the shape and the disk would be describing a
-// different edit. A preview, not a selection: leaving Shift puts the outline
-// away and does not close a card, which edit mode does not open anyway.
+// The shape on the map. A pin wins over the Shift preview, so holding Shift
+// after Clear does not slide the outline onto a neighbour. Add is placing
+// pins of its own, and a region outline under those taps would be a second
+// edit wearing the first one's clothes. A preview, not a selection: taking
+// it down does not close a card, which edit mode does not open anyway.
+function outlinedRegion() {
+  if (mode !== 'edit' || routeOn) return null;
+  if (regionArmed) return regionArmed;
+  if (regionShift && aimedRegion) return aimedRegion;
+  return null;
+}
+
 function paintRegionOutline() {
-  if (mode !== 'edit' || !regionShift || !aimedRegion) {
+  const area = outlinedRegion();
+  if (!area) {
     if (selection?.preview) {
       selection = null;
       updateSelection();
     }
     return;
   }
-  if (selection?.preview && selection.area?.id === aimedRegion.id) return;
-  selection = { area: aimedRegion, preview: true };
+  if (selection?.preview && selection.area?.id === area.id) return;
+  selection = { area, preview: true };
   updateSelection();
+  // The overview set is a kilometre of slack, which is a straight cut across
+  // the lake once the shape is the thing on screen. The same fetch the info
+  // card makes: one country, and the outline redraws when it lands.
+  fetchFineRegions(isoOfArea(area), area.name);
+}
+
+function disarmRegion() {
+  if (!regionArmed) {
+    paintRegionOutline();
+    return;
+  }
+  regionArmed = null;
+  paintRegionUi();
+  paintRegionOutline();
+  updateBrush();
+}
+
+// Pin a region so the next map tap can clear it. The same one again takes
+// the pin off — Clear is a toggle once the outline is up. Nothing under the
+// pointer is not a region, and a pin that was already up comes down with it.
+function armRegion(region) {
+  if (regionClearing) return;
+  if (!region) {
+    if (regionArmed) disarmRegion();
+    showToast('No region here', { tone: 'quiet' });
+    return;
+  }
+  if (regionArmed?.id === region.id) {
+    disarmRegion();
+    return;
+  }
+  regionArmed = region;
+  paintRegionUi();
+  paintRegionOutline();
+  updateBrush();
+  showToast(t('hud-region.tap-to-clear', { name: region.name }), { tone: 'quiet' });
+}
+
+// The tap that follows a pin. Inside the outline, the cells go. Anywhere
+// else, the pin comes off and the ground is left as it was — a miss is how
+// you change your mind, and it must not be an erase.
+async function confirmArmedRegion(lngLat) {
+  const armed = regionArmed;
+  if (!armed || regionClearing) return;
+  if (!(await ensureRegions())) return;
+  if (regionArmed !== armed) return;
+  const under = regionUnder(lngLat);
+  disarmRegion();
+  if (under && under.id === armed.id) await clearRegion(armed);
 }
 
 function setRegionShift(on) {
@@ -3651,8 +3722,8 @@ function setRegionShift(on) {
 // Every visited cell in one region, as one edit. The same cells the region
 // level painted there — `storedInArea` is that walk — so the clear takes the
 // shape and nothing past its border. Undo puts the rows back with their
-// dates, the way any other clear does. No confirm: it is one undo, and a
-// second press on top of an undo is how the rest of edit mode already works.
+// dates, the way any other clear does. The tap that arrives here already
+// confirmed the outline; this function is the erase, not the question.
 async function clearRegion(region) {
   if (regionClearing) return;
   if (!region) {
@@ -3839,6 +3910,184 @@ function paintRailAt(e) {
   });
   void drainRailPaint();
   return true;
+}
+
+// Add, in the edit panel. Two taps name the ends, car or train names the
+// line, and Confirm is the edit — the same cells a track paints, one undo.
+let routeOn = false;
+let routeAim = 'start';
+let routeMode = 'car';
+let routeStart = null;
+let routeEnd = null;
+let routeLine = null;
+let routeStatus = 'hud-route.tap-for-a-start';
+let routeSeq = 0;
+
+function routePlaceLabel(p) {
+  return p ? `${p.lat.toFixed(3)}, ${p.lng.toFixed(3)}` : t('hud-route.tap-the-map');
+}
+
+function renderRouteTool() {
+  const form = document.getElementById('hud-route-form');
+  const add = document.getElementById('hud-route-add');
+  if (form) form.hidden = !routeOn;
+  if (add) add.hidden = routeOn;
+  document.getElementById('hud-route-start')?.classList.toggle('is-live', routeOn && routeAim === 'start');
+  document.getElementById('hud-route-end')?.classList.toggle('is-live', routeOn && routeAim === 'end');
+  const startValue = document.getElementById('hud-route-start-value');
+  const endValue = document.getElementById('hud-route-end-value');
+  if (startValue) startValue.textContent = routePlaceLabel(routeStart);
+  if (endValue) endValue.textContent = routePlaceLabel(routeEnd);
+  document.getElementById('hud-route-car')?.classList.toggle('active', routeMode === 'car');
+  document.getElementById('hud-route-train')?.classList.toggle('active', routeMode === 'train');
+  const carCredit = document.getElementById('hud-route-credit-car');
+  const trainCredit = document.getElementById('hud-route-credit-train');
+  if (carCredit) carCredit.hidden = routeMode !== 'car';
+  if (trainCredit) trainCredit.hidden = routeMode !== 'train';
+  const status = document.getElementById('hud-route-status');
+  if (status) status.textContent = routeOn ? t(routeStatus) : '';
+  const confirm = document.getElementById('hud-route-confirm');
+  if (confirm) confirm.disabled = !(routeLine && routeLine.length >= 2);
+}
+
+function syncRouteDraft() {
+  const src = map?.getSource?.('route-draft');
+  if (!src) return;
+  if (!routeOn) {
+    src.setData(EMPTY);
+    return;
+  }
+  const features = [];
+  if (routeStart) {
+    features.push({
+      type: 'Feature',
+      properties: { role: 'start' },
+      geometry: { type: 'Point', coordinates: [routeStart.lng, routeStart.lat] },
+    });
+  }
+  if (routeEnd) {
+    features.push({
+      type: 'Feature',
+      properties: { role: 'end' },
+      geometry: { type: 'Point', coordinates: [routeEnd.lng, routeEnd.lat] },
+    });
+  }
+  if (routeLine && routeLine.length >= 2) {
+    features.push({
+      type: 'Feature',
+      properties: {},
+      geometry: { type: 'LineString', coordinates: routeLine },
+    });
+  }
+  src.setData({ type: 'FeatureCollection', features });
+}
+
+function openRouteTool() {
+  stopGesture();
+  clearSpanHighlight();
+  // The two taps that follow are a start and a destination. A region pin
+  // would take the first of them as its confirm.
+  regionArmed = null;
+  paintRegionUi();
+  routeOn = true;
+  routeAim = 'start';
+  routeMode = 'car';
+  routeStart = null;
+  routeEnd = null;
+  routeLine = null;
+  routeStatus = 'hud-route.tap-for-a-start';
+  routeSeq += 1;
+  renderRouteTool();
+  syncRouteDraft();
+  paintRegionOutline();
+  updateBrush();
+}
+
+function closeRouteTool() {
+  if (!routeOn && !routeLine) return;
+  routeOn = false;
+  routeStart = null;
+  routeEnd = null;
+  routeLine = null;
+  routeSeq += 1;
+  renderRouteTool();
+  syncRouteDraft();
+  paintRegionOutline();
+  updateBrush();
+}
+
+function placeRoutePoint(lngLat) {
+  const p = { lng: lngLat.lng, lat: lngLat.lat };
+  if (!routeStart || routeAim === 'start') {
+    routeStart = p;
+    routeAim = routeEnd ? null : 'end';
+  } else {
+    routeEnd = p;
+    routeAim = null;
+  }
+  routeLine = null;
+  void loadRouteLine();
+}
+
+function setRouteMode(next) {
+  if (next !== 'car' && next !== 'train') return;
+  if (routeMode === next && routeLine) return;
+  routeMode = next;
+  routeLine = null;
+  void loadRouteLine();
+}
+
+async function loadRouteLine() {
+  const seq = ++routeSeq;
+  if (!routeStart) routeStatus = 'hud-route.tap-for-a-start';
+  else if (!routeEnd) routeStatus = 'hud-route.tap-for-a-destination';
+  else if (!placesApart(routeStart, routeEnd)) routeStatus = 'hud-route.pick-two-different-places';
+  else routeStatus = 'hud-route.finding-the-route';
+  const ask = routeStatus === 'hud-route.finding-the-route';
+  renderRouteTool();
+  syncRouteDraft();
+  if (!ask) return;
+  const from = routeStart;
+  const to = routeEnd;
+  const mode = routeMode;
+  try {
+    const q = new URLSearchParams({
+      mode,
+      fromLng: String(from.lng),
+      fromLat: String(from.lat),
+      toLng: String(to.lng),
+      toLat: String(to.lat),
+    });
+    const res = await fetch(`/api/directions?${q}`, { credentials: 'same-origin' });
+    const body = await res.json().catch(() => null);
+    if (seq !== routeSeq || mode !== routeMode) return;
+    const points = body?.points;
+    if (res.ok && Array.isArray(points) && points.length >= 2) {
+      routeLine = points;
+      routeStatus = 'hud-route.confirm-to-colour-it-in';
+    } else {
+      routeLine = null;
+      const missing = res.status === 404 || body?.error === 'none';
+      routeStatus = missing
+        ? (mode === 'train' ? 'hud-route.no-train' : 'hud-route.no-road')
+        : 'hud-route.router-did-not-answer';
+    }
+  } catch {
+    if (seq !== routeSeq) return;
+    routeLine = null;
+    routeStatus = 'hud-route.router-did-not-answer';
+  }
+  renderRouteTool();
+  syncRouteDraft();
+}
+
+function confirmRoute() {
+  if (!routeLine || routeLine.length < 2) return;
+  const points = routeLine;
+  const phrase = routeMode === 'train' ? 'painting the train' : 'painting the drive';
+  paintCellsOnLine(points, phrase);
+  showSpanHighlight(points);
+  closeRouteTool();
 }
 
 // Debug hooks — handy in devtools for poking at cells and their provenance.
@@ -7214,7 +7463,7 @@ function nearCanvas(px, slop) {
 }
 
 function gestureWanted(e) {
-  if (mode !== 'edit' || !e) return null;
+  if (mode !== 'edit' || !e || routeOn || regionArmed) return null;
   if (e.altKey) return 'erase';
   if (e.ctrlKey || e.metaKey) return 'paint';
   return null;
@@ -7747,9 +7996,9 @@ function editCursorEl() {
 function placeEditCursor() {
   const canvas = editCursorEl();
   if (!canvas) return;
-  // Shift is a region, not a disk. Leaving the circle up would say the next
-  // click erases a handful of cells.
-  const show = mode === 'edit' && !regionShift && pointerOnMap && cursorPx && currentLevel != null && map?.getZoom;
+  // A region outline is a shape, not a disk. Leaving the circle up would say
+  // the next click erases a handful of cells.
+  const show = mode === 'edit' && !regionShift && !regionArmed && !routeOn && pointerOnMap && cursorPx && currentLevel != null && map?.getZoom;
   canvas.hidden = !show;
   if (!show) return;
   const parent = canvas.parentElement;
@@ -7791,10 +8040,11 @@ function placeEditCursor() {
 }
 
 function markLiveBrush(kind) {
+  const regionLive = mode === 'edit' && !routeOn && (regionShift || !!regionArmed);
   for (const k of ['paint', 'erase']) {
-    document.getElementById(`hud-${k}-row`)?.classList.toggle('is-live', !regionShift && k === kind);
+    document.getElementById(`hud-${k}-row`)?.classList.toggle('is-live', !regionLive && k === kind);
   }
-  document.getElementById('hud-region-row')?.classList.toggle('is-live', regionShift && mode === 'edit');
+  document.getElementById('hud-region-row')?.classList.toggle('is-live', regionLive);
 }
 
 function updateBrush() {
@@ -8032,9 +8282,10 @@ const VECTOR_COOL_ZOOM = levelBoundary(FIRST_VECTOR_LEVEL - 2) + 1;
 // sharpened as you went: the level that most obviously *is* a single outline was
 // the one that never got a good one.
 //
-// Either level is only reachable this far in with Detail pinned; on Auto the map
-// has moved on to hexagons long before, where the overview geometry is the right
-// thing to draw anyway.
+// On Auto the region level lives entirely above this zoom, which is the point:
+// the picture of a canton is the detailed one. Below it the country and
+// continent levels are on screen, and the overview geometry is smaller than
+// a pixel.
 function considerFineRegions(level) {
   if (map.getZoom() < REGION_FINE_ZOOM || !regionsLoaded()) return;
   const lit = level === REGION_LEVEL ? litRegionIds : level === COUNTRY_LEVEL ? litCountryIds : null;
@@ -8461,7 +8712,10 @@ function setMode(next) {
     stopGesture();
     railPaintQueue.length = 0;
     clearSpanHighlight();
+    regionArmed = null;
     setRegionShift(false);
+    paintRegionUi();
+    closeRouteTool();
   }
   setHover(null);
   // Edit mode never asks which route is under the pointer, so one lit on the way
@@ -8479,8 +8733,8 @@ function setMode(next) {
     updateTiles();
     if (pointerOnMap) noteRegionAim(pointerLngLat());
   } else updateBrush();
-  // Shift-drag is the box zoom everywhere else. In edit mode Shift is the
-  // region clear, and the box zoom swallows the click — a press and release
+  // Shift-drag is the box zoom everywhere else. In edit mode Shift highlights
+  // a region, and the box zoom swallows the click — a press and release
   // with no drag never arrives as one — so it is off for as long as editing is.
   syncBoxZoom();
 
@@ -11341,6 +11595,33 @@ function installGrid() {
     paint: { 'line-color': SEL_COLOR, 'line-width': 3, 'line-opacity': 0.95 },
   });
 
+  // The drive or the train that has not been confirmed yet. Ends stay up
+  // before the line does, so a second tap has something to aim past.
+  map.addSource('route-draft', { type: 'geojson', data: EMPTY, tolerance: 0 });
+  map.addLayer({
+    id: 'route-draft-halo', type: 'line', source: 'route-draft',
+    filter: ['==', ['geometry-type'], 'LineString'],
+    layout: lineLayout,
+    paint: { 'line-color': SEL_CASING, 'line-width': 7, 'line-opacity': 0.9 },
+  });
+  map.addLayer({
+    id: 'route-draft-line', type: 'line', source: 'route-draft',
+    filter: ['==', ['geometry-type'], 'LineString'],
+    layout: lineLayout,
+    paint: { 'line-color': SEL_COLOR, 'line-width': 3, 'line-opacity': 0.95 },
+  });
+  map.addLayer({
+    id: 'route-draft-ends', type: 'circle', source: 'route-draft',
+    filter: ['==', ['geometry-type'], 'Point'],
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 5, 14, 8],
+      'circle-color': ['match', ['get', 'role'], 'end', TRACK_COLOR, '#ffffff'],
+      'circle-stroke-color': SEL_CASING,
+      'circle-stroke-width': 2,
+    },
+  });
+  syncRouteDraft();
+
   // Repopulate geometry for the new style and restore the current opacities.
   applyColors();
   applyTileVis();
@@ -11501,10 +11782,26 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       // for the region row to follow. Done before the brush, so a tap that
       // also toggles a cell still names the region it landed in.
       noteRegionAim(e.lngLat);
-      // Shift clears the region. It is not a brush stroke and not a track:
-      // both of those are a run of cells, and this is the shape.
+      // Add is asking for a start or a destination. That tap is the pin, and
+      // the brush, the track, and the region clear all wait until it is done.
+      if (routeOn) {
+        // Once both ends are set, a tap is not a new destination. Moving one
+        // means choosing that row again — Confirm has to survive looking
+        // around the line.
+        if (routeAim) placeRoutePoint(e.lngLat);
+        return;
+      }
+      // Shift pins the region. It is not a brush stroke and not a track,
+      // and it is not the erase either: both of those are a run of cells,
+      // and this click is the shape you are about to clear.
       if (e.originalEvent?.shiftKey && !e.originalEvent.altKey && !isCtrl(e.originalEvent)) {
-        void clearRegionAt(e.lngLat);
+        void armRegionAt(e.lngLat);
+        return;
+      }
+      // The tap after Clear. Inside the outline the cells go; outside it
+      // the outline goes and the brush waits until the next tap.
+      if (regionArmed && !swallowClick && !e.originalEvent?.altKey && !isCtrl(e.originalEvent)) {
+        void confirmArmedRegion(e.lngLat);
         return;
       }
       // Ctrl/Cmd paints and Option erases; the click would toggle the same
@@ -11777,8 +12074,33 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     document.getElementById(`hud-${kind}-inc`).addEventListener('click', () => stepBrush(kind, 1));
   }
   document.getElementById('hud-region-clear').addEventListener('click', () => {
-    void clearRegion(aimedRegion);
+    if (regionClearing) return;
+    // Pressing it again, on the region it already names, takes the pin off.
+    // The pointer having moved is a different region, and that one is the
+    // new pin. The erase is the tap on the map.
+    if (regionArmed && (!aimedRegion || aimedRegion.id === regionArmed.id)) {
+      disarmRegion();
+      return;
+    }
+    armRegion(aimedRegion);
   });
+  document.getElementById('hud-route-add').addEventListener('click', () => {
+    if (mode === 'edit') openRouteTool();
+  });
+  document.getElementById('hud-route-cancel').addEventListener('click', closeRouteTool);
+  document.getElementById('hud-route-confirm').addEventListener('click', confirmRoute);
+  document.getElementById('hud-route-start').addEventListener('click', () => {
+    routeAim = 'start';
+    routeStatus = 'hud-route.tap-for-a-start';
+    renderRouteTool();
+  });
+  document.getElementById('hud-route-end').addEventListener('click', () => {
+    routeAim = 'end';
+    routeStatus = routeStart ? 'hud-route.tap-for-a-destination' : 'hud-route.tap-for-a-start';
+    renderRouteTool();
+  });
+  document.getElementById('hud-route-car').addEventListener('click', () => setRouteMode('car'));
+  document.getElementById('hud-route-train').addEventListener('click', () => setRouteMode('train'));
   paintBrushUi();
   // The accent picker. Repainting on every drag frame is the point — you pick
   // the color against the map itself, not against a swatch.

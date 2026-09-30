@@ -39,17 +39,29 @@ glass look. Click hexagons to mark places you've visited.
   step through `BRUSH_STEPS` (1, 3, 8, 15, …, each remembered on this
   browser). A tap uses whichever the cell under the pointer calls for, and
   Ctrl paints and Option erases at their own sizes for the whole sweep. Shift
-  clears every visited cell in the **region** under the pointer — the canton,
-  the county, the province — and the panel names that region and offers the
-  same clear. The outline of the region is what Shift puts on the map: the
-  brush circle is a disk of cells, and this edit is a shape, so the circle
-  steps aside while Shift is down. Shift-drag is the box zoom on the rest of
-  the map; while editing it is off, because that gesture swallows a Shift-click
-  before it can become one. It is one undo, the same as a stroke. A
-  country the dataset never subdivided is its own region, which is the same
-  stand-in the region level already draws. A tap
+  highlights the **region** under the pointer — the canton, the county, the
+  province — and the panel names that region. **Clear**, or a Shift-click,
+  pins that highlight. The cells go only when you then tap the same region
+  on the map; a tap outside it puts the highlight away, and pressing Clear
+  again on the region it already names does the same. The outline is the
+  shape about to be cleared: the brush circle is a disk of cells, so the
+  circle steps aside while the highlight is up. Shift-drag is the box zoom
+  on the rest of the map; while editing it is off, because that gesture
+  swallows a Shift-click before it can become one. The erase is one undo,
+  the same as a stroke. A country the dataset never subdivided is its own
+  region, which is the same stand-in the region level already draws. A tap
   on a **track**, when that overlay is on, paints the cells the line touches
-  from the previous station or junction to the next. A halt or a stop position
+  from the previous station or junction to the next. **Add** asks for a start
+  and a destination on the map, and whether the trip is by car or by train.
+  The line is drawn first; Confirm paints the cells it crosses, one undo, the
+  same as a track. Car routes come from the FOSSGIS OSRM server
+  (`routing.openstreetmap.de`, full geometry, one request at a time, with the
+  OpenStreetMap credit the map already carries and a link on the panel). Train
+  routes come from Transitous (`api.transitous.org`), including the walk to
+  and from the station, and the panel links to their sources. A direct walk is
+  not asked for: that server would otherwise drop a train that loses to it.
+  Both are fetched by this server, with a User-Agent that names Sporra, rather
+  than by the page. A halt or a stop position
   is not an end, and neither is the OSM way boundary in the middle of a
   straight line, nor a second track running alongside — the switch that joins
   the two rails of a double line is not a choice of route. In
@@ -3711,14 +3723,16 @@ points; the national survey gives 6,951. A first attempt shipped an 8 MB "fine"
 build of the same data and it still looked wrong, which is the useful part of the
 story — the tolerance was never the problem.
 
-So when the region level is live and the zoom is past `REGION_FINE_ZOOM` (6),
+So when the region level is on screen — its whole band, from
+`REGION_FINE_ZOOM`, which is that level's own lower boundary near z4.1 —
 `considerFineRegions()` asks geoBoundaries for the ADM1 boundaries of **the
 countries whose lit regions are actually on screen**, one at a time, once each,
 and rebuilds as they land. Switzerland is 0.42 MB and takes Solothurn to 520
 points; the drawn union of two cantons goes from 255 points to 2,985. Zooming
-back out returns to the overview geometry rather than tiling detail smaller than
-a pixel. On Auto this is unreachable — that level never survives past ~z5 — so an
-ordinary session fetches nothing.
+back out past `REGION_COARSE_ZOOM` returns to the overview geometry rather than
+tiling detail smaller than a pixel. The threshold used to be z6, which is
+already the next hex level, so on Auto the region level spent its whole life
+on the overview set.
 
 **It happens on the server** (`server/regions-fine.js`), which was not the first
 attempt and is the right one for three reasons, each learned by getting it wrong:
@@ -3903,10 +3917,11 @@ nothing to ask about. Without the second call, switching Detail to Region while
 already zoomed in did nothing until the camera was nudged.
 
 **Resolution is sticky between two thresholds.** The detailed geometry comes in
-at `REGION_FINE_ZOOM` (6) and is dropped again below `REGION_COARSE_ZOOM` (5.4),
-rather than both happening at one number. Swapping resolution re-tiles the
-source, so a zoom that hovers on a single threshold would re-tile on every
-wobble; the gap is the same trick as `LEVEL_HYSTERESIS`, for the same reason.
+at `REGION_FINE_ZOOM` (the bottom of the region level, near z4.1) and is dropped
+again below `REGION_COARSE_ZOOM` (0.28 under that), rather than both happening
+at one number. Swapping resolution re-tiles the source, so a zoom that hovers
+on a single threshold would re-tile on every wobble; the gap is the same trick
+as `LEVEL_HYSTERESIS`, for the same reason.
 Dropping back matters most on an older device — the point of returning to a few
 hundred points when zoomed out is that the map stays smooth.
 

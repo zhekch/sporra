@@ -103,7 +103,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.112.2';
+export const SERVER_VERSION = '0.115.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -232,6 +232,7 @@ import { createFineRegions } from './regions-fine.js';
 // before touching how often it asks upstream.
 import { createRailTiles } from './rail-tiles.js';
 import { railSpan } from './rail-span.js';
+import { fetchDirections, RouteError } from './directions.js';
 // The trails overlay's raster tiles, and the lookup behind the card a tap
 // opens. Both proxied rather than fetched from the page — the note at the top
 // of that module is about why, and one of the three reasons is that a tile
@@ -3800,6 +3801,28 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       // every rebuild, restart and reload, because `immutable` means the browser
       // will not even ask.
       return send(res, 200, out, { 'Cache-Control': 'public, max-age=31536000, immutable' });
+    }
+
+    // A driving line from the FOSSGIS OSRM server, or a train from Transitous.
+    // Session-gated for the same reason the track span is: each call spends
+    // somebody else's routing server, and an open one would let anyone spend it.
+    if (req.method === 'GET' && pathname === '/api/directions') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      try {
+        const points = await fetchDirections({
+          mode: query.get('mode') ?? '',
+          from: { lng: Number(query.get('fromLng')), lat: Number(query.get('fromLat')) },
+          to: { lng: Number(query.get('toLng')), lat: Number(query.get('toLat')) },
+          userAgent: `Sporra/${SERVER_VERSION} (+https://github.com/zhekch/sporra)`,
+          referer: selfOrigin(req),
+        });
+        return send(res, 200, { points }, { 'Cache-Control': 'no-store' });
+      } catch (err) {
+        const code = err instanceof RouteError ? err.code : 'failed';
+        const status = code === 'bad' ? 400 : code === 'none' ? 404 : 502;
+        return send(res, status, { error: code }, { 'Cache-Control': 'no-store' });
+      }
     }
 
     // --- Train tracks -----------------------------------------------------------
