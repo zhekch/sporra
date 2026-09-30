@@ -2534,6 +2534,14 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   border-radius: 14px;
 }
 
+/* Nothing to draw yet. WebKit paints a broken-image frame around an img in
+   that state — four hairlines inside the waiting panel — and `border` does
+   not reach them, because they are not a border. The panel is the whole of
+   the wait; the element comes back when a picture is actually there. */
+.photo-figure:not(.loaded) img {
+  display: none;
+}
+
 /* Waiting for the phone to hand a picture over. The box pulses rather than
    holding a spinner: it is already the shape of the answer, and a spinner
    inside it would be a second thing to watch. */
@@ -4799,19 +4807,35 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   }
 
   /* Menu open: the pencil, the map controls and an info card step aside.
-     The button cluster stays — it fades under the sheet, below — because
-     taking it out of the layout was what made the corner go empty a frame
-     before the panel arrived. */
+     The cluster itself is not moved. It used to be — opening the menu
+     restretched `.layers` and dropped its `bottom` to 12px, and closing put
+     the safe area back with the `bottom` transition the card lift uses. The
+     position, menu and search buttons rode that and slid up as the sheet
+     left. They only fade now, and the sheet is positioned on its own. */
   body.menu-open .hud,
   body.menu-open :is(.maplibregl-ctrl-bottom-right, .mapboxgl-ctrl-bottom-right),
   body.menu-open .cell-info {
     display: none;
   }
 
-  body.menu-open .layers {
-    left: 12px;
-    right: 12px;
-    bottom: 12px;
+  /* Over the map, under the sheet. Fades with the same class the sheet uses,
+     so the ground softens while the panel is arriving and clears as it
+     leaves. Light on purpose: the sheet is already glass. */
+  body.menu-open::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 9;
+    background: rgba(8, 10, 14, 0.06);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  body.menu-open:has(.layers-menu.is-shown)::before {
+    opacity: 1;
   }
 
   .layers-menu {
@@ -4840,15 +4864,15 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
     transform: translateY(0);
   }
 
-  /* Out of the column, pinned to the same bottom edge the buttons stand on,
-     so the sheet can rise over them instead of opening above a gap where
-     they used to be. */
+  /* Fixed to the screen, not to `.layers`. Anchoring it there was what
+     forced the button box to grow to the width of the sheet, and the buttons
+     moved with the box. */
   body.menu-open .layers-menu {
-    position: absolute;
+    position: fixed;
     z-index: 1;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    left: calc(12px + var(--safe-l));
+    right: calc(12px + var(--safe-r));
+    bottom: calc(12px + var(--safe-b));
     width: auto;
   }
 
@@ -4879,7 +4903,8 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
    motion back for someone who asked to have none. */
 @media (max-width: 560px) and (prefers-reduced-motion: reduce) {
   .layers-menu,
-  .layers-cluster {
+  .layers-cluster,
+  body.menu-open::before {
     transition: none;
   }
 }
