@@ -2048,10 +2048,9 @@ tap that lands on several still asks, via the stack menu below; picking a row
 isolates that one and leaves the menu up.
 
 Above the card, two chips, **Speed** and **Elevation**, recolour the open route.
-Each one is its own glass button, with the same border the menu buttons carry.
-On a phone the location button is lifted into that strip, so the chips stop
-short of it; on a wide screen they take the width of the card, where the
-location button is in the opposite corner.
+Each one is only a border. On a phone the location button is lifted into that
+strip, so the chips stop short of it; on a wide screen they take the width of
+the card, where the location button is in the opposite corner.
 Speed runs red where it was slow and green where it was fast; elevation runs
 green where it was low and red where it was high. The scale is this activity's
 own. Speed drops the slowest and fastest twentieth (`metricDomain` in
@@ -2073,10 +2072,12 @@ the map — one span at a time, from the same `metricDomain`, because a single
 gradient would restart the ramp across the whole activity. The number at the
 top is the highest value on it and the number under the line is the lowest —
 kilometres an hour, or metres. A stop is not a reading: 0 km/h, and the
-0.1 km/h a crawl rounds to, are left off, and so is a time of zero. Beneath
-those the clock runs in minutes and hours. A short activity draws a faded line
+0.1 km/h a crawl rounds to, are left off, and so is a time of zero. The time
+since the start sits on the left with those two, because the left edge is
+empty once zero is gone, and parking it at the end of the line put it on top
+of the last hour mark. A short activity draws a faded line
 every quarter hour (`graphTimeStep`); past two hours the line is the hour. The
-words follow when they have room, and the end of the activity always does. The
+words follow when they have room. The total stays with the readings. The
 line is drawn against that clock when the activity has one, and against
 distance when it does not, because a pause has to land where the time says it
 did. A press on it, or on the line, drops a dot in both places and a small

@@ -1798,10 +1798,11 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
    line rather than describe it. Anchored to the card so they follow it when
    the graph appears and the card grows.
 
-   Two chips, not one tray. Each one carries the same glass edge as a menu
-   button. On a phone the location button is lifted into this same strip, and
-   a row that ran to the card's right edge landed on top of it — that inset
-   lives in the phone layout, where the button actually stands here. */
+   Two chips, not one tray. A plain border and nothing else — glass, a blur
+   and a shadow made them a second menu. On a phone the location button is
+   lifted into this same strip, and a row that ran to the card's right edge
+   landed on top of it. That inset lives in the phone layout, where the
+   button actually stands here. */
 .route-metric-pills {
   position: absolute;
   left: 0;
@@ -1821,14 +1822,9 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   margin: 0;
   padding: 7px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: var(--glass-raised);
-  -webkit-backdrop-filter: blur(20px);
-  backdrop-filter: blur(20px);
-  box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.18);
-  color: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
   font: inherit;
   font-size: 12.5px;
   font-weight: 600;
@@ -1837,10 +1833,8 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 }
 
 .route-metric-pills button.active {
-  background: #fff;
-  color: #14120e;
-  border-color: transparent;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  border-color: #fff;
+  color: #fff;
 }
 
 .route-metric-pills button:disabled {
@@ -1865,10 +1859,12 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 }
 
 /* The readings, not captions. High at the top of the line, low under it,
-   and the clock along the bottom from the start. */
+   and the time since the start on that same left edge. Zero is not shown,
+   so the time is not parked at the far end of the line, where it ran
+   through the last hour mark. */
 .route-metric-readout {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   font-size: 11px;
   line-height: 1.2;
@@ -1877,16 +1873,18 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   pointer-events: none;
 }
 
-/* The clock sits on the same horizontal scale as the line above it. */
-.route-metric-readout.is-time {
+/* The hour marks, on the scale of the line. Not the total — that sits with
+   the other readings, and sharing this row put the two on top of each other. */
+.route-metric-readout.is-ticks {
   position: relative;
   height: 14px;
 }
 
-.route-metric-readout.is-time span {
+.route-metric-readout.is-ticks span {
   position: absolute;
   top: 0;
   white-space: nowrap;
+  transform: translateX(-50%);
 }
 
 .route-metric-graph[hidden] {
@@ -4951,18 +4949,16 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 }
 
 [data-theme='light'] .route-metric-pills button {
-  background: rgba(255, 255, 255, 0.92);
-  color: #0f172a;
-  border-color: rgba(15, 23, 42, 0.16);
-  box-shadow:
-    0 8px 24px rgba(15, 23, 42, 0.16),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  background: transparent;
+  color: rgba(15, 23, 42, 0.72);
+  border-color: rgba(15, 23, 42, 0.35);
+  box-shadow: none;
 }
 
 [data-theme='light'] .route-metric-pills button.active {
-  background: #0f172a;
-  color: #fff;
-  border-color: transparent;
+  background: transparent;
+  color: #0f172a;
+  border-color: #0f172a;
 }
 
 [data-theme='light'] .route-metric-readout {

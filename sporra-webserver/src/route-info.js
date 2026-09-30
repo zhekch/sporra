@@ -228,21 +228,27 @@ export function fillMetricGraph(graphEl, samples, metric) {
   svg.append(dot);
   const maxLabel = value(maxY);
   const minLabel = value(minY);
+  const endLabel = byTime ? formatAxisTime(endSec) : null;
   if (maxLabel) graphEl.append(readout('is-max', [maxLabel]));
   graphEl.append(svg);
   if (minLabel) graphEl.append(readout('is-min', [minLabel]));
-  if (byTime) graphEl.append(timeReadout(endSec, X));
+  // Left, with the high and the low. It used to sit at the end of the line,
+  // and on a long activity that end is also an hour mark, so the two drew
+  // on top of each other.
+  if (endLabel) graphEl.append(readout('is-time', [endLabel]));
+  if (byTime) {
+    const ticks = tickReadout(endSec, X);
+    if (ticks) graphEl.append(ticks);
+  }
   return { dot, graphMap };
 }
 
 // Fade lines are drawn for every step. The words under them are not: two
-// labels closer than this land on top of each other, and the end of the
-// activity always keeps its place.
+// labels closer than this land on top of each other. The total is not one
+// of them — it is a reading, and it lives with the other readings.
 const TIME_LABEL_GAP = 46;
 
-function timeReadout(endSec, X) {
-  const row = document.createElement('div');
-  row.className = 'route-metric-readout is-time';
+function tickReadout(endSec, X) {
   const step = graphTimeStep(endSec);
   const endX = X(endSec);
   const marks = [];
@@ -251,19 +257,16 @@ function timeReadout(endSec, X) {
     const x = X(t);
     const label = formatAxisTime(t);
     if (!label || x - prev < TIME_LABEL_GAP || endX - x < TIME_LABEL_GAP) continue;
-    marks.push({ x, label, end: false });
+    marks.push({ x, label });
     prev = x;
   }
-  const endLabel = formatAxisTime(endSec);
-  if (endLabel) {
-    while (marks.length && endX - marks[marks.length - 1].x < TIME_LABEL_GAP) marks.pop();
-    marks.push({ x: endX, label: endLabel, end: true });
-  }
+  if (!marks.length) return null;
+  const row = document.createElement('div');
+  row.className = 'route-metric-readout is-ticks';
   for (const mark of marks) {
     const span = document.createElement('span');
     span.textContent = mark.label;
     span.style.left = `${mark.x}px`;
-    span.style.transform = mark.end ? 'translateX(-100%)' : 'translateX(-50%)';
     row.append(span);
   }
   return row;
