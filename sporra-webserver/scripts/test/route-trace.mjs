@@ -150,5 +150,37 @@ check(axisText.includes('400 m') && axisText.includes('1 h'),
   'the low reading and the hour marks share a row', axisText.join(' | '));
 check(!axisText.includes('3 h'), 'the graph does not repeat the total', axisText.join(' | '));
 
+function timedRide(minutes, ele) {
+  const n = 9;
+  return Array.from({ length: n }, (_, i) => ({
+    lng: 7.4 + i * 0.01,
+    lat: 46.9,
+    seg: 0,
+    distM: i * 1000,
+    elapsed: (i / (n - 1)) * minutes * 60,
+    t: T0 + (i / (n - 1)) * minutes * 60,
+    speed: i === 0 ? null : 4,
+    ele: ele + i,
+  }));
+}
+const narrow = node('div');
+narrow.clientWidth = 170;
+fillMetricGraph(narrow, timedRide(40, 500), 'elev');
+function walkInto(el, out) {
+  if (el.textContent) out.push(el.textContent);
+  for (const kid of el.children ?? []) walkInto(kid, out);
+}
+const forty = [];
+walkInto(narrow, forty);
+check(forty.includes('15 min') && forty.includes('30 min'),
+  'a short run labels 30 min as well as 15', forty.join(' | '));
+
+const longHost = node('div');
+longHost.clientWidth = 280;
+fillMetricGraph(longHost, timedRide(8 * 60 + 40, 1100), 'elev');
+const longText = [];
+walkInto(longHost, longText);
+check(longText.includes('8 h'), 'the last hour is labelled when its line is drawn', longText.join(' | '));
+
 console.log(`\n${fail ? 'FAILED' : 'passed'}: ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

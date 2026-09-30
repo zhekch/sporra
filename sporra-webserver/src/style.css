@@ -2463,6 +2463,12 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   min-height: 0;
   max-height: 100%;
   overflow-y: auto;
+  /* `overflow-y: auto` computes the other axis to `auto` as well. A phone
+     will then drag the card sideways — a border that sticks out by a few
+     pixels is enough — and the labels leave the screen. Nothing in a dialog
+     is meant to move that way. `clip` is not a scroll container, so the drag
+     has nothing to hold. */
+  overflow-x: clip;
   /* A flick that reaches the end of the card stops there rather than scrolling
      the map behind the scrim. */
   overscroll-behavior: contain;
@@ -3750,6 +3756,9 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
      It is a measurement of two rules further down, so it has to move when they
      do; both are marked. */
   --stats-tabs-lead: 52px;
+  /* A sideways drag anywhere on the scrim was the card moving. Vertical is
+     the only gesture this dialog has a use for. */
+  touch-action: pan-y;
 }
 
 #stats-overlay .modal-card {
@@ -3768,6 +3777,12 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
    asked for rather than inherited from the container. */
 .stats-tabs {
   margin-top: 14px;
+  /* Border and the padding `.seg` carries have to sit *inside* the width.
+     Content-box adds them on top of `100%`, and this file has no global box
+     model, so the switch drew 8px past the card. That sliver is what made
+     More info a sideways scroller: the card's `overflow-y` had already turned
+     `overflow-x` into a scroll container, and 8px is a handle. */
+  box-sizing: border-box;
   width: min(340px, 100%);
   /* Above the body, which the wide layout pulls up to start level with this
      strip — and a scroll container overlapping a control is a control you
@@ -3974,6 +3989,10 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   margin-top: 14px;
   max-height: min(58vh, 460px);
   overflow-y: auto;
+  /* The body is its own scroller, so the card's clip does not cover it. The
+     same sideways drag was available here the moment a row was wider than
+     the column. */
+  overflow-x: clip;
   overscroll-behavior: contain;
   scrollbar-width: none;
 }

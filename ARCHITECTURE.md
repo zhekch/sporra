@@ -2079,7 +2079,9 @@ line those two share one row: the low reading on the left, where zero used to
 be, and the hour marks along the rest of it. The total is the Duration row
 already, and the graph does not repeat it. A short activity draws a faded line
 every quarter hour (`graphTimeStep`); past two hours the line is the hour. The
-words follow when they have room, and they stay clear of the low reading. The
+words follow when they fit on the line, including the last hour. They stay
+clear of the low reading and of each other, and that is the only reason a
+line would be left unlabelled. The
 line is drawn against that clock when the activity has one, and against
 distance when it does not, because a pause has to land where the time says it
 did. A press on it, or on the line, drops a dot in both places and a small
@@ -2281,8 +2283,9 @@ Komoot's.
 
 Tap a route in *Routes and statistics → Routes* and it **opens the activity**
 rather than jumping the map to it: name, where it went, activity, distance,
-climb, date, start time, duration, average speed, which app it came from and
-how many points it kept. **Edit** renames it, files it under a different app or
+climb, date, the start and the end on one line, duration, average speed, and
+which app it came from. The point count is not repeated here — the shape is
+the line, same as on the card. **Edit** renames it, files it under a different app or
 sets the activity; **Delete** asks twice; **Show on map** is the one that closes
 the panel, switches the routes layer on and flies there. Tapping the line on the
 map still opens the same card it always did.

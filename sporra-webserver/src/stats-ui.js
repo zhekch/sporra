@@ -532,8 +532,15 @@ export function mountStats({
     const ended = day(r.lastAt);
     if (started && ended && started !== ended) body.append(detailRow('When', `${started} – ${ended}`));
     else if (started) body.append(detailRow('When', started));
-    if (started && ended && started === ended && r.lastAt > r.firstAt) {
-      body.append(detailRow('Started', clock(r.firstAt)));
+    // One clock is a start with the end missing. Both belong on the same row:
+    // 19:41 and 21:08 are the two ends of the same fact, and a second row that
+    // only said when it began read as though it had never stopped.
+    const startClock = clock(r.firstAt);
+    const endClock = clock(r.lastAt);
+    if (startClock && endClock && r.lastAt > r.firstAt && startClock !== endClock) {
+      body.append(detailRow('Time', `${startClock} – ${endClock}`));
+    } else if (startClock) {
+      body.append(detailRow('Time', startClock));
     }
     const duration = formatDuration(recordedSeconds(r));
     if (duration) body.append(detailRow('Duration', duration));
@@ -562,7 +569,6 @@ export function mountStats({
       row.append(label, a);
       body.append(row);
     }
-    body.append(detailRow('Shape', `${(r.points ?? 0).toLocaleString()} points`));
 
     const actions = document.createElement('div');
     actions.className = 'route-info-actions';

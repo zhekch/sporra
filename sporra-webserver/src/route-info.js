@@ -232,17 +232,18 @@ export function fillMetricGraph(graphEl, samples, metric) {
   // One row under the line. The low reading takes the left, where 0 min
   // used to be, and the hour marks sit on that same row. The total is
   // already the Duration line, so the graph does not say it again.
-  const axis = axisReadout(minLabel, byTime ? endSec : 0, X);
+  const axis = axisReadout(minLabel, byTime ? endSec : 0, X, w);
   if (axis) graphEl.append(axis);
   return { dot, graphMap };
 }
 
-// Fade lines are drawn for every step. The words under them are not: two
-// labels closer than this land on top of each other, and neither may land
-// on the low reading at the left.
-const TIME_LABEL_GAP = 46;
+// A label is about this wide per character at 11px. The old rule kept 46px
+// clear of the right edge, which was where the total used to sit. The total
+// is gone, so that gap was hiding 8 h, and 30 min on a short run, while the
+// line for both was still drawn.
+const LABEL_CHAR_PX = 6.2;
 
-function axisReadout(minLabel, endSec, X) {
+function axisReadout(minLabel, endSec, X, width) {
   const row = document.createElement('div');
   row.className = 'route-metric-readout is-axis';
   if (minLabel) {
@@ -253,22 +254,23 @@ function axisReadout(minLabel, endSec, X) {
   }
   if (!(endSec > 0)) return minLabel ? row : null;
   const step = graphTimeStep(endSec);
-  const endX = X(endSec);
-  const reserved = minLabel ? minLabel.length * 6.6 + 8 : 0;
-  let prev = -Infinity;
+  const reserved = minLabel ? minLabel.length * LABEL_CHAR_PX + 8 : 0;
+  let prevRight = reserved;
   let any = false;
   for (let t = step; t < endSec; t += step) {
     const x = X(t);
     const label = formatAxisTime(t);
-    if (!label || x - prev < TIME_LABEL_GAP || endX - x < TIME_LABEL_GAP) continue;
-    const half = label.length * 3.1;
-    if (x - half < reserved) continue;
+    if (!label) continue;
+    const half = (label.length * LABEL_CHAR_PX) / 2;
+    // Centred on its line. Skip only when the word would cover the low
+    // reading, the previous word, or run off the card.
+    if (x - half < prevRight || x + half > width) continue;
     const span = document.createElement('span');
     span.className = 'is-tick';
     span.textContent = label;
     span.style.left = `${x}px`;
     row.append(span);
-    prev = x;
+    prevRight = x + half + 4;
     any = true;
   }
   return minLabel || any ? row : null;
