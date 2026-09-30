@@ -1146,8 +1146,9 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 }
 
 /* The pose it rests in before `.is-shown`, and the one it leaves through.
-   Upward, because the button it belongs to is underneath it. A wide screen
-   flips that — the menu hangs below the pill, so it leaves upward. */
+   Toward the button underneath it. A wide screen hangs the menu below the
+   pill, so that one leaves upward. A phone replaces both — the sheet there
+   is tall enough that this nudge never read as motion. */
 .layers-menu:not(.is-shown) {
   opacity: 0;
   translate: 0 12px;
@@ -4797,8 +4798,10 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
     display: none;
   }
 
-  /* Menu open: hide the floating buttons and dock the menu at the bottom. */
-  body.menu-open .layers-cluster,
+  /* Menu open: the pencil, the map controls and an info card step aside.
+     The button cluster stays — it fades under the sheet, below — because
+     taking it out of the layout was what made the corner go empty a frame
+     before the panel arrived. */
   body.menu-open .hud,
   body.menu-open :is(.maplibregl-ctrl-bottom-right, .mapboxgl-ctrl-bottom-right),
   body.menu-open .cell-info {
@@ -4814,6 +4817,48 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   .layers-menu {
     width: 100%;
     box-sizing: border-box;
+    /* Transform only. Fading this panel means fading a backdrop-filter, and
+       on iOS that either arrives late or not at all — which is what the
+       short opacity nudge looked like. A sheet this size wants to travel,
+       not to blink. The shadow sits outside the box, so the travel is a
+       little more than the panel's own height or the blur would still be
+       peeking up from the bottom edge. */
+    translate: 0 0;
+    transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .layers-menu:not(.is-shown) {
+    opacity: 1;
+    translate: 0 0;
+    transform: translateY(calc(100% + 48px));
+  }
+
+  /* An explicit zero, not `transform: none`. WebKit will not interpolate
+     from a translation to `none`, so the sheet snapped on the phone even
+     though the closed pose was right. */
+  .layers-menu.is-shown {
+    transform: translateY(0);
+  }
+
+  /* Out of the column, pinned to the same bottom edge the buttons stand on,
+     so the sheet can rise over them instead of opening above a gap where
+     they used to be. */
+  body.menu-open .layers-menu {
+    position: absolute;
+    z-index: 1;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+  }
+
+  .layers-cluster {
+    transition: opacity 0.18s ease;
+  }
+
+  .layers-menu.is-shown ~ .layers-cluster {
+    opacity: 0;
+    pointer-events: none;
   }
 
   /* No narrower cap here any more. The base rule already measures the space
@@ -4827,6 +4872,15 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 
   .modal-card {
     border-radius: 24px;
+  }
+}
+
+/* After the phone sheet's own transition, which would otherwise put the
+   motion back for someone who asked to have none. */
+@media (max-width: 560px) and (prefers-reduced-motion: reduce) {
+  .layers-menu,
+  .layers-cluster {
+    transition: none;
   }
 }
 

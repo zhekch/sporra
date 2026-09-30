@@ -10757,9 +10757,9 @@ function setMenuOpen(open) {
   if (open) {
     layersMenu.classList.remove('is-closing');
     layersMenu.hidden = false;
-    // On phones the menu becomes a bottom sheet and the buttons underneath it
-    // get out of the way. Before the reveal, so the sheet is the thing that
-    // fades in rather than a button-width panel that then jumps.
+    // On a phone this is what docks the sheet to the bottom edge. Before the
+    // reveal, so the thing that moves is already the sheet and not the small
+    // panel that then jumps out to full width.
     document.body.classList.add('menu-open');
     refreshChrome();
     updateLayersUi();
@@ -10768,11 +10768,17 @@ function setMenuOpen(open) {
       layersMenu.classList.add('is-shown');
       refreshMenuOverflow();
     };
-    // Same turn when there is nothing to interpolate: a frame of the closed
-    // pose would be a blank panel. Otherwise that pose has to be painted once,
-    // or the transition has nowhere to start and the panel pops in.
+    // Same turn when there is nothing to interpolate. Otherwise the closed
+    // pose has to be measured and then painted, and WebKit still drops the
+    // transition if the class lands in the same frame the element came out
+    // of `hidden` — one frame is not always a paint there, so it waits two.
     if (menuMotionMs() === 0) reveal();
-    else menuFrame = requestAnimationFrame(reveal);
+    else {
+      void layersMenu.offsetWidth;
+      menuFrame = requestAnimationFrame(() => {
+        menuFrame = requestAnimationFrame(reveal);
+      });
+    }
     return;
   }
   for (const close of menuClosers) close();
@@ -10783,10 +10789,13 @@ function setMenuOpen(open) {
     settleMenuClosed();
     return;
   }
-  // Still the sheet, still in the way of the map, until the fade has ended.
+  // Still the sheet, still in the way of the map, until it has left. A phone
+  // moves `transform` and leaves opacity alone, so either property finishing
+  // is the end of the motion.
   layersMenu.classList.add('is-closing');
   menuOnDone = (e) => {
-    if (e.target !== layersMenu || e.propertyName !== 'opacity') return;
+    if (e.target !== layersMenu) return;
+    if (e.propertyName !== 'opacity' && e.propertyName !== 'transform') return;
     if (menuWantsOpen) return;
     settleMenuClosed();
   };
