@@ -157,6 +157,16 @@ succeeded, stops it by port rather than by killing every `node` on the machine,
 and waits for the new one to answer before claiming it worked. `--no-pull`
 skips the `git pull`; `PORT` picks a different port.
 
+A machine you use for trying things out can follow `nightly` instead of `main`:
+
+```sh
+npm run nightly   # check out nightly, then the same pull, build, and swap
+```
+
+That command arrives with `main`. On a checkout that is still on `main`, run
+`npm run restart` once so the script is there, then `npm run nightly`. After
+that the checkout stays on `nightly`, and `npm run restart` updates that branch.
+
 For a private personal deployment, putting `tailscale serve` in front of
 `npm start` gives you an HTTPS URL reachable only from your own devices. HTTPS
 is worth having: the **my location** button needs it anywhere but localhost.

@@ -3,6 +3,7 @@
 #
 #   sporra-webserver/scripts/restart.sh              port 3001
 #   sporra-webserver/scripts/restart.sh --no-pull    skip the git pull
+#   sporra-webserver/scripts/restart.sh --nightly    track nightly, then restart
 #   PORT=8080 sporra-webserver/scripts/restart.sh    somewhere else
 #
 # Run it from anywhere; it finds its own folder. That is the whole point of it
@@ -41,30 +42,67 @@ cd "$here/.."
 
 port="${PORT:-3001}"
 pull=1
-[[ "${1:-}" == "--no-pull" ]] && pull=0
+nightly=0
+case "${1:-}" in
+  --no-pull) pull=0 ;;
+  --nightly) nightly=1 ;;
+  "") ;;
+  *)
+    echo "unknown option: ${1}" >&2
+    echo "   --no-pull skips the git pull; --nightly tracks origin/nightly" >&2
+    exit 1
+    ;;
+esac
 
-if [[ $pull == 1 ]]; then
-  # `npm install` below rewrites package-lock.json often enough — a different npm
-  # or node version on this machine is all it takes — and leaves it dirty. The
-  # *next* run then dies before it does anything at all:
-  #
-  #   error: Your local changes to the following files would be overwritten by
-  #   merge: sporra-webserver/package-lock.json
-  #
-  # which is this script having broken its own next run, and it happens on
-  # exactly the commits that matter: the ones that changed a dependency, which
-  # are the ones where the pull is carrying something the build needs.
-  #
-  # So the lockfile is restored before pulling, and **only** the lockfile. It is
-  # generated, npm owns it, and `npm install` regenerates it from package.json a
-  # few lines below — there is nothing in it to lose here. Anything else dirty
-  # still stops the pull, which is right: a tracked file edited on a deploy box
-  # is something a person should look at, not something a script should throw
-  # away to save itself a restart.
+# `npm install` below rewrites package-lock.json often enough — a different npm
+# or node version on this machine is all it takes — and leaves it dirty. The
+# *next* run then dies before it does anything at all:
+#
+#   error: Your local changes to the following files would be overwritten by
+#   merge: sporra-webserver/package-lock.json
+#
+# which is this script having broken its own next run, and it happens on
+# exactly the commits that matter: the ones that changed a dependency, which
+# are the ones where the pull is carrying something the build needs.
+#
+# So the lockfile is restored before pulling, and **only** the lockfile. It is
+# generated, npm owns it, and `npm install` regenerates it from package.json a
+# few lines below — there is nothing in it to lose here. Anything else dirty
+# still stops the pull, which is right: a tracked file edited on a deploy box
+# is something a person should look at, not something a script should throw
+# away to save itself a restart.
+restore_lockfile() {
   if ! git diff --quiet -- package-lock.json; then
     echo "→ restoring package-lock.json (npm rewrote it; it is generated)"
     git checkout -- package-lock.json
   fi
+}
+
+if [[ $nightly == 1 ]]; then
+  # The test machine is one clone, and `git pull` follows whatever branch that
+  # clone is on. Moving it onto nightly here is how a tryout gets updated
+  # without being merged to main first. Main is still what ships.
+  #
+  # The first run creates the local branch from origin. Later runs only fast-
+  # forward it, so a commit made on the box still stops the restart instead of
+  # being rewound to make the script succeed.
+  #
+  # This has to be on main as well as nightly. The machine that is still on
+  # main receives the command by an ordinary restart; one run of it is the
+  # switch. A plain restart after that keeps pulling nightly.
+  restore_lockfile
+  echo "→ fetching nightly"
+  git fetch origin nightly
+  if git show-ref --verify --quiet refs/heads/nightly; then
+    git switch nightly
+  else
+    git switch --track origin/nightly
+  fi
+  git branch --set-upstream-to=origin/nightly nightly
+fi
+
+if [[ $pull == 1 ]]; then
+  restore_lockfile
   echo "→ pulling"
   git pull --ff-only
 fi
