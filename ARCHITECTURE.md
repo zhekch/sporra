@@ -8966,6 +8966,49 @@ on the same answer and a narrow desktop window is not mistaken for one.
   cells land about a second after the answer does, over ordinary frames.
   `scripts/test/cells-load.mjs` holds the columns to the loop they replaced.
 
+**Zooming out, with the cells hidden or not.** A zoom out over the Bernese
+Oberland froze the phone for about ten seconds. Measured in WebKit, it was three
+separate things, and none of them was the basemap. Mapbox and MapLibre both
+decode their tiles in workers; the blank map in the report was the symptom of our
+own code holding the main thread.
+
+- **Hidden cells were still drawn.** Pressing the active colour mode hides the
+  cells through `accentAlpha()`, which is an opacity. Every level change,
+  every repaint and every region dissolve still ran, into a layer drawn at
+  zero. Now `updateGrid` stops as soon as it has worked out the level when
+  `cellsOn` is false: `blankGrid` clears both surfaces once and puts the
+  crossfade bookkeeping back where a first paint expects it, and showing them
+  again (`setCellsOn`) is a first paint. The level is still worked out, because
+  the scale bar, a tap and the brush all ask it. Same zoom, with the finest
+  level pinned and the cells hidden: 8 seconds of stall before, none after.
+- **One canvas path of 50,000 discs.** With the finest level pinned and the
+  camera zoomed out, the paint put ~50,000 sub-pixel discs into a single
+  `Path2D` per colour. WebKit rasterises a path as one shape, at a cost that
+  grows far faster than the number of discs, and defers it until the pixels are
+  read — so it surfaced as a blur that had become 300 times slower. Filling
+  every `PATH_CHUNK` (16) discs instead takes that paint from 4.6 s to 0.14 s,
+  and makes ordinary views faster too (28 → 14 ms at level 0 on a phone
+  window). It is not byte-identical: separately filled discs composite their
+  antialiased rims twice where they overlap. Compared in WebKit against the
+  single path, on the real cells: at most 4/255 of alpha at every level Auto
+  draws, which is nothing, and up to 83/255 in the pinned, zoomed-out case,
+  where every disc is smaller than a pixel and the picture is already the
+  floored approximation `MIN_CELL_PX` describes.
+- **The region level asked every stored cell where it was.** `buildAreaFC`
+  resolves the region and country of each stored cell with a point-in-polygon
+  test, memoised by cell id; the note there measured 115 ms on 23k cells. On
+  502k it was 2.1 s for the regions and another 2 s for the countries being
+  warmed behind them, both mid-zoom. `warmAreaMemos` now fills both memos in
+  slices after the sign-in's first paint (7 s of wall time, no frame over
+  50 ms), so the first region build is a lookup: 2,097 ms before, 1 ms after.
+  The per-area tally is kept too (`areaTallies`, dropped when `areaGen` moves),
+  because it was being redone every time a country's detailed boundaries
+  arrived, which changes outlines and nothing about which areas are lit. And
+  those arrivals are gathered (`sharpenSoon`: `FINE_QUIET_MS`, at most
+  `FINE_MAX_WAIT_MS`) into one rebuild instead of one per country. A zoom out
+  to z5 on Auto: 6.9 s of stalls before, 0.75 s after, most of it the single
+  hand-over of seven countries' detailed outlines to the map's worker.
+
 **Measuring it.** Load with `?perf` and the console gets the roll-up, every
 blob paint, every `moveend`, and one line per gesture giving the frame count,
 p50, p95 and how many frames ran over 33 ms (`src/perf.js`). Read it through

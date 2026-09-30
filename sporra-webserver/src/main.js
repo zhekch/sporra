@@ -168,7 +168,7 @@ import {
   rollUp, rollUpSteps, attachNeighbourhoodsSteps, neighbourhoodOf, dominantSource, foldInCell,
   removeCell, storedUnder as storedUnderKey,
 } from './rollup.js';
-import { runSliced, parseCells, fillCells } from './cells-load.js';
+import { runSliced, parseCells, fillCells, nextFrame } from './cells-load.js';
 // The one place that asks the map where its camera is, and the only arithmetic
 // that knows a camera can be turned or leaned. Everything downstream still
 // receives a rectangle of Mercator metres.
@@ -2481,6 +2481,9 @@ function setCellsOn(on) {
   applyFade(fade.cur);
   applyPrevFade(fade.prev);
   updateLayersUi();
+  // Hidden cells are not drawn at all, so both directions are a real change:
+  // hiding puts the grid away, showing paints it from scratch.
+  updateGrid(true);
 }
 
 /** Take one source's cells off the map, or put them back. See hiddenSources. */
@@ -2968,6 +2971,56 @@ function areaOfCellMemo(kind, id) {
   return at ? continentOf(at) : null;
 }
 
+/**
+ * Answer "which country, which region" for every stored cell ahead of time, a
+ * slice at a time, so the first zoom out to the region level does not have to.
+ *
+ * The first build of either level used to do it inline: one point-in-polygon
+ * test per stored cell, which the note in buildAreaFC measured at 115 ms on a
+ * 23k-cell map. On the half-million-cell map this was written for it was two
+ * seconds for the regions and two more for the countries warmed behind them,
+ * frozen, mid-zoom. The answers are memoised by cell id and never go stale, so
+ * working them out while nobody is looking costs nothing but idle frames.
+ *
+ * Started after a sign-in's first paint rather than beside it, so the two
+ * sliced jobs never share a frame. A newer call — the cells were reloaded —
+ * makes an older one stop.
+ */
+let areaWarmGen = 0;
+async function warmAreaMemos() {
+  const gen = ++areaWarmGen;
+  const wanted = () => gen === areaWarmGen;
+  try {
+    await warmRegionData();
+  } catch {
+    return; // no boundaries, nothing to answer against; the build will ask again
+  }
+  // One frame, so a build that was waiting on the same datasets has run its
+  // own `then` — which clears the memos — before these are filled.
+  await nextFrame();
+  if (!wanted()) return;
+  const t0 = performance.now();
+  const done = await runSliced((function* fill() {
+    let k = 0;
+    for (const id of visited) {
+      areaOfCellMemo('country', id);
+      areaOfCellMemo('region', id);
+      if (++k % 256 === 0) yield;
+    }
+    return true;
+  })(), wanted);
+  if (done) span(`areas warmed for ${visited.size} cells, ${Math.round(performance.now() - t0)} ms wall`, () => {});
+}
+
+// What buildAreaFC tallies from the cells — which areas are lit and each one's
+// stats — keyed by what it was tallied for. The tally is a pass over every
+// stored cell, and it was being run again each time a country's detailed
+// boundaries arrived, which changes the outlines and nothing about which areas
+// are lit: seven countries' worth of boundaries was seven passes over half a
+// million cells, each a stall of its own. Dropped whenever `areaGen` moves.
+const areaTallies = new Map();
+let areaTalliesGen = -1;
+
 // One area's geometry, whichever dataset it came from.
 //
 // A country asked for `fine` is its own regions dissolved (trimmed back to the
@@ -3059,6 +3112,30 @@ function buildAreaFC(kind, { fine = false, mode = heatMode, record = true } = {}
   // shape with more points in it — and one that could still disagree with the
   // level below at a coast the union left a seam along.
   const byType = HEAT_MODES[mode]?.categorical;
+  if (areaTalliesGen !== areaGen) {
+    areaTallies.clear();
+    areaTalliesGen = areaGen;
+  }
+  const tallyKey = `${kind}|${byType ? 'type' : 'plain'}`;
+  const { litIds, perArea, countriesIn } = areaTallies.get(tallyKey) ?? tallyAreas(kind, byType);
+  areaTallies.set(tallyKey, { litIds, perArea, countriesIn });
+
+  // Recorded before the heat branch, which returns without reaching the merge:
+  // considerFineRegions() needs this whichever colouring mode is on.
+  if (record && isRegionKind) litRegionIds = litIds;
+  if (record && kind === 'country') litCountryIds = litIds;
+
+  const labels = isContinentKind ? continentLabels(countriesIn) : [];
+
+  // In a heat mode each country is its own feature so it can carry its own
+  // color; otherwise they dissolve into one borderless shape.
+  const heat = heatMetric(mode);
+  return areaFeatures(kind, mode, fine, litIds, perArea, labels, heat);
+}
+
+// The pass over every stored cell that buildAreaFC's result is built from.
+function tallyAreas(kind, byType) {
+  const isContinentKind = kind === 'continent';
   const slotOf = byType ? new Map(sourceOrder.map((src, i) => [src, i])) : null;
   const litIds = new Set();
   // Continent → the countries in it you have been to. The count is the whole
@@ -3106,17 +3183,12 @@ function buildAreaFC(kind, { fine = false, mode = heatMode, record = true } = {}
     }
     e.src = best;
   }
+  return { litIds, perArea, countriesIn };
+}
 
-  // Recorded before the heat branch, which returns without reaching the merge:
-  // considerFineRegions() needs this whichever colouring mode is on.
-  if (record && isRegionKind) litRegionIds = litIds;
-  if (record && kind === 'country') litCountryIds = litIds;
-
-  const labels = isContinentKind ? continentLabels(countriesIn) : [];
-
-  // In a heat mode each country is its own feature so it can carry its own
-  // color; otherwise they dissolve into one borderless shape.
-  const heat = heatMetric(mode);
+// The features for a tallied set of areas: one per area in a heat mode, the
+// lit areas dissolved into one shape otherwise.
+function areaFeatures(kind, mode, fine, litIds, perArea, labels, heat) {
   if (heat) {
     const range = {
       maxHits: 1,
@@ -3471,6 +3543,7 @@ async function hydrateVisited() {
       updateGrid(true);
       updateTiles();
       updateHud(currentLevel);
+      warmAreaMemos();
     }
     // The guessed home is read off the cells, so it only exists once they do.
     syncHomeMarker();
@@ -8486,6 +8559,34 @@ function considerFineRegions(level) {
  * @param {string} iso ISO3 country code
  * @param {string} label what to call it while it is on its way
  */
+// Detailed boundaries arrive a country at a time, a few hundred milliseconds
+// apart, and each used to rebuild and re-send the whole region layer on its own:
+// seven countries in view was seven stalls in a row, each a dissolve and a
+// hand-over of the geometry to the map's worker. They are gathered instead —
+// one rebuild once they stop arriving for FINE_QUIET_MS, and never later than
+// FINE_MAX_WAIT_MS after the first, so a long run of them still sharpens as it
+// goes.
+const FINE_QUIET_MS = 300;
+const FINE_MAX_WAIT_MS = 1200;
+let sharpenTimer = 0;
+let sharpenFirst = 0;
+
+function sharpenSoon() {
+  const now = performance.now();
+  if (!sharpenTimer) sharpenFirst = now;
+  clearTimeout(sharpenTimer);
+  const wait = Math.max(0, Math.min(FINE_QUIET_MS, sharpenFirst + FINE_MAX_WAIT_MS - now));
+  sharpenTimer = setTimeout(() => {
+    sharpenTimer = 0;
+    // Both, because both are drawn from these: the regions themselves, and
+    // the country outline that is those regions dissolved.
+    areaFC.regionFine = EMPTY;
+    areaFC.countryFine = EMPTY;
+    updateGrid(true);
+    updateSelection(); // and the outlined shape, if one is being looked at
+  }, wait);
+}
+
 function fetchFineRegions(iso, label) {
   if (!iso || fineCountryKnown(iso)) return;
   // The ring at the top of the map, so a zoom that is about to sharpen doesn't
@@ -8496,12 +8597,8 @@ function fetchFineRegions(iso, label) {
       // Anything at all: a country whose regions all seam can still have come
       // back with a sharp outline of its own, and the country level draws it.
       if (!news) return;
-      // Both, because both are drawn from these: the regions themselves, and
-      // the country outline that is those regions dissolved.
-      areaFC.regionFine = EMPTY;
-      areaFC.countryFine = EMPTY;
-      updateGrid(true);
-      updateSelection(); // and the outlined shape, if one is being looked at
+      span(`fine boundaries landed: ${iso}`, () => {});
+      sharpenSoon();
     })
     .finally(done);
 }
@@ -8625,6 +8722,37 @@ const levelName = (L) => (isVectorLevel(L) ? vectorKindOf(L) : `L${L}`);
 // in a `finally`, so a preferences fetch that throws still ends with a map.
 let paintHeldForPrefs = false;
 
+// Whether the grid has been put away because the cells are hidden. See the
+// `cellsOn` test in updateGrid.
+let gridBlank = false;
+
+/**
+ * Take everything the cells draw off the map, once, and keep only the level.
+ * Leaves the crossfade bookkeeping where a first paint expects it, since that is
+ * what showing them again is.
+ */
+function blankGrid(level) {
+  updateHud(level);
+  setBasemapContinents(level !== CONTINENT_LEVEL);
+  currentLevel = level;
+  if (gridBlank) return;
+  gridBlank = true;
+  stopBlobFade();
+  stopVectorFade();
+  blobCur.clear();
+  for (const sfx of ['', '-prev']) setVecData(sfx, EMPTY);
+  vecRole[''] = 'in';
+  vecRole['-prev'] = 'idle';
+  vecLive = '';
+  raiseVectorLayers('');
+  blobRole = 'none';
+  coverage = null;
+  currentAsBlob = false;
+  paintedZoom = 0;
+  blobCoarse = false;
+  fedFine = false;
+}
+
 function updateGrid(force = false, changed = null) {
   // The hex sources briefly don't exist while a new basemap style loads.
   if (!map.getSource('hex')) return;
@@ -8639,6 +8767,25 @@ function updateGrid(force = false, changed = null) {
   else {
     level = levelForZoom(map.getZoom(), skipHysteresis ? null : currentLevel);
     skipHysteresis = false;
+  }
+
+  // Hidden means not drawn — not drawn and then shown at zero opacity, which is
+  // what hiding used to be: every zoom still rolled a sheet of cells through the
+  // blur and every level change still dissolved the regions, for a layer nobody
+  // could see. On a phone, zoomed out over half a million cells with the finest
+  // level pinned, that was ten seconds of a frozen map to draw nothing. The level
+  // is still worked out, because the scale bar, a tap and the brush all ask it.
+  if (!cellsOn) {
+    blankGrid(level);
+    return;
+  }
+  if (gridBlank) {
+    // Back from hidden: nothing is on either surface, so this is a first paint
+    // in every respect that matters — the same state a replaced map starts in.
+    gridBlank = false;
+    currentLevel = null;
+    coverage = null;
+    force = true;
   }
 
   // The country level draws from a lazily-fetched 1.4 MB boundary file. Handing
@@ -8712,7 +8859,7 @@ function updateGrid(force = false, changed = null) {
   )
     return;
 
-  const fc = asBlob ? EMPTY : buildGrid(bb, level);
+  const fc = asBlob ? EMPTY : span(`build ${levelName(level)}`, () => buildGrid(bb, level));
 
   const paintBlob = () => span(`blob paint L${level}`, () => {
     blobCoarse = blobCur.paint({
@@ -13016,6 +13163,8 @@ const authState = mountAuth({
         loading();
       }
     }
+    // Now the map is up, and not before: see warmAreaMemos.
+    warmAreaMemos();
     // Only for the menu's status line — the sync itself runs on the server
     // whether or not this page is open.
     homeAssistant?.refresh();

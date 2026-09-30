@@ -20,6 +20,7 @@
 // pipeline below has never known which of the two it is drawing for.
 
 import { SQRT3, radiusOf, colsOf, normCol, WORLD, lngOf, latOf } from './hexgrid.js';
+import { PERF } from './perf.js';
 
 // Canvas pixels per CSS pixel. Well below 1 because everything here is about
 // to be blurred and re-cut: the softness hides the lower resolution, and the
@@ -200,6 +201,17 @@ const SPARSE_MIN_PX = 2;
 // column's parity and the canonical column can be asked directly.
 const NEIGHBOURS_ODD = [[0, -1], [0, 1], [-1, 0], [-1, 1], [1, 0], [1, 1]];
 const NEIGHBOURS_EVEN = [[0, -1], [0, 1], [-1, -1], [-1, 0], [1, -1], [1, 0]];
+
+// Most discs one path is allowed before it is filled and a new one started.
+//
+// WebKit rasterizes a canvas path as one shape, and the cost of that grows much
+// faster than the number of discs in it: zoomed out with the finest level pinned,
+// ~50,000 sub-pixel discs in a single path took 3–4 seconds to fill in WebKit on
+// a desktop — and more on a phone — while the same discs filled a thousand at a
+// time cost a few milliseconds. The fill is deferred until the pixels are read,
+// which is why it showed up as a blur that had somehow become slow. A normal
+// view draws far fewer than this per colour and is filled exactly as before.
+const PATH_CHUNK = 16;
 
 // Smallest a cell is ever drawn, in canvas pixels. See the note in paint():
 // anything under a pixel rasterizes at partial alpha and the level-set cut
@@ -532,8 +544,12 @@ export function paintBlobSheet({
   // only the cells near the sheet are visited; without it every entry is, which
   // is what the export does and is the same picture either way.
   index = null,
+  // Discs per fill — see PATH_CHUNK. A parameter so the chunked picture can be
+  // compared against the single-path one it replaced.
+  pathChunk = PATH_CHUNK,
 }) {
   const { latest, latestCtx, sheet, sheetCtx, work, workCtx } = buffers;
+  const tStart = PERF ? performance.now() : 0;
   const mercW = bb.xMax - bb.xMin;
   const mercH = bb.yMax - bb.yMin;
   if (!(mercW > 0) || !(mercH > 0)) return null;
@@ -618,6 +634,8 @@ export function paintBlobSheet({
   // Grouping by color keeps this to one path per distinct shade instead of one
   // fill call per cell.
   const paths = new Map();
+  const pathCount = new Map();
+  let filledAny = false;
   const margin = sparsePx + 2;
   const colMin = Math.floor((bb.xMin - R) / colSp);
   const colMax = Math.ceil((xMax + R) / colSp);
@@ -649,6 +667,18 @@ export function paintBlobSheet({
     if (!path) paths.set(color, (path = new Path2D()));
     path.moveTo(cx + r, cy);
     path.arc(cx, cy, r, 0, Math.PI * 2);
+    // See PATH_CHUNK: a colour's path is filled and started again once it is
+    // this long, rather than handed to the rasterizer as one enormous shape.
+    const n = (pathCount.get(color) ?? 0) + 1;
+    if (n >= pathChunk) {
+      sheetCtx.fillStyle = color;
+      sheetCtx.fill(path);
+      paths.set(color, new Path2D());
+      pathCount.set(color, 0);
+      filledAny = true;
+    } else {
+      pathCount.set(color, n);
+    }
     if (cx < inkX0) inkX0 = cx;
     if (cx > inkX1) inkX1 = cx;
     if (cy < inkY0) inkY0 = cy;
@@ -697,12 +727,14 @@ export function paintBlobSheet({
 
   // Nothing lit in this window: the buffers were cleared by the resize above and
   // three blurs of an empty sheet would only confirm it.
-  if (!paths.size) return { w, h, xMax };
+  if (!paths.size && !filledAny) return { w, h, xMax };
+  const tFound = PERF ? performance.now() : 0;
 
   for (const [color, path] of paths) {
     sheetCtx.fillStyle = color;
     sheetCtx.fill(path);
   }
+  const tFilled = PERF ? performance.now() : 0;
 
   // How far the paint can travel from a disc's centre before the pipeline is
   // done with it: the disc's own radius, plus three box passes of every round
@@ -730,6 +762,14 @@ export function paintBlobSheet({
   // anything, which is the whole trick: the cells never grow, the outline just
   // relaxes.
   pour(buffers, w, h, box, unit, edge, feather);
+  if (PERF) {
+    const t = performance.now();
+    console.log(
+      `[perf] sheet ${w}×${h}, ${paths.size} colours: find ${(tFound - tStart).toFixed(0)} ms,` +
+        ` fill ${(tFilled - tFound).toFixed(0)} ms, blur ${(t - tFilled).toFixed(0)} ms` +
+        ` over ${box.w}×${box.h}`,
+    );
+  }
 
   return { w, h, xMax };
 }
