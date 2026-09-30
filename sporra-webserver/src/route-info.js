@@ -11,7 +11,6 @@
 // the one thing this card draws that the cell card does not: speed or
 // elevation along the line, scrubbed from here or from the map.
 
-import { sourceLabel } from './locations.js';
 import { formatDistance, formatDuration, recordedSeconds, routeSamples } from './routes.js';
 import { formatTime } from './clock.js';
 import { metricColor, metricDomain, spanValue } from './route-metric.js';
@@ -228,48 +227,51 @@ export function fillMetricGraph(graphEl, samples, metric) {
   svg.append(dot);
   const maxLabel = value(maxY);
   const minLabel = value(minY);
-  const endLabel = byTime ? formatAxisTime(endSec) : null;
   if (maxLabel) graphEl.append(readout('is-max', [maxLabel]));
   graphEl.append(svg);
-  if (minLabel) graphEl.append(readout('is-min', [minLabel]));
-  // Left, with the high and the low. It used to sit at the end of the line,
-  // and on a long activity that end is also an hour mark, so the two drew
-  // on top of each other.
-  if (endLabel) graphEl.append(readout('is-time', [endLabel]));
-  if (byTime) {
-    const ticks = tickReadout(endSec, X);
-    if (ticks) graphEl.append(ticks);
-  }
+  // One row under the line. The low reading takes the left, where 0 min
+  // used to be, and the hour marks sit on that same row. The total is
+  // already the Duration line, so the graph does not say it again.
+  const axis = axisReadout(minLabel, byTime ? endSec : 0, X);
+  if (axis) graphEl.append(axis);
   return { dot, graphMap };
 }
 
 // Fade lines are drawn for every step. The words under them are not: two
-// labels closer than this land on top of each other. The total is not one
-// of them — it is a reading, and it lives with the other readings.
+// labels closer than this land on top of each other, and neither may land
+// on the low reading at the left.
 const TIME_LABEL_GAP = 46;
 
-function tickReadout(endSec, X) {
+function axisReadout(minLabel, endSec, X) {
+  const row = document.createElement('div');
+  row.className = 'route-metric-readout is-axis';
+  if (minLabel) {
+    const span = document.createElement('span');
+    span.className = 'is-value';
+    span.textContent = minLabel;
+    row.append(span);
+  }
+  if (!(endSec > 0)) return minLabel ? row : null;
   const step = graphTimeStep(endSec);
   const endX = X(endSec);
-  const marks = [];
+  const reserved = minLabel ? minLabel.length * 6.6 + 8 : 0;
   let prev = -Infinity;
+  let any = false;
   for (let t = step; t < endSec; t += step) {
     const x = X(t);
     const label = formatAxisTime(t);
     if (!label || x - prev < TIME_LABEL_GAP || endX - x < TIME_LABEL_GAP) continue;
-    marks.push({ x, label });
-    prev = x;
-  }
-  if (!marks.length) return null;
-  const row = document.createElement('div');
-  row.className = 'route-metric-readout is-ticks';
-  for (const mark of marks) {
+    const half = label.length * 3.1;
+    if (x - half < reserved) continue;
     const span = document.createElement('span');
-    span.textContent = mark.label;
-    span.style.left = `${mark.x}px`;
+    span.className = 'is-tick';
+    span.textContent = label;
+    span.style.left = `${x}px`;
     row.append(span);
+    prev = x;
+    any = true;
   }
-  return row;
+  return minLabel || any ? row : null;
 }
 
 /**
@@ -407,22 +409,16 @@ export function mountRouteInfo({ onClose, onZoom, onMore, onMetric, onScrub } = 
     route = r;
     scrub = -1;
     nameEl.textContent = r.name || 'Route';
-    const started = day(r.firstAt);
-    // The place is the most useful thing to know at a glance, so it leads the
-    // sub-line — unless it *is* the title, in which case repeating it is noise.
-    const place = r.place && r.place !== r.name ? r.place : null;
-    subEl.textContent = [place, sourceLabel(r.source), started ?? `added ${day(r.addedAt) ?? 'recently'}`]
-      .filter(Boolean)
-      .join(' · ');
+    // The activity and when it was. Place and source used to lead this line,
+    // and the same two facts were then repeated as rows.
+    const sport = r.sport ? (r.sportGuessed ? `${r.sport} (estimated)` : r.sport) : null;
+    subEl.textContent = [sport, whenLine(r)].filter(Boolean).join(' · ');
 
     rowsEl.replaceChildren();
-    // Same wording as the dialog: a worked-out activity says so.
-    row('Activity', r.sport ? (r.sportGuessed ? `${r.sport} (estimated)` : r.sport) : '');
     row('Distance', formatDistance(r.lengthM));
     // Only shown when the file carried elevation at all — a flat 0 m would read
     // as a measurement rather than an absence.
     if (r.elevUp > 0) row('Climb', `${Math.round(r.elevUp).toLocaleString()} m`);
-    row('When', whenLine(r));
     row('Duration', formatDuration(recordedSeconds(r)));
 
     samples = routeSamples(r.geom, r.trace);

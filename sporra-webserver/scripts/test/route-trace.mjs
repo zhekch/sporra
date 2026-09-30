@@ -142,5 +142,13 @@ check(ticks.length >= 1, 'a faded time line is drawn', `${ticks.length} lines`);
 check(!texts.some((t) => t === '0 min' || t.startsWith('0.1') || t === '0 km/h' || t === '0.0 km/h'),
   'zero is left off the graph', texts.join(' | '));
 
+const elevHost = node('div');
+fillMetricGraph(elevHost, hourRide, 'elev');
+const axis = elevHost.children.find((el) => String(el.className).includes('is-axis'));
+const axisText = (axis?.children ?? []).map((el) => el.textContent);
+check(axisText.includes('400 m') && axisText.includes('1 h'),
+  'the low reading and the hour marks share a row', axisText.join(' | '));
+check(!axisText.includes('3 h'), 'the graph does not repeat the total', axisText.join(' | '));
+
 console.log(`\n${fail ? 'FAILED' : 'passed'}: ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

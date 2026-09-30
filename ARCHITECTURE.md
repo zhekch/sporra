@@ -2037,9 +2037,10 @@ to the full entry in the routes dialog. The card used to carry Edit and Remove
 too, which made it a second place that knew how to change a route; everything
 that changes one now lives in exactly one place.
 
-The day and the clock are one line. A ride that finished the day it started
-reads "12 Sep 2024, 14:32"; one that ran past midnight names both ends. There is
-no separate count of points. The shape is the line.
+The line under the name is what it was and when: "Cycling · 12 Sep 2024, 14:32".
+A ride that finished the day it started keeps the clock on that date; one that
+ran past midnight names both ends. The card does not repeat either fact as a
+row. There is no separate count of points. The shape is the line.
 
 Opening the card draws that one route and leaves the rest off — the same thing
 Search and the routes list already did. Closing the card puts the others back.
@@ -2048,9 +2049,10 @@ tap that lands on several still asks, via the stack menu below; picking a row
 isolates that one and leaves the menu up.
 
 Above the card, two chips, **Speed** and **Elevation**, recolour the open route.
-Each one is only a border. On a phone the location button is lifted into that
-strip, so the chips stop short of it; on a wide screen they take the width of
-the card, where the location button is in the opposite corner.
+Each one is opaque, with a plain border, so the route cannot show through the
+word. On a phone the location button is lifted into that strip, so the chips
+stop short of it; on a wide screen they take the width of the card, where the
+location button is in the opposite corner.
 Speed runs red where it was slow and green where it was fast; elevation runs
 green where it was low and red where it was high. The scale is this activity's
 own. Speed drops the slowest and fastest twentieth (`metricDomain` in
@@ -2072,12 +2074,12 @@ the map — one span at a time, from the same `metricDomain`, because a single
 gradient would restart the ramp across the whole activity. The number at the
 top is the highest value on it and the number under the line is the lowest —
 kilometres an hour, or metres. A stop is not a reading: 0 km/h, and the
-0.1 km/h a crawl rounds to, are left off, and so is a time of zero. The time
-since the start sits on the left with those two, because the left edge is
-empty once zero is gone, and parking it at the end of the line put it on top
-of the last hour mark. A short activity draws a faded line
+0.1 km/h a crawl rounds to, are left off, and so is a time of zero. Under the
+line those two share one row: the low reading on the left, where zero used to
+be, and the hour marks along the rest of it. The total is the Duration row
+already, and the graph does not repeat it. A short activity draws a faded line
 every quarter hour (`graphTimeStep`); past two hours the line is the hour. The
-words follow when they have room. The total stays with the readings. The
+words follow when they have room, and they stay clear of the low reading. The
 line is drawn against that clock when the activity has one, and against
 distance when it does not, because a pause has to land where the time says it
 did. A press on it, or on the line, drops a dot in both places and a small
