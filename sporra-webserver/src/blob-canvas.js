@@ -528,6 +528,10 @@ export function paintBlobSheet({
   maxPixels = nativeBlur() ? Infinity : JS_BLUR_MAX_PX,
   featherScale = 1,
   maxFeatherCells = Infinity,
+  // Where the cells are — src/cell-index.js, built over the same Map. With it
+  // only the cells near the sheet are visited; without it every entry is, which
+  // is what the export does and is the same picture either way.
+  index = null,
 }) {
   const { latest, latestCtx, sheet, sheetCtx, work, workCtx } = buffers;
   const mercW = bb.xMax - bb.xMin;
@@ -629,38 +633,65 @@ export function paintBlobSheet({
   // Largest disc actually drawn, which is what the blur has to reach past.
   let inkR = rPx;
 
-  for (const [key, stat] of cells) {
-    const sep = key.indexOf('/');
-    const nc = +key.slice(0, sep);
-    const row = +key.slice(sep + 1);
-    const cyM = row * rowSp; // parity offset added per world copy below
-    // Asked once per canonical cell and only when one of its copies is on the
-    // sheet: six lookups is cheap, but the padded viewport holds a lot of cells
-    // and most repaints draw a fraction of what is stored.
-    let r = 0;
+  // One world copy of one canonical cell. Returns the radius it was drawn at,
+  // or 0 when this copy is off the sheet. `r` is the radius already worked out
+  // for another copy of the same cell, so the neighbour test is asked once.
+  const drawCopy = (nc, row, col, stat, r) => {
+    const cx = px(col * colSp);
+    const cy = py(row * rowSp + (col & 1 ? 0.5 * rowSp : 0));
+    if (cx < -margin || cy < -margin || cx > w + margin || cy > h + margin) return 0;
+    if (!r) {
+      r = sparse(nc, row) ? sparsePx : rPx;
+      if (r > inkR) inkR = r;
+    }
+    const color = colorOf(stat);
+    let path = paths.get(color);
+    if (!path) paths.set(color, (path = new Path2D()));
+    path.moveTo(cx + r, cy);
+    path.arc(cx, cy, r, 0, Math.PI * 2);
+    if (cx < inkX0) inkX0 = cx;
+    if (cx > inkX1) inkX1 = cx;
+    if (cy < inkY0) inkY0 = cy;
+    if (cy > inkY1) inkY1 = cy;
+    return r;
+  };
 
-    // Every world-copy instance of this canonical column in the window.
-    const kMin = Math.ceil((colMin - nc) / N);
-    const kMax = Math.floor((colMax - nc) / N);
-    for (let wc = kMin; wc <= kMax; wc++) {
-      const col = nc + wc * N;
-      const cx = px(col * colSp);
-      const cy = py(cyM + (col & 1 ? 0.5 * rowSp : 0));
-      if (cx < -margin || cy < -margin || cx > w + margin || cy > h + margin) continue;
-
-      if (!r) {
-        r = sparse(nc, row) ? sparsePx : rPx;
-        if (r > inkR) inkR = r;
-      }
-      const color = colorOf(stat);
-      let path = paths.get(color);
-      if (!path) paths.set(color, (path = new Path2D()));
-      path.moveTo(cx + r, cy);
-      path.arc(cx, cy, r, 0, Math.PI * 2);
-      if (cx < inkX0) inkX0 = cx;
-      if (cx > inkX1) inkX1 = cx;
-      if (cy < inkY0) inkY0 = cy;
-      if (cy > inkY1) inkY1 = cy;
+  if (index) {
+    // The rows whose centres can land within `margin` of the sheet, one row of
+    // slack either way for the half-row offset of odd columns. A superset is
+    // all this has to be: drawCopy still makes the exact test.
+    const rowMin = Math.floor((bb.yMax - (h + margin) / k) / rowSp) - 1;
+    const rowMax = Math.ceil((bb.yMax + margin / k) / rowSp) + 1;
+    // Each world copy the window reaches, asked for the canonical columns it
+    // covers. Visiting copy by copy draws the same discs the scan below does —
+    // the arcs go into the same per-colour paths, and a nonzero fill of
+    // circles does not care in which order they were added.
+    for (let wc = Math.floor(colMin / N); wc <= Math.floor(colMax / N); wc++) {
+      const base = wc * N;
+      index.forEachIn(
+        Math.max(0, colMin - base),
+        Math.min(N - 1, colMax - base),
+        rowMin,
+        rowMax,
+        (key, nc, row) => {
+          const stat = cells.get(key);
+          if (stat) drawCopy(nc, row, nc + base, stat, 0);
+        },
+      );
+    }
+  } else {
+    for (const [key, stat] of cells) {
+      const sep = key.indexOf('/');
+      const nc = +key.slice(0, sep);
+      const row = +key.slice(sep + 1);
+      // Asked once per canonical cell and only when one of its copies is on the
+      // sheet: six lookups is cheap, but the padded viewport holds a lot of
+      // cells and most repaints draw a fraction of what is stored.
+      let r = 0;
+      // Every world-copy instance of this canonical column in the window.
+      const kMin = Math.ceil((colMin - nc) / N);
+      const kMax = Math.floor((colMax - nc) / N);
+      for (let wc = kMin; wc <= kMax; wc++) r = drawCopy(nc, row, nc + wc * N, stat, r) || r;
     }
   }
 
@@ -1058,6 +1089,8 @@ export function createBlobLayer(map, id) {
    * @param {{xMin:number,xMax:number,yMin:number,yMax:number}} o.bb padded viewport in Mercator metres
    * @param {number} o.level      grid level being drawn
    * @param {Map} o.cells         "col/row" → rolled-up stats
+   * @param {object} [o.index]     src/cell-index.js over the same keys, so the
+   *                              paint visits only the cells near the sheet
    * @param {(stat:object)=>string} o.colorOf  css color for a cell
    * @param {boolean} [o.heat]    a heat map rather than the single-color wash;
    *                              picks which pair of edge knobs applies
@@ -1069,7 +1102,7 @@ export function createBlobLayer(map, id) {
    * @returns {boolean} whether the sheet was painted to the reduced budget, and
    *   therefore still owes a full-resolution repaint
    */
-  function paint({ bb, level, cells, colorOf, heat = false, moving = false, changed = null }) {
+  function paint({ bb, level, cells, index = null, colorOf, heat = false, moving = false, changed = null }) {
     // Screen scale straight from the zoom (MapLibre's world is 512·2^z px).
     // The feather takes the same scale, so a width measured in CSS pixels stays
     // the same on screen whatever the display density.
@@ -1109,6 +1142,7 @@ export function createBlobLayer(map, id) {
       pxPerMerc,
       featherScale: scale,
       maxPixels: coarse ? MOVING_MAX_PX : undefined,
+      index,
     });
     if (!out) {
       sheetStamp = null;

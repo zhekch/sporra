@@ -150,10 +150,11 @@ glass look. Click hexagons to mark places you've visited.
 - **Antimeridian**: the column count is integer and even at every level, so
   the grid wraps seamlessly at ±180°; cell ids are canonicalized so the same
   cell matches across world copies.
-- **Performance**: colored regions are built by iterating only the marked
-  cells (not the viewport), so region rendering stays proportional to what
-  you've marked at any zoom. The edit cursor is a circle in the page, so a
-  pointer move never rebuilds region geometry either.
+- **Performance**: the blob paint asks `src/cell-index.js` which marked cells
+  are near the sheet, rather than walking all of them, so a repaint costs what
+  is on screen and not what is stored — see [On a phone, less of
+  everything](#on-a-phone-less-of-everything). The edit cursor is a circle in
+  the page, so a pointer move never rebuilds region geometry either.
 - **Visited cells**: clicks resolve to a cell mathematically (hex
   point-location), so toggling works at any zoom, on boundaries and gaps.
   Marks **propagate upward** — a coarse cell lights up if it contains any
@@ -254,6 +255,15 @@ glass look. Click hexagons to mark places you've visited.
   each pass. A window with a single cluster in it went from ~150 ms a paint to
   ~15 ms; a window lit corner to corner is unchanged, which is the right shape
   for the trade. A sheet with nothing lit at all returns before the first blur.
+  **The cells are found by place, not by walking all of them.** Finding the
+  discs used to mean parsing every key of the level's Map and discarding the
+  ones off the sheet — 22 ms of the paint on a half-million-cell account at
+  level 0, whatever the window held. `litIndex[L]` (`src/cell-index.js`) files
+  the same keys into `CELL_BUCKET`-square buckets of the lattice, built the
+  first time a level is painted and kept in step by the brush's incremental
+  paths, and `paintBlobSheet` visits only the buckets the sheet overlaps,
+  world copy by world copy. The export does not pass one and scans as before;
+  `scripts/test/cell-index.mjs` holds the two to the same list of discs.
   **The float planes are kept between calls** rather than allocated per blur —
   at the cap that is two 4.8 MB arrays three times a paint, ~29 MB of garbage
   per repaint, and removing it is what took the occasional 107 ms paint back
@@ -8855,6 +8865,84 @@ Three consequences shape how `sporra-ios/Sporra/AppBoundDomains.swift` uses it:
   `strava.com` belongs in the list beside your own host. A navigation that is
   refused now draws a sentence saying which address and why, rather than the
   blank the whole of this section is about.
+
+## On a phone, less of everything
+
+The map was borderline usable on an iPhone 16, in the app, on the 3D basemap.
+Three separate costs added up to that, and each got its own answer. What counts
+as a phone is `isPhone()` in `src/phone.js` — a coarse pointer on a screen
+whose short side is at most 560 px — decided once, so every trade below is made
+on the same answer and a narrow desktop window is not mistaken for one.
+
+**Every frame of a pan.**
+
+- **The map is drawn at 2×, not 3×** (`PHONE_MAX_DPR`). At 3× the 3D basemap
+  is ~3.3 million pixels of terrain, light and fog per frame; 2× is 44% fewer,
+  on a screen dense enough that the difference is at the edge of what an eye
+  resolves at a phone's distance. Mapbox GL JS v3 takes no `pixelRatio` option
+  and reads `window.devicePixelRatio` through a getter each time it sizes its
+  canvas, so `capDevicePixelRatio()` redefines that property in `boot.js`,
+  before either library is loaded. That is one mechanism for both libraries.
+  Everything else that reads the ratio sizes something drawn *on* the map and
+  is right to follow it; the photo viewer and its thumbnails ask
+  `nativePixelRatio()` instead, because a photograph is looked at, not panned
+  over. Measured in WebKit emulating a 393 px, 3× phone: the ratio reads 2 and
+  the map canvas is 786 px wide.
+- **The route glow is four rings, not eight** (`ROUTE_GLOW_RINGS`). Each ring is
+  every route on screen drawn again, translucent and up to twenty pixels wide.
+  The contour steps that made four the wrong answer on a laptop are finer than
+  a 460 ppi screen shows.
+- **The glass goes flat while the map moves** (`body.map-moving`, cleared
+  `GLASS_SETTLE_MS` after `moveend`). A `backdrop-filter` re-blurs whatever is
+  behind it on every frame that changes, and during a pan that is every frame,
+  for controls nobody is looking at. For the length of the gesture the button
+  cluster, the attribution, the pencil, the edit panel and any open card are a
+  denser scrim of the same grey. No transition, for the reason written at the
+  phone menu sheet: easing a `backdrop-filter` is a per-frame cost of its own.
+- **The move handler stopped redoing things.** `considerFineRegions`, which
+  builds a set of every lit region and walks all 4,553 records, looks at most
+  every `FINE_LOOK_MS` while the camera moves (never skipped once it stops),
+  and the HUD writes text only when the text changed.
+
+**The moment of letting go.**
+
+- **The blob paint finds cells by place** — see the blob notes under [How it
+  works](#how-it-works). Measured in WebKit on a dense level-0 window of the
+  half-million-cell account: 74 ms a paint before, 50 ms after. The rest is the
+  JS blur, which is genuinely proportional to what is on screen.
+- **The chrome's contrast reading waits for `idle`.** `moveend` used to ask for
+  a `readPixels` in the very next frame *and* again at idle. A `readPixels`
+  stalls until the GPU finishes the frame, and the frame after a release is the
+  one the blob repaint, the tile requests and the glass coming back all land
+  in. Only the settled reading is taken now.
+
+**Signing in.**
+
+- **The roll-up is built level by level** (`src/rollup.js`). It used to walk
+  every stored cell up all seven levels, building a key and copying the cell's
+  id onto an array at each: three and a half million of both on the account
+  this was measured on. Each level is now built from the one below — every
+  entry visited once — and an entry keeps its `parent` and the keys of its
+  `kids` instead of every id beneath it. `storedUnder` walks those back down
+  when a tap asks, and `neighbourhoodOf` follows `parent` instead of
+  re-deriving keys. In WebKit, on 502,060 cells: 857 ms before, 317 ms after.
+  `scripts/test/rollup.mjs` keeps the old walk and holds the new one to it,
+  field by field, including the brush's incremental paths. A side effect: an
+  erase sweep no longer leaves stale ids under a cell until the gesture's
+  closing rebuild, because an entry only carries the ids stored at exactly its
+  own cell.
+
+**Measuring it.** Load with `?perf` and the console gets the roll-up, every
+blob paint, every `moveend`, and one line per gesture giving the frame count,
+p50, p95 and how many frames ran over 33 ms (`src/perf.js`). Read it through
+Safari's Web Inspector attached to the app. Without the flag every call there
+is a pass-through.
+
+**Not done, and worth measuring first.** Standard's own scene — shadows cast by
+its directional light, the 3D facades — is probably the largest cost left on
+the 3D basemap, and switching either off on a phone is a visible change rather
+than an engineering one. It wants a `?perf` gesture line on a real phone with
+each on and off before anyone decides.
 
 ## The scale bar
 

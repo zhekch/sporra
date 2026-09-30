@@ -11637,3 +11637,55 @@ body.intro-picking .layers {
     animation: none;
   }
 }
+
+/* The glass goes flat while a phone moves the map.
+
+   A `backdrop-filter` is not paid for once. Every frame the map under it
+   changes, the compositor reads back what is behind the element, blurs it and
+   draws it again — and while a finger is on the map, the map under the button
+   cluster, the attribution and any open card changes on every frame. On an
+   iPhone that was a measurable share of each frame of a pan, spent on the
+   frosting of controls nobody is looking at while they drag.
+
+   So for the length of a gesture (`body.map-moving`, set from main.js and
+   cleared GLASS_SETTLE_MS after it ends) the glass is a denser scrim of the same
+   grey instead: the same colour the blurred version averages out to over a
+   typical map, a little more opaque so the text over it still has something to
+   stand on without the blur. No transition — easing a `backdrop-filter` is a
+   per-frame cost of its own, see the note on the phone menu sheet.
+
+   Phones only, by the same test the rest of the phone layout uses. A laptop's
+   GPU has the headroom, and there the frosting is part of the look. */
+@media (max-width: 560px), (pointer: coarse) and (max-height: 560px) {
+  body.map-moving :is(
+    .layers-cluster,
+    .hud-pencil,
+    .hud-panel,
+    .route-solo,
+    .maplibregl-ctrl-attrib,
+    .mapboxgl-ctrl-attrib,
+    .maplibregl-popup-content,
+    .mapboxgl-popup-content
+  ),
+  body.map-moving :is(.maplibregl-ctrl-bottom-right, .mapboxgl-ctrl-bottom-right)
+    :is(.maplibregl-ctrl-group, .mapboxgl-ctrl-group) {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* Only the surfaces that carry their own glass take the denser fill. The
+     buttons inside the cluster are transparent over it and stay that way. */
+  body.map-moving :is(.layers-cluster, .hud-pencil, .hud-panel, .route-solo),
+  body.map-moving :is(.maplibregl-ctrl-bottom-right, .mapboxgl-ctrl-bottom-right)
+    > :is(.maplibregl-ctrl-group, .mapboxgl-ctrl-group) {
+    background-color: rgba(40, 40, 40, 0.86);
+  }
+
+  body.map-moving :is(.maplibregl-popup-content, .mapboxgl-popup-content) {
+    background: rgba(24, 24, 24, 0.94);
+  }
+
+  [data-theme='light'] body.map-moving :is(.maplibregl-popup-content, .mapboxgl-popup-content) {
+    background: rgba(248, 250, 252, 0.94);
+  }
+}

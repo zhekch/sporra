@@ -163,12 +163,19 @@ import { paletteFor, randomPalette } from './route-colors.js';
 import { reconcilePrefs, remoteToken, readHome } from './prefs.js';
 import { loadPlaces, describeRoute, nearestTown, searchPlaces } from './places.js';
 import { createBlobLayer, blobsSupported, BLOB_ALPHA, BLOB_HEAT_ALPHA } from './blob-canvas.js';
+import { indexCells } from './cell-index.js';
+import {
+  rollUp, attachNeighbourhoods, neighbourhoodOf, dominantSource, foldInCell, removeCell,
+  storedUnder as storedUnderKey,
+} from './rollup.js';
 // The one place that asks the map where its camera is, and the only arithmetic
 // that knows a camera can be turned or leaned. Everything downstream still
 // receives a rectangle of Mercator metres.
 import { boxArea, boxContains, cameraOf, groundBox, lngLatBox, mercPerPixel } from './view.js';
 import { installScrollChain } from './scroll-chain.js';
 import { installCardLift } from './card-lift.js';
+import { isPhone } from './phone.js';
+import { span, gestureStart, gestureEnd } from './perf.js';
 
 // Every panel in the app is a scrolling column with scrolling lists inside it,
 // and on a phone the inner list is a dead end unless the hand-off is written by
@@ -213,6 +220,13 @@ const VIEW_PAD = 0.35; // extra region coverage around the viewport, per side
 // thing that asks. Long enough for a deliberate double tap with a thumb, short
 // enough that two separate decisions a beat apart are two decisions.
 const DOUBLE_PRESS_MS = 350;
+
+// How long after a gesture ends the glass waits before it is frosted again, on a
+// phone — see `body.map-moving` at the foot of style.css. Long enough that a
+// second flick landing straight after the first does not strobe the controls
+// between frosted and flat, short enough that nobody reaching for a button finds
+// it still flat.
+const GLASS_SETTLE_MS = 180;
 
 // --- Which way the camera may point --------------------------------------------
 // The map turns. It did not, for a long time, and the reason was never that
@@ -456,7 +470,15 @@ const ROUTE_SIMPLIFY_PX = 2;
 // and the ink lies over its own, which composites twice and always did. At a
 // ring's share of the alpha it is a pixel wide and barely there; it was a
 // hard-edged wedge before.
-const ROUTE_GLOW_RINGS = 8;
+//
+// **A phone gets four.** Every ring is the whole route set drawn again, up to
+// twenty pixels wide and translucent, so eight rings is nine passes of overdraw
+// over every saved track on the screen — at a 2× pixel ratio, over the 3D
+// basemap, on a GPU that is also compositing the glass. Four shows its steps on
+// a laptop held at arm's length; on a 460 ppi screen they are finer than the
+// eye resolves at a phone's distance, and the frame is what was being lost.
+// Decided once at load, because the layer ids are built from it.
+const ROUTE_GLOW_RINGS = isPhone() ? 4 : 8;
 // Widest first, so the first of them is the bottom of the whole route stack and
 // the thing everything else anchors above.
 const ROUTE_GLOW_IDS = Array.from(
@@ -1225,6 +1247,22 @@ onMapBuilt(() => map.on('movestart', (e) => {
   if (e.originalEvent) userInteracted = true;
 }));
 
+// The glass goes flat for the length of a gesture on a phone, because frosting
+// it again on every frame of the map moving under it is a cost the phone's
+// compositor pays per frame. Any movement, not just a finger's: a fly-to
+// re-blurs the backdrop exactly as often as a drag does.
+let glassTimer = 0;
+if (isPhone()) {
+  onMapBuilt(() => map.on('movestart', () => {
+    clearTimeout(glassTimer);
+    document.body.classList.add('map-moving');
+  }));
+  onMapBuilt(() => map.on('moveend', () => {
+    clearTimeout(glassTimer);
+    glassTimer = setTimeout(() => document.body.classList.remove('map-moving'), GLASS_SETTLE_MS);
+  }));
+}
+
 // "My location" button — browser geolocation (works on localhost; production
 // needs HTTPS). Clicking it pans to the viewer and shows the blue dot.
 //
@@ -1733,7 +1771,13 @@ function snowModeChanged(mode) {
 }
 
 onMapBuilt(() => map.on('moveend', () => {
-  askChromeAgain();
+  // Only the settled reading, not one in the next frame as well. `readPixels`
+  // stalls until the GPU has finished the frame, and the frame after a release
+  // is the one the blob repaint, the tile requests and the glass coming back
+  // are all landing in — a phone felt that as a hitch on every let-go. Once the
+  // map is idle nothing else is waiting on the GPU, and a gesture's worth of
+  // wrong-coloured chrome is not a thing anyone catches mid-pan.
+  chromeSettleDue = true;
   rememberView();
   refreshSnow();
 }));
@@ -2508,6 +2552,18 @@ const nowSec = () => Math.floor(Date.now() / 1000);
 //   ids  — the stored cell ids rolled up into this one, so clearing a cell can
 //          find what to delete with a lookup instead of a sweep of `visited`
 let litSets = [];
+// litIndex[L] files the keys of litSets[L] by place, so the blob paint can ask
+// for a window rather than walking every lit cell — see src/cell-index.js. Built
+// the first time a level is painted rather than with the roll-up: most levels
+// of a session are never looked at, and building one costs about what a single
+// scan did. Dropped whenever litSets is rebuilt; kept in step by the two
+// incremental paths while it exists.
+let litIndex = [];
+
+function litIndexOf(level) {
+  if (!litSets[level]) return null;
+  return (litIndex[level] ??= indexCells(litSets[level]));
+}
 // Cells painted since the last roll-up, waiting to be folded in incrementally
 // (see rollUpPainted). Declared here because recomputeLit() below runs at module
 // load, before anything further down has been initialized.
@@ -2534,66 +2590,13 @@ let typeRollUpStale = true;
 // statistics, the saves and the search read.
 let visibleCells = visited;
 
-// Tally one source's visits onto a rolled-up cell. Nearly every cell only ever
-// sees a single source, so the Map is only allocated once a second turns up.
-function addSource(e, src, hits) {
-  if (e.srcMap) {
-    e.srcMap.set(src, (e.srcMap.get(src) ?? 0) + hits);
-  } else if (e.src1 === undefined) {
-    e.src1 = src;
-    e.n1 = hits;
-  } else if (e.src1 === src) {
-    e.n1 += hits;
-  } else {
-    e.srcMap = new Map([[e.src1, e.n1], [src, hits]]);
-  }
-}
-
-/**
- * How busy the area around one rolled-up cell is: arrivals per cell across the
- * hex `HEAT_NEIGHBOURHOOD` levels above it. Read beside the cell's own count so
- * that being seen once in the middle of a city and being seen once on a
- * motorway are not the same answer — which, before this, they were.
- *
- * Falls back to the cell's own density at the coarsest level, where there is
- * nothing further out to ask.
- */
-function neighbourhoodOf(level, key) {
-  const up = Math.min(MAX_LEVEL, level + HEAT_NEIGHBOURHOOD);
-  const own = (e) => (e ? e.hits / e.cells : 0);
-  if (up === level) return own(litSets[level].get(key));
-  const sep = key.indexOf('/');
-  let col = +key.slice(0, sep);
-  let row = +key.slice(sep + 1);
-  for (let l = level; l < up; l++) [col, row] = parentOf(l, col, row);
-  return own(litSets[up].get(`${col}/${row}`)) || own(litSets[level].get(key));
-}
-
-function attachNeighbourhoods(level) {
-  for (const [key, e] of litSets[level]) e.near = neighbourhoodOf(level, key);
-}
-
-// Which source speaks for this cell: the one that saw you there most often.
-// Ties go to the alphabetically first, so the map doesn't shuffle between loads.
-function dominantSource(e) {
-  if (!e.srcMap) return e.src1;
-  let best;
-  let bestN = -1;
-  for (const [src, n] of e.srcMap) {
-    if (n > bestN || (n === bestN && src < best)) {
-      best = src;
-      bestN = n;
-    }
-  }
-  return best;
-}
-
 // One stored cell's contribution to any roll-up, read off its provenance. The
 // arithmetic lives in src/coloring.js, beside the ramps that consume it.
 const cellStatsOf = (id, byType) => cellStats(cellMeta.get(id) ?? [], byType);
 
 /**
- * Roll every stored cell up through the levels above it.
+ * Roll every stored cell up through the levels above it — src/rollup.js does
+ * the rolling; this decides what is drawn and hands out the palette.
  *
  * @param {boolean} [byType] also build the per-source tally. It is an extra
  *   pass and an extra field on every rolled-up cell, so it defaults to whether
@@ -2604,54 +2607,13 @@ function recomputeLit(byType = HEAT_MODES[heatMode]?.categorical) {
   // A full rebuild already accounts for anything sitting in the queue.
   paintQueue.length = 0;
   eraseQueue.length = 0;
-  litSets = Array.from({ length: MAX_LEVEL + 1 }, () => new Map());
-  const sourceCells = new Map();
   // Which source speaks for a cell is normally only worth working out for the
   // mode that colours by it — but with something hidden it is also what says
-  // whether the cell is drawn at all, so the pass is paid for either way.
-  const filtering = hiddenSources.size > 0;
-  const shown = filtering ? new Set() : null;
-
-  for (const id of visited) {
-    let [L, col, row] = parseCellId(id);
-    // Stored at a level that no longer exists. It draws no hexagon, but it is
-    // not *hidden* either — it still lights the country it is in, which is what
-    // it did before there was anything to hide.
-    //
-    // Written as the negation so an id that did not parse — NaN, which fails
-    // every comparison it is put through — lands here as well, rather than
-    // walking up the lattice as NaN and lighting a cell called "NaN/NaN".
-    if (!(L <= MAX_LEVEL)) {
-      shown?.add(id);
-      continue;
-    }
-
-    const { hits, time, age, own, ownN } = cellStatsOf(id, byType || filtering);
-    // Tallied before it is skipped, and deliberately: the palette is handed out
-    // in this order, so counting only what is drawn would reshuffle everyone
-    // else's colour every time a source was switched off. A hidden source keeps
-    // its slot and its place in the legend, which is also what makes the legend
-    // the way back.
-    if (byType && own) sourceCells.set(own, (sourceCells.get(own) ?? 0) + 1);
-    if (filtering && hiddenSources.has(own)) continue;
-    shown?.add(id);
-
-    for (let l = L; l <= MAX_LEVEL; l++) {
-      if (l > L) [col, row] = parentOf(l - 1, col, row);
-      const key = `${col}/${row}`;
-      let e = litSets[l].get(key);
-      if (e) {
-        e.hits += hits;
-        e.cells++;
-        e.ids.push(id);
-        if (time > e.time) e.time = time;
-        if (age && (!e.age || age < e.age)) e.age = age;
-      } else {
-        litSets[l].set(key, (e = { hits, time, age, cells: 1, ids: [id] }));
-      }
-      if (byType && own) addSource(e, own, ownN);
-    }
-  }
+  // whether the cell is drawn at all, so rollUp pays for that pass either way.
+  const rolled = span('roll-up', () => rollUp(visited, cellStatsOf, { byType, hidden: hiddenSources }));
+  litSets = rolled.litSets;
+  litIndex = [];
+  const { sourceCells, shown } = rolled;
 
   if (byType) {
     // Hand out palette slots by how much of the map each source accounts for.
@@ -2687,7 +2649,7 @@ function recomputeLit(byType = HEAT_MODES[heatMode]?.categorical) {
     sourceOrder = [];
   }
 
-  for (let l = 0; l <= MAX_LEVEL; l++) attachNeighbourhoods(l);
+  span('neighbourhoods', () => attachNeighbourhoods(litSets));
 
   litRange = litSets.map((lit) => {
     const r = { maxHits: 1, hotHits: 2, minTime: 0, maxTime: 0, minAge: 0, maxAge: 0 };
@@ -2731,7 +2693,7 @@ function rollUpPainted(id) {
   // is on, and you are painting — to be worth a rebuild rather than a second
   // answer to the same question here.
   if (hiddenSources.size) return false;
-  let [L, col, row] = parseCellId(id);
+  const [L] = parseCellId(id);
   if (!(L <= MAX_LEVEL)) return true; // same skip as recomputeLit()
 
   let hits = 0;
@@ -2746,29 +2708,17 @@ function rollUpPainted(id) {
   if (!age) age = time;
   if (time || age) return false; // dated — litRange would need the full pass
 
-  const touched = [];
-  for (let l = L; l <= MAX_LEVEL; l++) {
-    if (l > L) [col, row] = parentOf(l - 1, col, row);
-    const key = `${col}/${row}`;
-    let e = litSets[l].get(key);
-    if (e) {
-      e.hits += hits;
-      e.cells++;
-      e.ids.push(id);
-    } else {
-      litSets[l].set(key, (e = { hits, time: 0, age: 0, cells: 1, ids: [id] }));
-    }
-    touched.push([l, key]);
+  const touched = foldInCell(litSets, litIndex, id, hits);
+  for (const [l, e] of touched) {
     if (e.hits > litRange[l].maxHits) litRange[l].maxHits = e.hits;
   }
   // Only the chain this cell sits in can have moved, so the neighbourhoods are
-  // refreshed rather than rebuilt. `hotHits` is left alone on purpose: it is a
-  // 98th percentile over tens of thousands of cells, and one hand-painted cell
-  // worth a single visit cannot move it anywhere the next full pass won't.
-  for (const [l, key] of touched) {
-    const e = litSets[l].get(key);
-    if (e) e.near = neighbourhoodOf(l, key);
-  }
+  // refreshed rather than rebuilt — after the whole chain is counted, since a
+  // cell's neighbourhood is read off the entries above it. `hotHits` is left
+  // alone on purpose: it is a 98th percentile over tens of thousands of cells,
+  // and one hand-painted cell worth a single visit cannot move it anywhere the
+  // next full pass won't.
+  for (const [l, e] of touched) e.near = neighbourhoodOf(l, e);
   // This path never works out a source slot — it is only taken when the map is
   // in a mode that would not read one. So any tally built earlier for the image
   // export is now one cell short of the truth, and says so.
@@ -2781,24 +2731,14 @@ function rollUpPainted(id) {
 //
 // Membership is what the picture needs, and it does compose backwards: take
 // this cell's visits back off every ancestor and drop the key when it was the
-// last one. Dates and the ids arrays do not — a parent can hold every cell in
-// a country, and splicing one id out of that on every cell of a sweep is the
-// pass this shortcut exists to avoid. `storedUnder` is not asked again until
-// the gesture's closing recomputeLit() rebuilds them. Called before
-// unmarkCell, which is what deletes the provenance this reads.
+// last one — see removeCell in src/rollup.js. Dates do not, and wait for the
+// gesture's closing recomputeLit(). Called before unmarkCell, which is what
+// deletes the provenance this reads.
 function rollDownCleared(id) {
-  let [L, col, row] = parseCellId(id);
+  const [L] = parseCellId(id);
   if (!(L <= MAX_LEVEL)) return;
   const { hits } = cellStatsOf(id, false);
-  for (let l = L; l <= MAX_LEVEL; l++) {
-    if (l > L) [col, row] = parentOf(l - 1, col, row);
-    const key = `${col}/${row}`;
-    const e = litSets[l].get(key);
-    if (!e) continue;
-    e.cells -= 1;
-    e.hits -= hits;
-    if (e.cells <= 0) litSets[l].delete(key);
-  }
+  removeCell(litSets, litIndex, id, hits);
   typeRollUpStale = true;
   markAreasDirty();
 }
@@ -3451,21 +3391,20 @@ function ancestorAt(L, col, row, targetL) {
   return [col, row];
 }
 
-// Every stored cell that sits inside (or is) the cell (L, col, row).
-// recomputeLit() already walks each stored cell up to every ancestor, so it
-// records the ids on the way past — this is that index, read back. It used to
-// re-split and re-walk all ~20k stored ids on every tap.
+// Every stored cell that sits inside (or is) the cell (L, col, row), read
+// back down the roll-up's own links rather than by re-walking every stored id.
+// A fresh array each time, so a caller can clear what it names as it goes.
 function storedUnder(L, col, row) {
-  return litSets[L]?.get(`${col}/${row}`)?.ids ?? [];
+  return storedUnderKey(litSets, L, `${col}/${row}`);
 }
 
 function toggleCell(id) {
   clearTripHighlight();
   const [L, col, row] = parseCellId(id);
   if (litSets[L].has(`${col}/${row}`)) {
-    // Clear everything stored beneath (or at) this cell. Iterate a copy: the
-    // array belongs to litSets now, and unmarkCell is removing its contents.
-    const ids = [...storedUnder(L, col, row)];
+    // Clear everything stored beneath (or at) this cell. storedUnder hands back
+    // a list of its own, so unmarkCell can take them out while it is walked.
+    const ids = storedUnder(L, col, row);
     // Taken *before* the clear — this is everything those cells knew, and in a
     // moment it will only exist here.
     const snapshot = snapshotCells(ids);
@@ -7424,12 +7363,11 @@ function brushIds(lngLat, size) {
   return ids;
 }
 
-// Stored rows under a brush cell. Copied, because clearing mutates the array
-// litSets is holding. A lit key with no rows falls back to the id itself —
-// edit mode paints at the stored level, so the two are the same cell.
+// Stored rows under a brush cell. A lit key with no rows falls back to the id
+// itself — edit mode paints at the stored level, so the two are the same cell.
 function idsUnder(id) {
   const [L, col, row] = parseCellId(id);
-  const under = litSets[L]?.has(`${col}/${row}`) ? [...storedUnder(L, col, row)] : [];
+  const under = storedUnder(L, col, row);
   if (under.length) return under;
   return visited.has(id) ? [id] : [];
 }
@@ -8419,8 +8357,19 @@ const VECTOR_COOL_ZOOM = levelBoundary(FIRST_VECTOR_LEVEL - 2) + 1;
 // the picture of a canton is the detailed one. Below it the country and
 // continent levels are on screen, and the overview geometry is smaller than
 // a pixel.
+// When the last look was taken, so a gesture asks a few times a second rather
+// than on every frame. The question builds a set of every lit region and walks
+// all 4,553 records, and the answer only changes when the view has moved a
+// long way; a pan that crosses into a new country still gets its fetch within
+// FINE_LOOK_MS, and the first call after the camera stops is never skipped.
+const FINE_LOOK_MS = 300;
+let fineLookedAt = 0;
+
 function considerFineRegions(level) {
   if (map.getZoom() < REGION_FINE_ZOOM || !regionsLoaded()) return;
+  const now = performance.now();
+  if (map.isMoving() && now - fineLookedAt < FINE_LOOK_MS) return;
+  fineLookedAt = now;
   const lit = level === REGION_LEVEL ? litRegionIds : level === COUNTRY_LEVEL ? litCountryIds : null;
   if (!lit) return;
   const view = lngLatBox(viewMerc());
@@ -8668,17 +8617,18 @@ function updateGrid(force = false, changed = null) {
 
   const fc = asBlob ? EMPTY : buildGrid(bb, level);
 
-  const paintBlob = () => {
+  const paintBlob = () => span(`blob paint L${level}`, () => {
     blobCoarse = blobCur.paint({
       bb,
       level,
       cells: litSets[level],
+      index: litIndexOf(level),
       colorOf: blobColorOf(level),
       heat: isHeatMode(),
       moving: map.isMoving(),
       changed,
     });
-  };
+  });
 
   if (DEBUG_LEVELS && levelChanged && currentLevel !== null) {
     const how = asBlob && currentAsBlob ? 'canvas dissolve' : 'layer crossfade';
@@ -8938,18 +8888,25 @@ function updateModeUi() {
   map.getCanvas().style.cursor = editing ? 'crosshair' : '';
 }
 
+// This runs on every frame of a gesture, and writing a text node — even the
+// text it already holds — invalidates layout around it. Comparing first costs a
+// string compare.
+function setText(el, text) {
+  if (el && el.textContent !== text) el.textContent = text;
+}
+
 function updateHud(level) {
   if (level == null) return;
   if (level === COUNTRY_LEVEL || level === CONTINENT_LEVEL) {
-    hudSize.textContent = level === CONTINENT_LEVEL ? 'Continents' : 'Countries';
-    hudRes.textContent = '—';
+    setText(hudSize, level === CONTINENT_LEVEL ? 'Continents' : 'Countries');
+    setText(hudRes, '—');
   } else {
-    hudSize.textContent = cellSizeKm(level);
-    hudRes.textContent = String(level);
+    setText(hudSize, cellSizeKm(level));
+    setText(hudRes, String(level));
   }
   // What is on the map, which is not the same as what you have the moment a
   // source is switched off in the Type legend. See hiddenSources.
-  hudVisited.textContent = String(visibleCells.size);
+  setText(hudVisited, String(visibleCells.size));
   updateDetailNow(level);
 }
 
@@ -8997,14 +8954,14 @@ const detailNow = document.getElementById('detail-now');
 
 function updateDetailNow(level = currentLevel) {
   if (level == null) return;
-  detailNow.textContent =
+  setText(detailNow,
     level === CONTINENT_LEVEL
       ? 'Showing whole continents'
       : level === COUNTRY_LEVEL
         ? 'Showing whole countries'
         : level === REGION_LEVEL
           ? 'Showing whole regions'
-          : `Showing ${cellSizeKm(level)} cells`;
+          : `Showing ${cellSizeKm(level)} cells`);
   // The same fact, on the map rather than inside a panel you have to open.
   scaleBar.update();
 }
@@ -12804,10 +12761,13 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         }
       });
     }));
-  onMapBuilt(() => map.on('moveend', () => {
+  onMapBuilt(() => map.on('moveend', () => span('moveend', () => {
       updateGrid();
       updateTiles();
-    }));
+    })));
+  // ?perf only: how the frames of each gesture were spaced. See src/perf.js.
+  onMapBuilt(() => map.on('movestart', gestureStart));
+  onMapBuilt(() => map.on('moveend', gestureEnd));
   onMapBuilt(() => map.on('resize', () => {
       updateGrid();
       updateTiles();

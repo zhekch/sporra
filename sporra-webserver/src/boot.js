@@ -25,6 +25,11 @@
 // that can wait for it, and it is already waiting.
 import { MAPBOX, MAPLIBRE, engineForBasemap, loadEngine, savedStyleKey } from './gl-engine.js';
 import { loadLocale } from './i18n.js';
+import { capDevicePixelRatio } from './phone.js';
+
+// Before either library is loaded, because Mapbox reads the ratio every time it
+// sizes its canvas — see src/phone.js.
+capDevicePixelRatio();
 
 const wanted = engineForBasemap(savedStyleKey());
 
