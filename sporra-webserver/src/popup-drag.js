@@ -1,7 +1,7 @@
 // Moving a map card out of the way of the thing it is about.
 //
-// The four `feature-popup` cards — the activity stack, the railway, the trails
-// and the airports — are anchored to the point you tapped, and the point you
+// The `feature-popup` cards — the activity stack, the trails and the airports —
+// are anchored to the point you tapped, and the point you
 // tapped is usually the one you want to look at. A card listing eleven
 // activities is most of the window, and every one of those eleven runs under
 // it. The card is answering a question about a place while standing on it.

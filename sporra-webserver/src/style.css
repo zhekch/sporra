@@ -6112,16 +6112,13 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
    second visual language for one idea.
 
    `.feature-popup` is the shared card — a heading, a kind, and a `dl` of
-   label-and-value rows — used by all three reference overlays: a tapped railway,
-   a tapped airport and a tapped trail are the same sort of answer and should not
-   look like three.
+   label-and-value rows — used by a tapped airport and a tapped trail, which are
+   the same sort of answer and should not look like two.
 
    `.popup-list*` below is the second shape a card can take: a scrolling list of
-   named things rather than a table about one thing. These rules were the
-   railway's own, on the grounds that the services calling at a station were not
-   a shape anything else had — which stopped being true the moment a tap on the
-   trails had to answer with every route running past, because a raster overlay
-   cannot say which one you hit. Renamed rather than copied. */
+   named things rather than a table about one thing. A tap on the trails answers
+   with every route running past, because a raster overlay cannot say which one
+   you hit. */
 :is(.maplibregl-popup-content, .mapboxgl-popup-content) {
   padding: 14px 16px 12px;
   border-radius: 24px;
@@ -6239,9 +6236,7 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 }
 
 /* The grid wins over the UA stylesheet's `display: none`, so the attribute has
-   to be honoured explicitly. It matters: the list starts empty on a station,
-   whose rows all arrive from the feature API, and an empty grid still has its
-   top margin. */
+   to be honoured explicitly. An empty list still has its top margin. */
 .feature-popup dl[hidden] {
   display: none;
 }

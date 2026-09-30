@@ -174,12 +174,6 @@ const DETAIL_FLOOR = 8;
 // fetched once per session rather than once per pan.
 const ASSET_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-// One feature's details, asked for when somebody clicks a line. Kept for a day:
-// which services run over a stretch of track is an OSM relation that changes on
-// the timescale of timetables, and clicking the same line twice in an afternoon
-// should not ask twice.
-const FEATURE_TTL_MS = 24 * 60 * 60 * 1000;
-
 // Disk budget. Vector tiles run 2–60 KB gzipped, so this is a very large number
 // of them; the sweep drops the least recently used down to LOW_WATER when it is
 // exceeded. Both are overridable from the environment.
@@ -239,8 +233,6 @@ const isEmptyBody = (buf) => !buf || buf.length === 0;
  * @param {Set<string>} opts.sources the Martin source lists the style actually
  *   uses. An allowlist, not a convenience: without it this route is an open
  *   proxy onto their origin for anyone with an account here.
- * @param {Set<string>} [opts.featureViews] `source/sourceLayer` pairs the style
- *   actually draws, the same allowlist idea for their feature API.
  * @param {string} [opts.origin] upstream to fetch from; the tests point this at
  *   a local stand-in, since the real one cannot be asked for a 304 on demand.
  * @param {string} [opts.lang] what language to ask for the labels in; see
@@ -249,7 +241,7 @@ const isEmptyBody = (buf) => !buf || buf.length === 0;
  *   shortened by the tests, which cannot wait ten minutes to watch a cap lift.
  * @param {(msg: string) => void} [opts.log]
  */
-export function createRailTiles({ dir, sources, featureViews = new Set(), origin: upstreamOrigin = ORM_ORIGIN, lang = TILE_LANG, healthWindowMs = HEALTH_WINDOW_MS, log = () => {} }) {
+export function createRailTiles({ dir, sources, origin: upstreamOrigin = ORM_ORIGIN, lang = TILE_LANG, healthWindowMs = HEALTH_WINDOW_MS, log = () => {} }) {
   const inFlight = new Map();
   const sprites = spritePaths();
   let upstreamBusy = 0;
@@ -601,23 +593,6 @@ export function createRailTiles({ dir, sources, featureViews = new Set(), origin
       const key = `tile:${sourceList}/${at.z}/${at.x}/${at.y}@${lang}`;
       const upstreamPath = `${sourceList}/${at.z}/${at.x}/${at.y}?lang=${lang}`;
       return fetchCached(sourceList, key, upstreamPath, TILE_TTL_MS, origin, at.z);
-    },
-
-    /**
-     * Everything their API knows about one feature — used for the route
-     * relations a vector tile cannot carry.
-     *
-     * Answered by their `api` container rather than their tile server, which is
-     * why it survives outages the tiles do not. Both path parts are matched
-     * against the style's own sources and source layers, and the id is a
-     * conservative token, so this cannot be turned into a general proxy onto
-     * their API.
-     */
-    async feature(source, sourceLayer, id, origin) {
-      if (!featureViews.has(`${source}/${sourceLayer}`)) return null;
-      if (!/^[\w.:-]{1,64}$/.test(id)) return null;
-      const upstreamPath = `api/feature/${source}/${sourceLayer}/${id}`;
-      return fetchCached('api', `feature:${source}/${sourceLayer}/${id}`, upstreamPath, FEATURE_TTL_MS, origin);
     },
 
     /** One sprite sheet or index, from the enumerated set. */

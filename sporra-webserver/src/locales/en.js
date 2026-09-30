@@ -393,8 +393,6 @@ export default {
   "photos-row.photos": "Photos",
   "popup-grip.drag-to-move": "Drag to move this card",
   "rail-bar-dismiss.dismiss": "Dismiss",
-  "rail.a-tap-on-a-railway": "A tap on a railway opens a card about it, and the cursor says so",
-  "rail.interactable": "Interactable",
   "rail.loading": "Train tracks…",
   "rail.show": "Show",
   "rail.sidings-yard-roads-and-crossovers": "Sidings, yard roads and crossovers; track that is disused, under construction, proposed or lifted; and the halts, junctions, yards and sites a timetable would not call a station",

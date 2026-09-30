@@ -103,7 +103,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.123.0';
+export const SERVER_VERSION = '0.124.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -560,26 +560,9 @@ const railSources = (() => {
     return new Set();
   }
 })();
-// `source/sourceLayer` for every layer the overlay draws — the allowlist for
-// their feature API, which the click popup asks for a line's route relations.
-// Their source ids as MapLibre sees them are ours with the namespace stripped,
-// which is the form their API expects.
-const railFeatureViews = (() => {
-  try {
-    const style = JSON.parse(readFileSync(path.join(ROOT, 'src', 'rail-style.json'), 'utf8'));
-    return new Set(
-      style.layers
-        .filter((l) => l['source-layer'])
-        .map((l) => `${l.source.replace(/^sporra-orm-/, '')}/${l['source-layer']}`),
-    );
-  } catch {
-    return new Set();
-  }
-})();
 const railTiles = createRailTiles({
   dir: RAIL_CACHE_DIR,
   sources: railSources,
-  featureViews: railFeatureViews,
   log: (msg) => console.log(`[visited-map] rail: ${msg}`),
 });
 
@@ -3876,20 +3859,6 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
         if (m) out = await railTiles.tile(decodeURIComponent(m[1]), m[2], m[3], m[4], origin);
       } else if (rest.startsWith('sprite/') || rest.startsWith('sdf-sprite/')) {
         out = await railTiles.sprite(rest, origin);
-      } else if (rest.startsWith('feature/')) {
-        // `<source>/<sourceLayer>/<id>` — what runs over a line the person just
-        // clicked. Both path parts are matched against the style's own layers
-        // inside the module.
-        const m = /^feature\/([^/]+)\/([^/]+)\/(.+)$/.exec(rest);
-        if (m) {
-          // Named rather than spread. `...m.slice(1, 4)` is an array of length
-          // only a human can see is three, so `origin` — which comes off the
-          // Host header — reads as though it could land in any parameter,
-          // including the ones that become the upstream path. That is what
-          // CodeQL's js/request-forgery was pointing at, and it was right to.
-          const [source, sourceLayer, id] = m.slice(1, 4).map(decodeURIComponent);
-          out = await railTiles.feature(source, sourceLayer, id, origin);
-        }
       }
 
       if (!out) return send(res, 404, { error: 'no such tile' });

@@ -54,11 +54,9 @@ number of approaches that were tried and abandoned.
   over the map in the basemap's own light or dark. Switch it on in the layers
   menu; choose what it draws in Settings → Map layers — tracks, stations,
   platforms, line numbers, signals and crossings, kilometre posts, and the
-  sidings, yards and disused track that are off until you ask for them. Turn on
-  **Interactable** and the railway answers the pointer: whatever is under it
-  lights up, and a tap opens a card with the track number, the operator, the
-  voltage, the platform, and every service that calls there. In **edit mode**
-  a tap on a track does something else: it paints every cell the line touches,
+  sidings, yards and disused track that are off until you ask for them. The
+  overlay is there to look at: a tap does not open a card about the line. In
+  **edit mode** a tap on a track paints every cell the line touches,
   from the previous station or junction to the next. A second track running
   alongside does not split it. The stretch stays marked
   for half a minute. Further taps wait their turn. **Add** in that same panel

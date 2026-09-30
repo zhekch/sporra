@@ -88,9 +88,8 @@ applyTranslations();
 // The theme is not handed over separately: it only ever changes by switching
 // basemap, which replaces the style and rebuilds the overlay from scratch.
 import {
-  describeRailFeature, forgetRailHover, installRail, loadRailStyle, railDetail, railDetailChanged,
-  railFeature, railLayerIds, removeRail, setRailGroup, setRailHover, setRailTechnical,
-  splitRouteLabel,
+  describeRailFeature, installRail, loadRailStyle, railDetail, railDetailChanged,
+  railLayerIds, removeRail, setRailGroup, setRailTechnical,
 } from './rail.js';
 // The airports overlay is a dataset rather than a tile server, so unlike the
 // railways above there is no proxy, no detail ceiling and no outage to report —
@@ -949,16 +948,6 @@ let railGroupsOn = (() => {
 // you can read and a knot of grey.
 const RAIL_TECHNICAL_KEY = 'visited-map:rail-technical:v1';
 let railTechnicalOn = localStorage.getItem(RAIL_TECHNICAL_KEY) === 'on';
-
-// Whether a tap on a railway does anything.
-//
-// Off, and that is the point of it: the overlay's first job is to show where the
-// railways are, and while it is on, every tap on the map has to go through a hit
-// test across 288 layers before it can be about the ground. Someone reading the
-// tracks over their own map wants the second thing; someone reading the railway
-// wants the first, and says so once.
-const RAIL_INTERACTIVE_KEY = 'visited-map:rail-interactive:v1';
-let railInteractive = localStorage.getItem(RAIL_INTERACTIVE_KEY) === 'on';
 
 // Which kinds of airfield the airports overlay draws. Same reasoning as the rail
 // groups above — a shape of the thing rather than a state of this visit — with
@@ -6127,7 +6116,7 @@ function showRouteStack(e, found) {
     const box = document.createElement('div');
     box.className = 'route-stack-group';
     if (wide) box.style.width = `${ROUTE_STACK_COLUMN_PX}px`;
-    // The activity, in the small capitals the railway card's "3 routes" uses.
+    // The activity, in the small capitals a group heading uses.
     // One group means the heading would be saying what the only column is, and
     // a heading over everything is not a grouping.
     if (groups.length > 1) {
@@ -9255,9 +9244,7 @@ async function switchEngine(key) {
     // Popups hold the map that made them, and their elements are inside the
     // container about to be emptied.
     airportPopup?.remove();
-    railPopup?.remove();
     airportPopup = null;
-    railPopup = null;
     closeRouteStack();
     // The blob layer leaves an `idle` handler and a 2.5-second timer
     // outstanding, both of which reach back for their source. A style swap
@@ -9346,29 +9333,12 @@ function setRailTechnicalOn(on) {
   if (styleReady && railOn) setRailTechnical(map, on);
 }
 
-/** Whether a tap on a railway opens a card, and the cursor says it would. */
-function setRailInteractive(on) {
-  railInteractive = on;
-  try {
-    localStorage.setItem(RAIL_INTERACTIVE_KEY, on ? 'on' : 'off');
-  } catch {
-    /* fine */
-  }
-  if (on) return;
-  // Everything interaction put on screen goes with it, or an overlay that no
-  // longer answers a tap is left holding the last card it opened.
-  railPopup?.remove();
-  clearRailHover();
-}
-
 function syncRailLayer() {
   // A click during initial load or a basemap switch is intentionally deferred;
   // installGrid() calls this again for the newly loaded style.
   if (!styleReady) return;
   if (!railOn) {
     removeRail(map);
-    railPopup?.remove();
-    clearRailHover();
     stopRailDetailPolling();
     showRailTrouble(null);
     return;
@@ -9829,168 +9799,19 @@ function closePhotoInfo() {
   photoInfo?.hide();
 }
 
-// --- What a railway says about itself ------------------------------------------
-// The reason the overlay is vector rather than pixels. Everything shown here is
-// already in the tile that drew the line: OpenRailwayMap's own app answers this
-// with a request to a feature API and a formatting catalogue per click, which is
-// a lot to ask of a server this map is otherwise trying to ask less of.
-let railPopup = null;
-
-/**
- * The way back to the original.
- *
- * Built with textContent and an href, never innerHTML: these are OSM tag values,
- * which is to say strings anyone on the internet can edit.
- */
-function addOsmLink(card, osm) {
-  const a = document.createElement('a');
-  a.href = osm.url;
-  a.target = '_blank';
-  a.rel = 'noopener noreferrer';
-  a.textContent = `View this ${osm.type} on OpenStreetMap`;
-  card.append(a);
-}
-
-/**
- * The topmost thing the overlay drew under a point, or nothing.
- *
- * Scoped to our own layer ids: the basemap draws railways too, and reporting
- * CARTO's idea of a line when the overlay is showing OpenRailwayMap's is the
- * same mistake the layer ordering was fixed for.
- */
-function railFeatureAt(point) {
-  const ids = railLayerIds().filter((id) => map.getLayer(id));
-  if (!ids.length) return null;
-  return map.queryRenderedFeatures(point, { layers: ids })[0] ?? null;
-}
-
-/** Open a card about whatever railway was clicked, and say whether there was one. */
-function showRailInfo(e) {
-  const hit = railFeatureAt(e.point);
-  const info = hit && describeRailFeature(hit);
-  if (!info) return false;
-
-  const card = document.createElement('div');
-  card.className = 'feature-popup';
-  const h = document.createElement('h4');
-  h.textContent = info.title;
-  card.append(h);
-  if (info.subtitle) {
-    const sub = document.createElement('p');
-    sub.className = 'feature-popup-kind';
-    sub.textContent = info.subtitle;
-    card.append(sub);
-  }
-  // One `dl` for both halves. What the tile knew is written now; what their
-  // feature API adds — who runs the station, the code in the timetable, what is
-  // on the platform — is appended to the same list when it arrives, so the card
-  // grows rather than sprouting a second table under the first.
-  const dl = document.createElement('dl');
-  const addRows = (rows) => {
-    for (const [label, value] of rows) {
-      const dt = document.createElement('dt');
-      dt.textContent = label;
-      const dd = document.createElement('dd');
-      dd.textContent = value;
-      dl.append(dt, dd);
-    }
-    dl.hidden = !dl.childElementCount;
-  };
-  addRows(info.rows);
-  card.append(dl);
-
-  // The services that run over it. Not in the tile, so the card opens without
-  // them and fills the list in when the answer arrives — a click should not wait
-  // on a network round trip to show what it already knows. Guarded by the popup
-  // it was opened for, so a fast second click cannot land its routes in the
-  // first one's card.
-  //
-  // A line's tile carries `route_count` and so knows to leave the room; a
-  // station's and a platform's do not, so those ask on spec and the section is
-  // built only if the answer has something in it.
-  if (info.routeCount || info.mayHaveRoutes) {
-    const routes = document.createElement('div');
-    routes.className = 'popup-list';
-    const heading = document.createElement('h5');
-    const plural = (n) => (n === 1 ? '1 route' : `${n} routes`);
-    // The tile's own count until the names arrive, then the count of what is
-    // actually listed — the two differ because a there-and-back pair is two
-    // relations and one line.
-    heading.textContent = info.routeCount ? plural(info.routeCount) : 'Routes';
-    routes.append(heading);
-    // A station in a city centre is on twenty services and the list is taller
-    // than the map. Its own scroller, so the card stays the size of a card and
-    // everything above it — the name, the operator, the code — stays on screen.
-    const list = document.createElement('div');
-    list.className = 'popup-list-items';
-    routes.append(list);
-    routes.hidden = !info.routeCount;
-    card.append(routes);
-    const mine = card;
-    railFeature(info).then(({ rows, routes: found, osm }) => {
-      if (railPopup?.getElement()?.contains(mine) !== true) return;
-      addRows(rows);
-      if (osm && !info.osm) addOsmLink(card, osm);
-      routes.hidden = !found.length;
-      if (found.length) heading.textContent = plural(found.length);
-      for (const route of found) {
-        const line = document.createElement('div');
-        line.className = 'popup-list-row';
-        // The dot is always there, coloured or not. Plenty of OSM route
-        // relations carry no `colour` tag — their API hands those back as an
-        // empty string — and only drawing it for the ones that do left the
-        // labels on a ragged edge, which reads as a rendering fault rather than
-        // as missing data. A hollow dot says "no colour recorded" and keeps the
-        // column straight.
-        const dot = document.createElement('span');
-        dot.className = 'popup-list-dot';
-        if (route.color) dot.style.background = route.color;
-        else dot.classList.add('unknown');
-        line.append(dot);
-        // Two spans so the break lands after the service name rather than
-        // wherever the edge of the card happens to fall — see splitRouteLabel.
-        // textContent throughout: these are OSM relation names, which is to say
-        // strings anyone on the internet can edit.
-        const { name, ends } = splitRouteLabel(route.label);
-        const text = document.createElement('span');
-        text.className = 'popup-list-text';
-        if (name) text.append(`${name} `);
-        const label = document.createElement('span');
-        label.className = 'popup-list-tail';
-        label.textContent = ends;
-        text.append(label);
-        line.append(text);
-        list.append(line);
-      }
-    });
-  }
-  if (info.osm) addOsmLink(card, info.osm);
-
-  railPopup?.remove();
-  railPopup = new gl.Popup({ closeButton: true, maxWidth: '280px' })
-    .setLngLat(hit.geometry?.type === 'Point' ? hit.geometry.coordinates.slice() : e.lngLat)
-    .setDOMContent(card)
-    .addTo(map);
-  draggableCard(map, railPopup, card, t('popup-grip.drag-to-move'));
-  return true;
-}
-
 // --- What runs past here ---------------------------------------------------------
 //
 // The trails card, and the one place where being a raster overlay is visible to
 // somebody using the app rather than only to somebody reading the code.
 //
-// The railway card above opens on a *feature*: the tile that drew the line
-// carries the line, so the tap knows what it hit before it asks anyone. There is
-// no equivalent here. A PNG under the finger proves that some route passes
-// through the neighbourhood and cannot say which, so this asks their API what
-// runs near the point and lists the answers — and the heading says "near here",
-// because that is the question that was actually answered.
+// A PNG under the finger proves that some route passes through the neighbourhood
+// and cannot say which, so this asks their API what runs near the point and
+// lists the answers — and the heading says "near here", because that is the
+// question that was actually answered.
 //
-// It therefore opens *before* the answer arrives and fills in, which the railway
-// card only does for its secondary rows. A card that waited would be a tap with
-// half a second of nothing after it, on the one overlay that cannot show you
-// something instantly.
+// It therefore opens before the answer arrives and fills in. A card that waited
+// would be a tap with half a second of nothing after it, on the one overlay that
+// cannot show you something instantly.
 let trailPopup = null;
 
 // The answer the open card was built from, and the parts of it that get
@@ -10224,74 +10045,26 @@ function trailRow(route, theme) {
   return row;
 }
 
-// --- Which railway the cursor is on --------------------------------------------
-//
-// This used not to exist, and the reason it did not is still the reason it is
-// shaped the way it is: a `queryRenderedFeatures` across 288 layers on every
-// mousemove is a real cost to pay for an affordance. What changed is that the
-// cost is now opted into. Interaction is off by default, so a session that is
-// reading the tracks over its own map never runs a single one of these; a
-// session that has asked for the railways to answer questions gets an answer to
-// "which of these twenty parallel lines am I about to click".
-//
-// Throttled to one query per frame, and skipped mid-gesture, where the answer
-// would be both wasted and wrong by the time it was drawn.
-//
-// **The highlight itself costs nothing of ours.** 171 of the 288 layers already
-// paint a hovered feature differently — that styling came with them and had
-// never been switched on — so what this does is write one feature state and let
-// their style answer it. See setRailHover.
-let railHoverPending = false;
-let railHoverPoint = null;
-
-// Two things can make the cursor a pointer and they do not know about each
-// other: a saved route answers synchronously on the mousemove, a railway a frame
-// later. One place decides, so the later answer cannot clear the earlier one's.
+// What can make the cursor a pointer, and they do not know about each other: a
+// saved route, an airport, a photograph. One place decides, so a later answer
+// cannot clear an earlier one's.
 let pointerOnRoute = false;
-let pointerOnRail = false;
-// And an airport, which answers on the mousemove like a route rather than a
-// frame later like a railway: this is one query over six layers of a point
-// source, not 288 layers of somebody else's style, so there is nothing here to
-// throttle away.
+// An airport is one query over six layers of a point source, so it is answered
+// on the mousemove with the route rather than throttled off.
 let pointerOnAirport = false;
 // And a photograph, on the same terms — three layers over one point source. It
 // only ever matters on a laptop pointed at a phone's server, which is to say
 // almost never, and costing nothing is what makes that fine.
 let pointerOnPhoto = false;
 const syncPointer = () => {
-  // Edit mode owns the cursor for the whole time it is on. This runs a frame
-  // after a railway hover that was already in flight, and clearing the canvas
-  // here handed the pointer back to the map's open hand.
+  // Edit mode owns the cursor for the whole time it is on.
   if (mode === 'edit') {
     map.getCanvas().style.cursor = 'crosshair';
     return;
   }
   map.getCanvas().style.cursor =
-    pointerOnRoute || pointerOnRail || pointerOnAirport || pointerOnPhoto ? 'pointer' : '';
+    pointerOnRoute || pointerOnAirport || pointerOnPhoto ? 'pointer' : '';
 };
-
-function railHoverAt(point) {
-  if (!railInteractive || !railOn || !styleReady || map.isMoving()) return;
-  railHoverPoint = point;
-  if (railHoverPending) return;
-  railHoverPending = true;
-  requestAnimationFrame(() => {
-    railHoverPending = false;
-    if (!railInteractive || !railOn || !styleReady) return;
-    const hit = railFeatureAt(railHoverPoint);
-    setRailHover(map, hit);
-    pointerOnRail = !!hit;
-    syncPointer();
-  });
-}
-
-/** Whatever is lit, unlit — and without asking a map that may no longer hold it. */
-function clearRailHover() {
-  if (styleReady && railOn) setRailHover(map, null);
-  else forgetRailHover();
-  pointerOnRail = false;
-  syncPointer();
-}
 
 const dateShort = new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric' });
 const legendEndLabel = (sec) => (sec ? dateShort.format(new Date(sec * 1000)) : '');
@@ -11969,26 +11742,17 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         if (photo || scrubbed) { /* the card is the whole of the tap */ }
         else if (stack.length > 1) showRouteStack(e, stack);
         else if (stack.length) showRouteInfo(stack[0]);
-        // Then the train tracks, in the same order they are drawn in: a line you
-        // travelled beats reference geometry about where a line exists, and both
-        // beat the ground underneath. Only when the overlay is on *and* has been
-        // asked to answer — a hit test across 288 layers is not worth running
-        // otherwise, and an overlay switched on to look at should not be quietly
-        // taking taps away from the ground it is drawn over.
-        else if (railOn && railInteractive && showRailInfo(e)) { /* the card is the whole of the tap */ }
-        // Then an airport, in the order these are drawn. No switch guarding it,
-        // unlike the railway above: that one is off by default because a hit test
-        // across 288 layers on every tap is a real cost, and this is one query
-        // over six layers of a point source. An icon you can see and cannot tap
-        // is the worse answer when tapping it is nearly free.
+        // Then an airport. One query over six layers of a point source. An icon
+        // you can see and cannot tap is the worse answer when tapping it is
+        // nearly free. The tracks overlay does not take this tap: it is there to
+        // be looked at, and edit mode is what paints along a line.
         else if (airportsOn && showAirportInfo(e)) { /* the card is the whole of the tap */ }
-        // Then the trails, last of the three and for a reason that is not about
-        // drawing order: this one cannot be asked whether it was hit. The other
-        // two answer "nothing there" and stand aside; a raster overlay has no
-        // features to query, so `showTrailInfo` always claims the tap and always
-        // returns true. That is why it is behind a switch that is off by
-        // default — see `trailsInteractive` — and why it sits below everything
-        // that *can* say no.
+        // Then the trails, and for a reason that is not about drawing order: this
+        // one cannot be asked whether it was hit. An airport answers "nothing
+        // there" and stands aside; a raster overlay has no features to query, so
+        // `showTrailInfo` always claims the tap and always returns true. That is
+        // why it is behind a switch that is off by default — see
+        // `trailsInteractive` — and why it sits below everything that *can* say no.
         else if (trailsOn && trailsInteractive && showTrailInfo(e)) { /* the card is the whole of the tap */ }
         // At the three vector levels there are no hexes on screen, so a tap is
         // about the shape it landed on — whether or not you have been to it — and
@@ -12184,11 +11948,8 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
             setHoveredRoute(under?.id ?? null);
             syncPointer();
           }
-          // And the railway under it, if the overlay has been asked to answer. A
-          // frame behind, and its own half of the cursor — see railHoverAt.
-          railHoverAt(e.point);
           // And an airport, answered here and now: six layers over a point source is
-          // the same order of work as the route test above it, not the railway's.
+          // the same order of work as the route test above it.
           if (airportsOn && styleReady) {
             pointerOnAirport = !!airportFeatureAt(e.point);
             syncPointer();
@@ -12221,7 +11982,6 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       pointerTracked = false;
       takeLeap();
       setHover(null);
-      clearRailHover();
       setHoveredRoute(null);
       updateBrush();
     });
@@ -12524,8 +12284,6 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     onGroup: (key, on) => setRailGroupOn(key, on),
     technical: () => railTechnicalOn,
     onTechnical: (on) => setRailTechnicalOn(on),
-    interactive: () => railInteractive,
-    onInteractive: (on) => setRailInteractive(on),
   });
   const airportsUi = mountAirports({
     groups: () => airportGroupsChosen,
