@@ -4917,6 +4917,30 @@ set `tolerance: 0` for the opposite reason — a hexagon, a house and a trip's d
 are exact, and the `trip` source feeds a circle layer as well, where dropping a
 vertex would delete a day.
 
+**A track that leaves a tile and comes back is drawn as a polygon, on this
+basemap only.** The coordinates are the zigzag. What gets added is a straight
+stroke in the route's own colour along a Web Mercator tile edge, closing the
+loop wherever the line crosses that edge twice — a bend of a few hundred metres
+becomes a bite taken out of the map. It is not the drape seam above, and not
+the glow's join wedges: it is there with the terrain switched off, with
+`line-elevation-reference` left at `none`, with the opacity written as a
+constant, and in Mapbox GL JS 3.31 as well as 3.28. The flat maps never draw
+it. The tiled coordinates do not contain it either. The line tessellator joins
+the two crossings of *one feature* with the edge it clipped that feature to.
+
+So a route is no longer one feature. `splitLineAtTileBounds` cuts every
+segment where it crosses the integer grid at `ROUTE_TILE_ZOOM` (18, the
+source's `maxzoom` — the map stops at 17.5 and still asks for these tiles),
+and `routesToFC` emits each piece as its own LineString. The pieces share the
+cut vertex, so the stroke stays continuous, and they share the route's id, so
+`promoteId` and feature state still light the whole line: selection, hover and
+the metric ramp are stored by that id. A vertex inserted into the *same*
+feature does not do this, and neither does a MultiLineString, which Mapbox
+still tiles as one feature. Coarser edges are a subset of the z18 grid and
+anything past `maxzoom` is those tiles drawn larger, so one cut covers every
+edge the source will clip to. The flat maps take the same features; they have
+nothing to join, and the line looks as it did.
+
 **And the glow is the hover state.** `setHoveredRoute` writes one feature state,
 `hov`, and both of the glow's paint expressions already branch on it —
 `routeGlowOpacity` three-quarters of the way from its resting alpha to the

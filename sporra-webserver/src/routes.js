@@ -806,21 +806,146 @@ export function thumbSegments(thumb) {
 }
 
 // --- Drawing ---------------------------------------------------------------------
-/** Routes → a FeatureCollection of MultiLineStrings, one feature per route. */
-export function routesToFC(routes) {
-  return {
-    type: 'FeatureCollection',
-    features: routes
-      .filter((r) => r.geom?.length)
-      .map((r) => ({
-        type: 'Feature',
-        id: r.id,
-        // `sport` rides along so the map can colour and filter by activity
-        // without a second lookup per feature.
-        properties: { id: r.id, name: r.name, sport: r.sport || '' },
-        geometry: { type: 'MultiLineString', coordinates: r.geom },
-      })),
+// The finest tile a GeoJSON source builds. The map itself stops at 17.5, and
+// with `roundZoom` that still asks for z18. Coarser edges are every nth line
+// of this grid, and anything higher is the same tiles drawn larger, so a cut
+// made here is a cut on every edge the line will ever be clipped to.
+//
+// It has to be the source's own `maxzoom` (`routes` in src/main.js). A tile
+// finer than the cut is a new edge one piece can leave and come back to, which
+// is the whole bug underneath.
+export const ROUTE_TILE_ZOOM = 18;
+
+const TILE_EPS = 1e-9;
+
+function tileXY(lng, lat, z) {
+  const n = 2 ** z;
+  const x = ((lng + 180) / 360) * n;
+  const s = Math.min(0.999999999999, Math.max(-0.999999999999, Math.sin(lat * RAD)));
+  const y = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n;
+  return [x, y];
+}
+
+function lngLatAt(x, y, z) {
+  const n = 2 ** z;
+  const lng = (x / n) * 360 - 180;
+  const yy = y / n;
+  const lat = (Math.atan(Math.sinh(Math.PI * (1 - 2 * yy))) * 180) / Math.PI;
+  return [lng, lat];
+}
+
+// The next integer strictly ahead of `a` in the direction of `b`, as a
+// fraction of the segment. `null` when this axis never crosses one.
+function nextGrid(a, b) {
+  const d = b - a;
+  if (!(Math.abs(d) > TILE_EPS)) return null;
+  const target = d > 0 ? Math.floor(a + TILE_EPS) + 1 : Math.ceil(a - TILE_EPS) - 1;
+  const t = (target - a) / d;
+  if (!(t > TILE_EPS) || t > 1) return null;
+  return { t, target };
+}
+
+const samePoint = (a, b) => Math.abs(a[0] - b[0]) <= 1e-12 && Math.abs(a[1] - b[1]) <= 1e-12;
+
+/**
+ * One line, cut so each piece stays inside a single tile at `zoom`.
+ *
+ * The pieces share the vertex they were cut on, so the stroke is still
+ * continuous — round caps meet there and it reads as one line. What they must
+ * not share is a feature. Mapbox's line tessellator joins the two places a
+ * *single* feature crosses out of a tile with a stroke along that tile's edge,
+ * and the join is not in the coordinates: a vertex added to the same feature
+ * does not stop it, and neither does a MultiLineString, which is still one
+ * feature. Separate features cross each edge once, so there is nothing to join.
+ *
+ * A jump across the antimeridian is left alone. Walking it would cut the
+ * segment on every tile of the planet, and it is not a ride this map stores.
+ */
+export function splitLineAtTileBounds(coords, zoom = ROUTE_TILE_ZOOM) {
+  if (!Array.isArray(coords) || coords.length < 2) return [];
+  const parts = [];
+  let part = [coords[0]];
+  const pushPart = () => {
+    if (part.length >= 2) parts.push(part);
   };
+  for (let i = 1; i < coords.length; i++) {
+    const dest = coords[i];
+    const from0 = part[part.length - 1];
+    if (Math.abs(dest[0] - from0[0]) > 180) {
+      if (!samePoint(from0, dest)) part.push(dest);
+      continue;
+    }
+    let guard = 0;
+    let closed = false;
+    while (guard++ < 8192) {
+      const from = part[part.length - 1];
+      const [x0, y0] = tileXY(from[0], from[1], zoom);
+      const [x1, y1] = tileXY(dest[0], dest[1], zoom);
+      const hx = nextGrid(x0, x1);
+      const hy = nextGrid(y0, y1);
+      if (!hx && !hy) break;
+      const t = Math.min(hx ? hx.t : 2, hy ? hy.t : 2);
+      // The vertex itself is the crossing. It has to end the piece: the next
+      // segment may turn straight back into the tile it just left, and that
+      // there-and-back is the shape that gets closed.
+      if (t >= 1 - 1e-12) {
+        if (!samePoint(from, dest)) part.push(dest);
+        pushPart();
+        part = [dest];
+        closed = true;
+        break;
+      }
+      const x = hx && hx.t <= t + TILE_EPS ? hx.target : x0 + t * (x1 - x0);
+      const y = hy && hy.t <= t + TILE_EPS ? hy.target : y0 + t * (y1 - y0);
+      const [lng, lat] = lngLatAt(x, y, zoom);
+      const cut = [lng, lat];
+      for (let k = 2; k < Math.max(from.length, dest.length); k++) {
+        const av = from[k];
+        const bv = dest[k];
+        if (av != null && bv != null) cut[k] = av + (bv - av) * t;
+      }
+      if (samePoint(from, cut)) {
+        if (!samePoint(from, dest)) part.push(dest);
+        closed = true;
+        break;
+      }
+      part.push(cut);
+      pushPart();
+      part = [cut];
+    }
+    if (!closed && !samePoint(part[part.length - 1], dest)) part.push(dest);
+  }
+  pushPart();
+  return parts;
+}
+
+/**
+ * Routes → one Feature per tile a segment crosses, all of them still carrying
+ * the route's own id.
+ *
+ * `promoteId` makes that id the feature id, and feature state is stored by
+ * it, so selection, hover and the metric ramp light every piece together.
+ * One feature per route is what made a track that crosses a tile edge and
+ * comes back draw the edge as well — see `splitLineAtTileBounds`.
+ */
+export function routesToFC(routes) {
+  const features = [];
+  for (const r of routes) {
+    if (!r.geom?.length) continue;
+    for (const seg of r.geom) {
+      for (const line of splitLineAtTileBounds(seg)) {
+        features.push({
+          type: 'Feature',
+          id: r.id,
+          // `sport` rides along so the map can colour and filter by activity
+          // without a second lookup per feature.
+          properties: { id: r.id, name: r.name, sport: r.sport || '' },
+          geometry: { type: 'LineString', coordinates: line },
+        });
+      }
+    }
+  }
+  return { type: 'FeatureCollection', features };
 }
 
 // --- Formatting -------------------------------------------------------------------

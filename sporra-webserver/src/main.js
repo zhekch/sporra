@@ -157,7 +157,7 @@ import { mountAdmin, mountAsUser } from './admin-ui.js';
 import { createHistory, plural } from './history.js';
 import { showToast } from './toast.js';
 import { busy } from './busy.js';
-import { routesToFC, totalLength, formatDistance, formatDuration, canonicalSport, duplicateRoutes, routeSamples, nearestSample } from './routes.js';
+import { routesToFC, totalLength, formatDistance, formatDuration, canonicalSport, duplicateRoutes, routeSamples, nearestSample, ROUTE_TILE_ZOOM } from './routes.js';
 import { metricCollection } from './route-metric.js';
 import { paletteFor, randomPalette } from './route-colors.js';
 import { reconcilePrefs, remoteToken, readHome } from './prefs.js';
@@ -11122,8 +11122,12 @@ function installGrid() {
   const beforeRoutes = engine === MAPBOX ? ROUTE_SLOT_ID : beforeLabels;
   // `tolerance` rather than the 0.375 px default, and it is the one thing
   // standing between the glow and a row of spikes — see ROUTE_SIMPLIFY_PX.
+  // `maxzoom` is the grid `routesToFC` cuts on. A finer tile would be a new
+  // edge one piece of a route can leave and come back to, which Mapbox then
+  // draws as a stroke along that edge.
   map.addSource('routes', {
     type: 'geojson', data: EMPTY, promoteId: 'id', tolerance: ROUTE_SIMPLIFY_PX,
+    maxzoom: ROUTE_TILE_ZOOM,
   });
   // Under both of the real ones, and only where there are buildings to hide
   // behind — see ROUTE_GHOST_OPACITY.
