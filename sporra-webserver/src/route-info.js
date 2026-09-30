@@ -14,6 +14,7 @@
 import { sourceLabel } from './locations.js';
 import { formatDistance, formatDuration, recordedSeconds, routeSamples } from './routes.js';
 import { formatTime } from './clock.js';
+import { metricColor, metricDomain, spanValue } from './route-metric.js';
 import { t } from './i18n.js';
 
 const dayFmt = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
@@ -55,9 +56,13 @@ function graphValue(samples, metric, index) {
 }
 
 // The same rounding the dot on the map uses, so the axis and the label agree.
-function formatSpeedKmh(ms) {
+// A stop is not a reading: 0 km/h, and the 0.1 km/h a crawl rounds to, are
+// left off. Showing either of them is what made the start of a ride look measured.
+export function formatGraphSpeed(ms) {
+  if (ms == null || !Number.isFinite(ms) || ms <= 0) return null;
   const kmh = ms * 3.6;
   const text = kmh < 10 ? kmh.toFixed(1) : String(Math.round(kmh));
+  if (text === '0' || text === '0.0' || text === '0.1') return null;
   return `${text} km/h`;
 }
 
@@ -66,16 +71,24 @@ function formatMetres(m) {
   return `${rounded} m`;
 }
 
-// Minutes and hours only. A ride of a few seconds still reads as a minute,
-// because "0 min" at both ends would say the clock never moved.
+// Minutes and hours only. Zero is not a label — the line already starts at
+// the left edge — and a few seconds still reads as a minute, because a blank
+// end would say the clock was never kept.
 function formatAxisTime(sec) {
-  const totalMin = Math.max(0, Math.round(sec / 60));
-  const shown = sec > 0 && totalMin === 0 ? 1 : totalMin;
+  if (!(sec > 0)) return null;
+  const totalMin = Math.round(sec / 60);
+  const shown = totalMin === 0 ? 1 : totalMin;
   const h = Math.floor(shown / 60);
   const m = shown % 60;
   if (h && m) return `${h} h ${m} min`;
   if (h) return `${h} h`;
   return `${shown} min`;
+}
+
+// A short activity is marked every quarter hour. Past two hours that is a
+// fence of lines, so the mark becomes the hour.
+export function graphTimeStep(endSec) {
+  return endSec <= 2 * 3600 ? 15 * 60 : 3600;
 }
 
 function readout(className, values) {
@@ -149,7 +162,17 @@ export function fillMetricGraph(graphEl, samples, metric) {
   const spanX = maxX || 1;
   const X = (x) => padX + (x / spanX) * (w - padX * 2);
   const Y = (y) => padY + (1 - (y - minY) / spanY) * (h - padY * 2);
-  const value = metric === 'elev' ? formatMetres : formatSpeedKmh;
+  const value = metric === 'elev' ? formatMetres : formatGraphSpeed;
+  const domain = metricDomain(samples, metric);
+  const colorOf = (index) => {
+    if (!domain) return null;
+    const v = spanValue(samples, metric, index);
+    if (v == null || !Number.isFinite(v)) return null;
+    const unit = domain.flat || domain.hi === domain.lo
+      ? 0.5
+      : Math.min(1, Math.max(0, (v - domain.lo) / (domain.hi - domain.lo)));
+    return metricColor(metric, unit);
+  };
   const graphMap = {
     X,
     Y,
@@ -162,27 +185,88 @@ export function fillMetricGraph(graphEl, samples, metric) {
   svg.setAttribute('width', String(w));
   svg.setAttribute('height', String(h));
   const base = h - 1;
+  // The same colours as the line on the map, one span at a time. A single
+  // gradient would restart the ramp on the whole graph, which is the reason
+  // the map does not use one either.
+  if (byTime) {
+    const step = graphTimeStep(endSec);
+    for (let t = step; t < endSec; t += step) {
+      const tick = document.createElementNS(NS, 'line');
+      const x = X(t).toFixed(1);
+      tick.setAttribute('x1', x);
+      tick.setAttribute('x2', x);
+      tick.setAttribute('y1', '0');
+      tick.setAttribute('y2', String(h));
+      tick.setAttribute('class', 'route-metric-tick');
+      svg.append(tick);
+    }
+  }
   for (const run of runs) {
-    if (run.length < 2) continue;
-    const d = run.map((p, n) => `${n ? 'L' : 'M'}${X(p.x).toFixed(1)} ${Y(p.y).toFixed(1)}`).join(' ');
-    const fill = document.createElementNS(NS, 'path');
-    fill.setAttribute('d', `${d} L${X(run[run.length - 1].x).toFixed(1)} ${base} L${X(run[0].x).toFixed(1)} ${base} Z`);
-    fill.setAttribute('class', 'route-metric-fill');
-    const line = document.createElementNS(NS, 'path');
-    line.setAttribute('d', d);
-    line.setAttribute('class', 'route-metric-line');
-    svg.append(fill, line);
+    for (let n = 1; n < run.length; n++) {
+      const a = run[n - 1];
+      const b = run[n];
+      const color = colorOf(b.i);
+      const x1 = X(a.x).toFixed(1);
+      const y1 = Y(a.y).toFixed(1);
+      const x2 = X(b.x).toFixed(1);
+      const y2 = Y(b.y).toFixed(1);
+      const fill = document.createElementNS(NS, 'path');
+      fill.setAttribute('d', `M${x1} ${y1} L${x2} ${y2} L${x2} ${base} L${x1} ${base} Z`);
+      fill.setAttribute('class', 'route-metric-fill');
+      if (color) fill.setAttribute('fill', color);
+      const line = document.createElementNS(NS, 'path');
+      line.setAttribute('d', `M${x1} ${y1} L${x2} ${y2}`);
+      line.setAttribute('class', 'route-metric-line');
+      if (color) line.setAttribute('stroke', color);
+      svg.append(fill, line);
+    }
   }
   const dot = document.createElementNS(NS, 'circle');
   dot.setAttribute('r', '4.5');
   dot.setAttribute('class', 'route-metric-dot');
   dot.style.display = 'none';
   svg.append(dot);
-  graphEl.append(readout('is-max', [value(maxY)]));
+  const maxLabel = value(maxY);
+  const minLabel = value(minY);
+  if (maxLabel) graphEl.append(readout('is-max', [maxLabel]));
   graphEl.append(svg);
-  graphEl.append(readout('is-min', [value(minY)]));
-  if (byTime) graphEl.append(readout('is-time', [formatAxisTime(0), formatAxisTime(endSec)]));
+  if (minLabel) graphEl.append(readout('is-min', [minLabel]));
+  if (byTime) graphEl.append(timeReadout(endSec, X));
   return { dot, graphMap };
+}
+
+// Fade lines are drawn for every step. The words under them are not: two
+// labels closer than this land on top of each other, and the end of the
+// activity always keeps its place.
+const TIME_LABEL_GAP = 46;
+
+function timeReadout(endSec, X) {
+  const row = document.createElement('div');
+  row.className = 'route-metric-readout is-time';
+  const step = graphTimeStep(endSec);
+  const endX = X(endSec);
+  const marks = [];
+  let prev = -Infinity;
+  for (let t = step; t < endSec; t += step) {
+    const x = X(t);
+    const label = formatAxisTime(t);
+    if (!label || x - prev < TIME_LABEL_GAP || endX - x < TIME_LABEL_GAP) continue;
+    marks.push({ x, label, end: false });
+    prev = x;
+  }
+  const endLabel = formatAxisTime(endSec);
+  if (endLabel) {
+    while (marks.length && endX - marks[marks.length - 1].x < TIME_LABEL_GAP) marks.pop();
+    marks.push({ x: endX, label: endLabel, end: true });
+  }
+  for (const mark of marks) {
+    const span = document.createElement('span');
+    span.textContent = mark.label;
+    span.style.left = `${mark.x}px`;
+    span.style.transform = mark.end ? 'translateX(-100%)' : 'translateX(-50%)';
+    row.append(span);
+  }
+  return row;
 }
 
 /**

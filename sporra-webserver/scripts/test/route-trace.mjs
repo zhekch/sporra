@@ -9,6 +9,7 @@
 
 import { alignTrace, buildRoute, haversine, nearestSample, routeSamples, traceSupersedes } from '../../src/routes.js';
 import { metricColor } from '../../src/route-metric.js';
+import { fillMetricGraph, formatGraphSpeed, graphTimeStep } from '../../src/route-info.js';
 
 let pass = 0;
 let fail = 0;
@@ -87,6 +88,59 @@ check(traceSupersedes('', timed), 'a time fills an empty trace');
 check(traceSupersedes(timed, climbed), 'a height fills a trace that only had a time');
 check(!traceSupersedes(climbed, timed), 'a later send does not strip a height already kept');
 check(!traceSupersedes(climbed, climbed), 'a trace that already has both is left alone');
+
+check(formatGraphSpeed(0) == null, 'a stop is not a speed');
+check(formatGraphSpeed(0.1 / 3.6) == null, 'and neither is 0.1 km/h');
+check(formatGraphSpeed(10 / 3.6) === '10 km/h', 'a real speed is kept', formatGraphSpeed(10 / 3.6));
+check(graphTimeStep(45 * 60) === 15 * 60, 'a short activity is marked every quarter hour');
+check(graphTimeStep(3 * 3600) === 3600, 'a long one every hour');
+
+// Enough of a document to draw the graph and read what it said.
+function node(tag) {
+  return {
+    tag,
+    children: [],
+    attrs: {},
+    style: {},
+    className: '',
+    textContent: '',
+    clientWidth: 280,
+    setAttribute(k, v) { this.attrs[k] = v; },
+    append(...kids) { this.children.push(...kids); },
+    replaceChildren() { this.children = []; },
+  };
+}
+globalThis.document = {
+  createElement: (tag) => node(tag),
+  createElementNS: (_ns, tag) => node(tag),
+};
+const host = node('div');
+// Three hours, so the mark is the hour, with one crawl that must not be labelled.
+const hourRide = Array.from({ length: 13 }, (_, i) => ({
+  lng: 7.4 + i * 0.01,
+  lat: 46.9,
+  seg: 0,
+  distM: i * 1000,
+  elapsed: i * 15 * 60,
+  t: T0 + i * 15 * 60,
+  speed: i === 0 ? null : (i === 1 ? 0.02 : 2 + i),
+  ele: 400 + i * 20,
+}));
+const painted = fillMetricGraph(host, hourRide, 'speed');
+const texts = [];
+const walk = (el) => {
+  if (el.textContent) texts.push(el.textContent);
+  for (const kid of el.children ?? []) walk(kid);
+};
+walk(host);
+const svg = host.children.find((el) => el.tag === 'svg');
+const strokes = (svg?.children ?? []).filter((el) => el.tag === 'path' && el.attrs.stroke).map((el) => el.attrs.stroke);
+const ticks = (svg?.children ?? []).filter((el) => el.attrs.class === 'route-metric-tick');
+check(!!painted && strokes.length > 1, 'the graph is coloured a span at a time', `${strokes.length} strokes`);
+check(new Set(strokes).size > 1, 'and the spans are not all the same colour');
+check(ticks.length >= 1, 'a faded time line is drawn', `${ticks.length} lines`);
+check(!texts.some((t) => t === '0 min' || t.startsWith('0.1') || t === '0 km/h' || t === '0.0 km/h'),
+  'zero is left off the graph', texts.join(' | '));
 
 console.log(`\n${fail ? 'FAILED' : 'passed'}: ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

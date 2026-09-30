@@ -1798,26 +1798,17 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
    line rather than describe it. Anchored to the card so they follow it when
    the graph appears and the card grows.
 
-   The same segmented control the menu uses, and only as wide as the two
-   words. Stretched across the card they ran into the location button, which
-   stands in that same strip at the right. */
+   Two chips, not one tray. Each one carries the same glass edge as a menu
+   button. On a phone the location button is lifted into this same strip, and
+   a row that ran to the card's right edge landed on top of it — that inset
+   lives in the phone layout, where the button actually stands here. */
 .route-metric-pills {
   position: absolute;
   left: 0;
+  right: 0;
   bottom: calc(100% + 8px);
   display: flex;
-  width: max-content;
-  max-width: calc(100% - 62px);
-  gap: 4px;
-  padding: 3px;
-  border-radius: 13px;
-  background: var(--glass);
-  -webkit-backdrop-filter: blur(26px);
-  backdrop-filter: blur(26px);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  gap: 6px;
 }
 
 .route-metric-pills[hidden] {
@@ -1825,28 +1816,31 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 }
 
 .route-metric-pills button {
-  flex: none;
+  flex: 1;
   appearance: none;
   margin: 0;
-  padding: 5px 10px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.62);
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: var(--glass-raised);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.9);
   font: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
-  transition:
-    background 0.2s ease,
-    color 0.2s ease;
 }
 
 .route-metric-pills button.active {
-  background: rgba(255, 255, 255, 0.18);
-  color: #fff;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  background: #fff;
+  color: #14120e;
+  border-color: transparent;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 .route-metric-pills button:disabled {
@@ -1883,22 +1877,40 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   pointer-events: none;
 }
 
+/* The clock sits on the same horizontal scale as the line above it. */
+.route-metric-readout.is-time {
+  position: relative;
+  height: 14px;
+}
+
+.route-metric-readout.is-time span {
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+}
+
 .route-metric-graph[hidden] {
   display: none;
 }
 
 .route-metric-line {
   fill: none;
-  stroke: currentColor;
-  stroke-width: 1.75;
+  stroke-width: 2;
   stroke-linejoin: round;
   stroke-linecap: round;
 }
 
 .route-metric-fill {
-  fill: currentColor;
-  opacity: 0.16;
+  opacity: 0.22;
   stroke: none;
+}
+
+/* A quarter hour, or an hour, washed out so it reads as a grid and not as
+   another reading. */
+.route-metric-tick {
+  stroke: currentColor;
+  stroke-width: 1;
+  opacity: 0.22;
 }
 
 .route-metric-dot {
@@ -4364,6 +4376,12 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
     width: calc(100vw - 24px);
   }
 
+  /* The location button is lifted to the top of the card, which is where
+     these chips stand. One button's width, plus a gap. */
+  .route-metric-pills {
+    right: 60px;
+  }
+
   .layers {
     left: auto;
     right: calc(12px + var(--safe-r));
@@ -4932,26 +4950,19 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   border-top-color: rgba(15, 23, 42, 0.12);
 }
 
-[data-theme='light'] .route-metric-pills {
-  background: rgba(248, 250, 252, 0.7);
+[data-theme='light'] .route-metric-pills button {
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
   border-color: rgba(15, 23, 42, 0.16);
   box-shadow:
-    0 8px 24px rgba(15, 23, 42, 0.2),
+    0 8px 24px rgba(15, 23, 42, 0.16),
     inset 0 1px 0 rgba(255, 255, 255, 0.95);
-}
-
-[data-theme='light'] .route-metric-pills button {
-  background: transparent;
-  color: rgba(15, 23, 42, 0.68);
-  box-shadow: none;
 }
 
 [data-theme='light'] .route-metric-pills button.active {
-  background: rgba(255, 255, 255, 0.92);
-  color: #0f172a;
-  box-shadow:
-    0 1px 4px rgba(15, 23, 42, 0.14),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  background: #0f172a;
+  color: #fff;
+  border-color: transparent;
 }
 
 [data-theme='light'] .route-metric-readout {

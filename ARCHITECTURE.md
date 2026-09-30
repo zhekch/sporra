@@ -2047,11 +2047,11 @@ The chip on the map is the control that does it while the card stays open. A
 tap that lands on several still asks, via the stack menu below; picking a row
 isolates that one and leaves the menu up.
 
-Above the card, a short segmented control — the same one the menu uses —
-offers **Speed** and **Elevation** and recolours the open route. It is only as
-wide as the two words and it stays to the left: the location button stands at
-the right of that same strip, and a control stretched across the card landed
-on top of it.
+Above the card, two chips, **Speed** and **Elevation**, recolour the open route.
+Each one is its own glass button, with the same border the menu buttons carry.
+On a phone the location button is lifted into that strip, so the chips stop
+short of it; on a wide screen they take the width of the card, where the
+location button is in the opposite corner.
 Speed runs red where it was slow and green where it was fast; elevation runs
 green where it was low and red where it was high. The scale is this activity's
 own. Speed drops the slowest and fastest twentieth (`metricDomain` in
@@ -2068,19 +2068,25 @@ state — the same opacity case the stack uses. Feature state does not survive
 Show all is on, keep their activity colours. Only the open one is ramped, and
 the ramp leaves with the card.
 
-Under Duration, the same series is a graph. The number at the top is the
-highest value on it and the number under the line is the lowest — kilometres
-an hour, or metres — and beneath those the clock runs from the start, in
-minutes and hours. No captions: the position is the caption. The line is drawn
-against that clock when the activity has one, and against distance when it
-does not, because a pause has to land where the time says it did. A press on it, or
-on the line, drops a dot in both places and a small label: speed, time since the
-start, and elevation, whichever this activity has. Opening the card does not
-drop the dot; the first press does. Switching pills keeps the place. A point
-that would land behind the card is panned up until it sits just above the pills,
-and the zoom is left alone. The metric line is not a layer a tap asks, so a pile
-is still a pile: more than one route under the cursor opens the menu rather than
-scrubbing.
+Under Duration, the same series is a graph, in the same colours as the line on
+the map — one span at a time, from the same `metricDomain`, because a single
+gradient would restart the ramp across the whole activity. The number at the
+top is the highest value on it and the number under the line is the lowest —
+kilometres an hour, or metres. A stop is not a reading: 0 km/h, and the
+0.1 km/h a crawl rounds to, are left off, and so is a time of zero. Beneath
+those the clock runs in minutes and hours. A short activity draws a faded line
+every quarter hour (`graphTimeStep`); past two hours the line is the hour. The
+words follow when they have room, and the end of the activity always does. The
+line is drawn against that clock when the activity has one, and against
+distance when it does not, because a pause has to land where the time says it
+did. A press on it, or on the line, drops a dot in both places and a small
+label: speed, time since the start, and elevation, whichever this activity has
+and whichever is not zero. Opening the card does not drop the dot; the first
+press does. Switching pills keeps the place. A point that has left the map
+still in view — off the edge, or down behind the card — is put back in the
+middle of what is left, and the zoom is left alone. The metric line is not a
+layer a tap asks, so a pile is still a pile: more than one route under the
+cursor opens the menu rather than scrubbing.
 
 Zoom frames the line in the map that is still visible above the card. The bottom
 inset is the top of the pills down to the bottom of the window, plus a small

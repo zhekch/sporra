@@ -39,7 +39,7 @@ import { derived } from './derived.js';
 import { installOffline, forgetAccountOffline, clearOfflineCaches } from './offline.js';
 import { mountCellInfo } from './cell-info.js';
 import { mountScaleBar } from './scale-bar.js';
-import { mountRouteInfo } from './route-info.js';
+import { formatGraphSpeed, mountRouteInfo } from './route-info.js';
 import { mountImport } from './import.js';
 import { mountStats } from './stats-ui.js';
 import { mountHomeAssistant } from './home-assistant-ui.js';
@@ -5355,19 +5355,21 @@ function clearMarker() {
   metricMarker = null;
 }
 
-// Under a minute the clock is still seconds. `formatDuration` rounds to the
-// minute and answers nothing at all for zero, which is the start of the line.
+// Under a minute the clock is still seconds. Zero is the start of the line,
+// and it is not a reading — the same rule as the graph, which leaves "0 min"
+// off. `formatDuration` already answers nothing for zero.
 function formatSince(sec) {
-  if (sec == null || !Number.isFinite(sec) || sec < 0) return null;
-  if (sec < 60) return `${Math.round(sec)} s`;
-  return formatDuration(sec) ?? '0 min';
+  if (sec == null || !Number.isFinite(sec) || sec <= 0) return null;
+  if (sec < 60) {
+    const s = Math.round(sec);
+    if (s <= 0) return null;
+    return `${s} s`;
+  }
+  return formatDuration(sec);
 }
 
 function formatSpeed(ms) {
-  if (ms == null || !Number.isFinite(ms)) return null;
-  const kmh = ms * 3.6;
-  const text = kmh < 10 ? kmh.toFixed(1) : String(Math.round(kmh));
-  return `${text} km/h`;
+  return formatGraphSpeed(ms);
 }
 
 // The first point of a segment has no incoming span. The label uses the one
@@ -5434,23 +5436,25 @@ function routeFramePadding() {
   return { top: FRAME_PAD, bottom: Math.min(bottom, room), left: FRAME_PAD, right: FRAME_PAD };
 }
 
-// A scrubbed point that would land behind the card is slid up until it sits
-// just above the pills. Panning, not zooming: the frame was already chosen.
+// A scrubbed point that has walked off the map still in view — past the edge,
+// or down behind the card — is put back in the middle of what is left. A nudge
+// lost the race with the drag: the finger keeps moving while the pan is still
+// settling, and the dot left the screen. The zoom stays where the frame put it.
 function revealSample(sample) {
-  if (!sample || !map) return;
+  if (!sample || !map?.jumpTo) return;
+  const padding = routeFramePadding();
+  const pad = typeof padding === 'number'
+    ? { top: padding, bottom: padding, left: padding, right: padding }
+    : padding;
   const p = map.project([sample.lng, sample.lat]);
-  const edge = 28;
-  let dx = 0;
-  let dy = 0;
-  if (p.x < edge) dx = p.x - edge;
-  else if (p.x > window.innerWidth - edge) dx = p.x - (window.innerWidth - edge);
-  const floor = routeOcclusionTop();
-  const limit = floor == null ? window.innerHeight - edge : floor - FRAME_AIR;
-  if (p.y > limit) dy = p.y - limit;
-  else if (p.y < edge) dy = p.y - edge;
-  if (!dx && !dy) return;
+  const margin = 28;
+  const inside = p.x >= pad.left + margin
+    && p.x <= window.innerWidth - pad.right - margin
+    && p.y >= pad.top + margin
+    && p.y <= window.innerHeight - pad.bottom - margin;
+  if (inside) return;
   releaseCameraLock();
-  map.panBy([dx, dy], { duration: 280 });
+  map.jumpTo({ center: [sample.lng, sample.lat], padding });
 }
 
 /**
