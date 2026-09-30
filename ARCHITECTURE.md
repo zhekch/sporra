@@ -41,11 +41,10 @@ glass look. Click hexagons to mark places you've visited.
   Ctrl paints and Option erases at their own sizes for the whole sweep. Shift
   highlights the **region** under the pointer — the canton, the county, the
   province — and the panel names that region. **Clear**, or a Shift-click,
-  pins that highlight. The cells go only when you then tap the same region
-  on the map; a tap outside it puts the highlight away, and pressing Clear
-  again on the region it already names does the same. The outline is the
-  shape about to be cleared: the brush circle is a disk of cells, so the
-  circle steps aside while the highlight is up. Shift-drag is the box zoom
+  arms a pick: the highlight follows the pointer onto any region, and the tap
+  clears the one it lands on. Pressing Clear again puts the pick away. The
+  outline is the shape about to be cleared: the brush circle is a disk of
+  cells, so the circle steps aside while the highlight is up. Shift-drag is the box zoom
   on the rest of the map; while editing it is off, because that gesture
   swallows a Shift-click before it can become one. The erase is one undo,
   the same as a stroke. A country the dataset never subdivided is its own
