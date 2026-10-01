@@ -1,5 +1,5 @@
 // Swiping along a series: the chip that names the day, the chip that names
-// one of that day's activities, and the month grid.
+// one activity — of that day, or of every workout in time — and the month grid.
 //
 // Three places in this app show you one of a run of things — the day on the
 // map, one activity of that day, and the month in the calendar — and in each

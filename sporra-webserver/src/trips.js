@@ -900,3 +900,31 @@ export function nextRecordedDay(keys, from, dir) {
   }
   return best;
 }
+
+/**
+ * The workout `step` places along from this one, in time.
+ *
+ * +1 is the one that happened after, −1 the one before — the same sign the
+ * day chip uses. A route with no start is ordered by when it was added, which
+ * is how the list itself arrives; two that share a clock are ordered by id,
+ * lower first, so a pair that started in the same second still has a before
+ * and an after. The ends are null rather than wrapping.
+ *
+ * Folded copies are the caller's to leave out. This walks the list it is
+ * given, and the chip asks it of the routes worth listing.
+ *
+ * @param {Array<{id:number, firstAt?:number, addedAt?:number}>} routes
+ * @param {number|null} id
+ * @param {number} step
+ * @returns {object|null}
+ */
+export function workoutBeside(routes, id, step) {
+  if (id == null || !step || !routes?.length) return null;
+  // `firstAt` of 0 is "the file didn't say", not the epoch. Treating it as a
+  // real start would put every undated ride before history.
+  const clock = (r) => (r.firstAt > 0 ? r.firstAt : r.addedAt) || 0;
+  const list = routes.slice().sort((a, b) => clock(a) - clock(b) || a.id - b.id);
+  const at = list.findIndex((r) => r.id === id);
+  if (at < 0) return null;
+  return list[at + step] ?? null;
+}

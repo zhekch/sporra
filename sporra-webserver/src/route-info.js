@@ -407,7 +407,7 @@ export function mountRouteInfo({ onClose, onZoom, onMore, onMetric, onScrub } = 
     onMetric?.(metric);
   }
 
-  function show(r) {
+  function show(r, keepMetric) {
     route = r;
     scrub = -1;
     nameEl.textContent = r.name || 'Route';
@@ -426,7 +426,12 @@ export function mountRouteInfo({ onClose, onZoom, onMore, onMetric, onScrub } = 
     samples = routeSamples(r.geom, r.trace);
     const hasSpeed = samples.some((s) => s.speed != null);
     const hasEle = samples.some((s) => s.ele != null);
-    metric = hasSpeed ? 'speed' : hasEle ? 'elev' : null;
+    // Stepping to the workout either side keeps the pill you were reading.
+    // A fresh tap still opens on speed: nothing was asked to be kept, and a
+    // ride with no speed falls through to elevation exactly as before.
+    if (keepMetric === 'elev' && hasEle) metric = 'elev';
+    else if (keepMetric === 'speed' && hasSpeed) metric = 'speed';
+    else metric = hasSpeed ? 'speed' : hasEle ? 'elev' : null;
     speedBtn.disabled = !hasSpeed;
     elevBtn.disabled = !hasEle;
     pills.hidden = !metric;

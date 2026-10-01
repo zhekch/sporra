@@ -136,7 +136,7 @@ import { mountIntro } from './intro-ui.js';
 import { INTRO_SEEN_KEY, INTRO_VERSION, hostKind, shouldIntro } from './intro.js';
 import {
   activeDays, dayBounds, dayDetail, dayKey, dayLabel, distanceKm, findHome, nextRecordedDay,
-  TRIP_NAME_MAX,
+  workoutBeside, TRIP_NAME_MAX,
 } from './trips.js';
 import { mountSwipe } from './swipe.js';
 import {
@@ -5500,13 +5500,27 @@ function updateSoloChip() {
   // The day's own list has the name before `loadRoutes` has filled `routeList`,
   // which is the window between pressing *Show* and the file arriving.
   const shown = route ?? (showingDay ? dayRoute : null);
-  const canStep = showingDay && dayRoutes.length > 1;
+  // A day that has isolated one activity already has its own series. This chip
+  // walks every workout only when it is naming one you picked out of the map —
+  // *Showing only*, with *Show all*. A row under the pointer is borrowing the
+  // map for as long as the pointer stays; that is not a series to step.
+  const paging = soloRoute != null && !showingDay && stackSoloBefore === undefined;
+  const earlier = paging ? workoutBeside(listedRoutes(), soloRoute, -1) : null;
+  const later = paging ? workoutBeside(listedRoutes(), soloRoute, 1) : null;
+  const canStep = (showingDay && dayRoutes.length > 1) || !!(earlier || later);
 
   chip.classList.toggle('can-swipe', canStep);
-  // Each arrow stands for a direction there is something in, same as the day
-  // chip. The first activity has no arrow backwards.
-  if (prev) prev.hidden = !canStep || dayRouteAt <= 0;
-  if (next) next.hidden = !canStep || dayRouteAt >= dayRoutes.length - 1;
+  // Each arrow stands for a direction there is something in. On a day, the
+  // first of its activities has no arrow backwards. On a workout picked out of
+  // the map, backwards is earlier in time and forwards is later — the same
+  // way the day chip points — so the newest ride has no arrow onwards.
+  if (showingDay) {
+    if (prev) prev.hidden = !canStep || dayRouteAt <= 0;
+    if (next) next.hidden = !canStep || dayRouteAt >= dayRoutes.length - 1;
+  } else {
+    if (prev) prev.hidden = !earlier;
+    if (next) next.hidden = !later;
+  }
 
   if (dayOwned && !showingDay && !route) {
     chip.hidden = false;
@@ -5982,13 +5996,13 @@ const routeAt = (point) => routesAt(point)[0] ?? null;
 // Isolated while the card is open. Closing the card puts the others back; the
 // chip above the map is the control that does it without closing. The stack
 // menu, if it is what did the picking, stays up.
-function showRouteInfo(route) {
+function showRouteInfo(route, keepMetric) {
   closeCellInfo();
   closePhotoInfo();
   clearMarker();
   setSelectedRoute(route.id);
   setSoloRoute(route.id, { keepStack: !!routeStackPopup });
-  routeInfo?.show(route);
+  routeInfo?.show(route, keepMetric);
 }
 
 // --- When the line you tapped is twenty lines ----------------------------------
@@ -6602,6 +6616,28 @@ function showAdjacentDay(dir) {
 function showFirstDayOfTrip() {
   if (shownTrack?.kind !== 'trip') return;
   showDayKey(shownTrack.first);
+}
+
+/**
+ * The workout before or after the one on the chip, in time.
+ *
+ * The card stays open — a swipe is turning the page, not closing it — and on
+ * the same Speed or Elevation pill when the next one has that reading. The
+ * map frames the line, because the one after a ride in May is not usually on
+ * the screen the ride in May filled. A pile under a tap is about the lines
+ * there, and a step is about the workout either side; those are different
+ * sets, so the pile goes.
+ */
+function showAdjacentWorkout(step) {
+  const route = workoutBeside(listedRoutes(), soloRoute, step);
+  if (!route) return;
+  if (routeStackPopup) {
+    stackSoloBefore = undefined;
+    closeRouteStack();
+  }
+  const keep = routeInfo?.visible?.() ? routeInfo.metric() : null;
+  showRouteInfo(route, keep);
+  zoomToRoute(route);
 }
 
 /**
@@ -10879,13 +10915,24 @@ function wireLayersControl() {
       (axis === 'x' ? !!dayStep[step] : step < 0 && shownTrack?.kind === 'trip' && !!shownTrack.first),
     onStep: (step, axis) => (axis === 'x' ? showAdjacentDay(step) : showFirstDayOfTrip()),
   });
-  // The chip below, once *Show* has been pressed: sideways is the next
-  // activity. The ends resist, the same as the days. Collapsed it does not
-  // answer — a swipe that showed the first activity would skip the press
-  // that says you meant to.
+  // Sideways on this chip is the next one in its series. While a day's
+  // activity is isolated, that series is the day's. Otherwise — *Showing
+  // only*, *Show all* — it is every workout, earlier on the left and later
+  // on the right, the same direction the day chip takes along the days. The
+  // ends resist. Collapsed ("2 activities · Show") it does not answer: a
+  // swipe that showed the first activity would skip the press that says you
+  // meant to.
   const routeSwipe = mountSwipe(document.getElementById('route-solo'), {
-    can: (step, axis) => axis === 'x' && dayRouteAt >= 0 && !!dayRoutes[dayRouteAt + step],
-    onStep: (step) => { void showDayRoute(dayRouteAt + step); },
+    can: (step, axis) => {
+      if (axis !== 'x' || !step) return false;
+      if (dayRouteAt >= 0) return !!dayRoutes[dayRouteAt + step];
+      if (stackSoloBefore !== undefined) return false;
+      return !!workoutBeside(listedRoutes(), soloRoute, step);
+    },
+    onStep: (step) => {
+      if (dayRouteAt >= 0) { void showDayRoute(dayRouteAt + step); return; }
+      showAdjacentWorkout(step);
+    },
   });
   // The arrows are the same three steps for a hand that has neither a
   // touchscreen nor a trackpad, and they go through the gesture's own path so a
@@ -10904,11 +10951,14 @@ function wireLayersControl() {
   // so by the time a listener on the document heard the key, the map had
   // already panned and `preventDefault` was a sentence too late.
   //
-  // Only while the chip is up, and never over anything that has its own idea
-  // about arrows: a field being typed into, the palette (where they move the
-  // highlighted row), or the photograph card (where they are the next picture).
+  // Only while a chip that steps is up, and never over anything that has its
+  // own idea about arrows: a field being typed into, the palette (where the
+  // arrows move the highlighted row), or the photograph card (where they are
+  // the next picture). The day chip wins when both can move — ↓ is only ever
+  // a trip — except while the route card is open, which is the workout you
+  // are reading, and the arrows then turn its page.
   window.addEventListener('keydown', (e) => {
-    if (!shownTrack || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
     if (!/^Arrow(Left|Right|Down)$/.test(e.key)) return;
     if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable]')) {
       return;
@@ -10916,13 +10966,16 @@ function wireLayersControl() {
     if (!document.getElementById('search-overlay')?.hidden) return;
     if (document.getElementById('photo-info') && !document.getElementById('photo-info').hidden) return;
     const [step, axis] = e.key === 'ArrowLeft' ? [-1, 'x'] : e.key === 'ArrowRight' ? [1, 'x'] : [-1, 'y'];
-    if (!chipSwipe.can(step, axis)) return;
+    const onWorkout = axis === 'x' && routeInfo?.visible?.() && routeSwipe.can(step, axis);
+    const swipe = onWorkout ? routeSwipe : chipSwipe.can(step, axis) ? chipSwipe
+      : (axis === 'x' && routeSwipe.can(step, axis) ? routeSwipe : null);
+    if (!swipe) return;
     // Stopped rather than merely defaulted, so nothing below is asked at all —
-    // a day that steps *and* pans the map underneath it is two answers to one
+    // a chip that steps *and* pans the map underneath it is two answers to one
     // key.
     e.preventDefault();
     e.stopPropagation();
-    chipSwipe.step(step, axis);
+    swipe.step(step, axis);
   }, true);
   document.getElementById('routes-toggle').addEventListener('change', (e) => setRoutesOn(e.target.checked));
   document.getElementById('routes-options-toggle').addEventListener('click', () => {

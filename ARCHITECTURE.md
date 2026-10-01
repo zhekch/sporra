@@ -2985,6 +2985,19 @@ and the arrows on it are the same hint, and the way through for a mouse. The
 ends stop rather than wrapping: an arrow that is not there is the honest
 answer, the same as the first day of a history.
 
+**A workout picked out of the map is a series too.** The same chip, when it
+says *Showing only* and *Show all*, steps through every listed workout in
+time (`workoutBeside`). A pull to the left is the one that happened later,
+the same direction the day chip takes along the days; the newest has no
+arrow onwards and the oldest has none back. The card stays open on whichever
+you land on, still on Speed or Elevation when that workout has the reading,
+and the map frames the line. The day's own series still wins while *Hide* is
+the button. A row the pointer is only borrowing, under an open stack, does
+not answer — letting go of it puts the previous line back, and a step would
+be answering a question the pointer had not finished asking. Arrow keys turn
+the same page while the route card is open; otherwise they still belong to
+the day chip.
+
 *Hide* undoes what *Show* did to the overlay and does not restore a previous
 isolation: the chip below the day is the day's.
 
