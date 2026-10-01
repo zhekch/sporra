@@ -2143,12 +2143,18 @@ more than one under the same tap opens a menu at the cursor instead: the count
 as its heading (*11 activities here*), a row each for what the activity was
 called, when it was and how far it went, and the card opens on whichever you
 pick. It stays open after a pick, because a stack is something you go through
-rather than choose from once. **Hovering a row lights its line on the map**,
-which is what makes the list usable when six rows are the same word — and it
-costs nothing of ours, being the `hov` feature state the pointer already writes,
-answered by paint expressions the glow layers already carry. Once a row has been
-picked, that route is the only line in the source, so a hover draws the row
-under the pointer on its own and puts back whatever was showing when the pointer
+rather than choose from once. Until that pick, every line in the pile stays
+on the map: the menu is the question, and answering it by isolating the first
+row is how a tap on nineteen runs became one green line and a *Showing only*
+pill. MapLibre focuses the first button as the card opens (`focusAfterOpen`
+is turned off), and a phone sends `mouseenter` for whatever the finger was
+still covering; neither is a choice, so neither calls `setSoloRoute`.
+**Hovering a row lights its line on the map**, which is what makes the list
+usable when six rows are the same word — and it costs nothing of ours, being
+the `hov` feature state the pointer already writes, answered by paint
+expressions the glow layers already carry. Once a row has been picked, that
+route is the only line in the source, so a hover draws the row under the
+pointer on its own and puts back whatever was showing when the pointer
 leaves. The ramp is emptied for that moment: it belongs to the open route, and
 leaving it up would paint the wrong line.
 

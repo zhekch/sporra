@@ -6226,13 +6226,19 @@ function showRouteStack(e, found) {
     }
     for (const route of group.list) {
       const row = routeStackRow(route);
-      // The glow is not enough once a route has been picked: that one is the
-      // only line in the source, so the row under the pointer has to be drawn
-      // on its own or there is nothing to light up. Remembered once, so moving
-      // between rows does not forget what to put back.
+      // Before a pick, the pile stays a pile. The menu focuses its first
+      // button as it opens, and a phone also sends mouseenter for whatever
+      // the finger was still on. Treating either as "show only this one" put
+      // the pill up and hid the other lines before anyone had chosen.
+      //
+      // After a pick the source really does hold one line, so the row under
+      // the pointer has to be drawn on its own or there is nothing to light
+      // up. Remembered once, so moving between rows does not forget what to
+      // put back.
       const borrow = () => {
-        if (stackSoloBefore === undefined) stackSoloBefore = soloRoute;
         setHoveredRoute(route.id);
+        if (stackSoloBefore === undefined && soloRoute == null) return;
+        if (stackSoloBefore === undefined) stackSoloBefore = soloRoute;
         setSoloRoute(route.id, { keepStack: true });
       };
       row.addEventListener('mouseenter', borrow);
@@ -6272,6 +6278,11 @@ function showRouteStack(e, found) {
 
   const popup = new gl.Popup({
     closeButton: true,
+    // MapLibre focuses the first button when the card opens, which is the
+    // first activity. That focus is not a choice. `borrow` ignores it too;
+    // this stops the row lighting up before anyone has pointed at it.
+    // Mapbox does not read the option.
+    focusAfterOpen: false,
     // Stated in pixels because the library writes it onto the popup as an inline
     // style, so a class cannot win against it. The columns are counted rather
     // than guessed: enough for what is actually there, capped so the card never
