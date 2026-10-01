@@ -222,13 +222,6 @@ const VIEW_PAD = 0.35; // extra region coverage around the viewport, per side
 // enough that two separate decisions a beat apart are two decisions.
 const DOUBLE_PRESS_MS = 350;
 
-// How long after a gesture ends the glass waits before it is frosted again, on a
-// phone — see `body.map-moving` at the foot of style.css. Long enough that a
-// second flick landing straight after the first does not strobe the controls
-// between frosted and flat, short enough that nobody reaching for a button finds
-// it still flat.
-const GLASS_SETTLE_MS = 180;
-
 // --- Which way the camera may point --------------------------------------------
 // The map turns. It did not, for a long time, and the reason was never that
 // anybody wanted a map you could only look at from the south: it was that every
@@ -1247,22 +1240,6 @@ let userInteracted = false;
 onMapBuilt(() => map.on('movestart', (e) => {
   if (e.originalEvent) userInteracted = true;
 }));
-
-// The glass goes flat for the length of a gesture on a phone, because frosting
-// it again on every frame of the map moving under it is a cost the phone's
-// compositor pays per frame. Any movement, not just a finger's: a fly-to
-// re-blurs the backdrop exactly as often as a drag does.
-let glassTimer = 0;
-if (isPhone()) {
-  onMapBuilt(() => map.on('movestart', () => {
-    clearTimeout(glassTimer);
-    document.body.classList.add('map-moving');
-  }));
-  onMapBuilt(() => map.on('moveend', () => {
-    clearTimeout(glassTimer);
-    glassTimer = setTimeout(() => document.body.classList.remove('map-moving'), GLASS_SETTLE_MS);
-  }));
-}
 
 // "My location" button — browser geolocation (works on localhost; production
 // needs HTTPS). Clicking it pans to the viewer and shows the blue dot.

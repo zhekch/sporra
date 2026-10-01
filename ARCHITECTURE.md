@@ -8892,13 +8892,6 @@ on the same answer and a narrow desktop window is not mistaken for one.
   every route on screen drawn again, translucent and up to twenty pixels wide.
   The contour steps that made four the wrong answer on a laptop are finer than
   a 460 ppi screen shows.
-- **The glass goes flat while the map moves** (`body.map-moving`, cleared
-  `GLASS_SETTLE_MS` after `moveend`). A `backdrop-filter` re-blurs whatever is
-  behind it on every frame that changes, and during a pan that is every frame,
-  for controls nobody is looking at. For the length of the gesture the button
-  cluster, the attribution, the pencil, the edit panel and any open card are a
-  denser scrim of the same grey. No transition, for the reason written at the
-  phone menu sheet: easing a `backdrop-filter` is a per-frame cost of its own.
 - **The move handler stopped redoing things.** `considerFineRegions`, which
   builds a set of every lit region and walks all 4,553 records, looks at most
   every `FINE_LOOK_MS` while the camera moves (never skipped once it stops),
