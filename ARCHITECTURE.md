@@ -2149,10 +2149,19 @@ row is how a tap on nineteen runs became one green line and a *Showing only*
 pill. MapLibre focuses the first button as the card opens (`focusAfterOpen`
 is turned off), and a phone sends `mouseenter` for whatever the finger was
 still covering; neither is a choice, so neither calls `setSoloRoute`.
-**Hovering a row lights its line on the map**, which is what makes the list
-usable when six rows are the same word — and it costs nothing of ours, being
-the `hov` feature state the pointer already writes, answered by paint
-expressions the glow layers already carry. Once a row has been picked, that
+**Hovering a row lifts its line out of the pile**, which is what makes the
+list usable when six rows are the same word. It started as the `hov` feature
+state the pointer already writes, and that was enough for one line and not for
+a braid: a feature state cannot change drawing order, so the lit route stayed
+half under its neighbours, and a brighter haze in its own colour was one more
+colour among eleven. The row's route is now drawn a second time from a
+`route-peek` source of its own, above every other route layer and the ramp,
+white on a black casing — a pairing no activity colour and no palette entry is
+ever given — and its glow is zeroed for as long as it is lifted, so its haze
+does not tint the lines it is being told apart from. A separate source rather
+than `line-sort-key`, because a sort key orders features within one tile's
+bucket and nothing across tiles, and changing it would rebuild the whole
+routes source on every hover. Once a row has been picked, that
 route is the only line in the source, so a hover draws the row under the
 pointer on its own and puts back whatever was showing when the pointer
 leaves. The ramp is emptied for that moment: it belongs to the open route, and

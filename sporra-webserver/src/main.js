@@ -2176,7 +2176,9 @@ const routeGlowOpacity = () => {
   // crisper is not what a route on this map is for — the haze is how a line
   // drawn on the ground reads as *on* the ground rather than as one more thing
   // in the scene. See glowScale for the other half of that lesson.
-  return ['*', routeAlphaExpr(), ['case', ROUTE_SELECTED, strong, ROUTE_HOVERED, lit, soft]];
+  const glow = ['*', routeAlphaExpr(), ['case', ROUTE_SELECTED, strong, ROUTE_HOVERED, lit, soft]];
+  // The route a stack row is lifting out is drawn without one — see setStackPeek.
+  return stackPeek == null ? glow : ['case', ['==', ['id'], stackPeek], 0, glow];
 };
 // The core line is nearly solid, and an activity you have made translucent
 // scales that down rather than replacing it.
@@ -4780,6 +4782,7 @@ const routeDrawLayers = () => {
   // Hidden with the rest when Activities is switched off. Not a tap target:
   // the line underneath is the one a click is about.
   if (map.getLayer('route-metric-line')) ids.push('route-metric-casing', 'route-metric-line');
+  if (map.getLayer('route-peek-line')) ids.push('route-peek-casing', 'route-peek-line');
   return ids;
 };
 
@@ -4842,6 +4845,9 @@ let rainbowColors = new Map();
 // setStackOnly, which is also where the reason it is opacity and not a filter
 // is written down.
 let stackOnly = null;
+// The route a stack row under the pointer is pointing at, drawn again on top of
+// everything — see setStackPeek.
+let stackPeek = null;
 
 function saveRoutesPref() {
   try {
@@ -6016,10 +6022,9 @@ function showRouteInfo(route, keepMetric) {
 //
 // So a tap that lands on more than one asks instead of answering. A menu at the
 // cursor, one row per activity with what it was called, when it was and how far,
-// and the card opens on whichever you pick. **Hovering a row lights its line on
-// the map**, which is what makes the list usable when six rows are the same
-// word: it is the same feature state the pointer already writes, so the
-// highlight costs nothing of ours (see setHoveredRoute).
+// and the card opens on whichever you pick. **Hovering a row lifts its line out
+// of the pile**, white on black and on top of the rest, which is what makes the
+// list usable when six rows are the same word (see setStackPeek).
 //
 // Shaped like the trails card next door — a list of named things the map is
 // offering is one idea and should not look like two — and left open after a
@@ -6103,6 +6108,31 @@ function clearStackColors() {
  */
 function setStackOnly(ids) {
   stackOnly = ids ? new Set(ids) : null;
+  repaintRouteColors();
+}
+
+/**
+ * Lift one route out of the pile, or (with null) put it back.
+ *
+ * The hover glow says "this one" well enough on a single line and not at all
+ * in a braid: the lit route stays wherever the source happens to draw it, so
+ * half of it is under its neighbours, and a brighter haze of its own colour is
+ * one more colour among eleven. So the row's route is drawn again in a source
+ * of its own, above every other route layer, white on a black casing — the one
+ * pairing no activity and no palette entry is ever given — and its glow is
+ * taken away, so the haze it would have spread does not tint the lines it is
+ * being told apart from.
+ *
+ * A source of its own rather than a sort key on the shared one: `line-sort-key`
+ * orders features inside a tile's bucket and nothing across them, and the
+ * geometry it would sort is several megabytes that a hover should not rebuild.
+ */
+function setStackPeek(route) {
+  const id = route?.id ?? null;
+  if (stackPeek === id) return;
+  stackPeek = id;
+  const src = map?.getSource?.('route-peek');
+  if (src) src.setData(route ? routesToFC([route]) : EMPTY);
   repaintRouteColors();
 }
 
@@ -6237,6 +6267,7 @@ function showRouteStack(e, found) {
       // put back.
       const borrow = () => {
         setHoveredRoute(route.id);
+        setStackPeek(route);
         if (stackSoloBefore === undefined && soloRoute == null) return;
         if (stackSoloBefore === undefined) stackSoloBefore = soloRoute;
         setSoloRoute(route.id, { keepStack: true });
@@ -6263,6 +6294,7 @@ function showRouteStack(e, found) {
     // pick, has already chosen and must not be put back by the pointer leaving.
     const was = hoveredRoute;
     setHoveredRoute(null);
+    setStackPeek(null);
     if (stackSoloBefore === undefined) return;
     const back = stackSoloBefore;
     stackSoloBefore = undefined;
@@ -6305,6 +6337,7 @@ function showRouteStack(e, found) {
     if (routeStackPopup && routeStackPopup !== popup) return;
     const was = hoveredRoute;
     setHoveredRoute(null);
+    setStackPeek(null);
     clearStackColors();
     setStackOnly(null);
     // The pointer may still have been on a row. Put back what was showing
@@ -11685,6 +11718,26 @@ function installGrid() {
       'line-width': metricWidth(1),
       'line-opacity': 1,
     },
+  }, beforeRoutes);
+  // The route a stack row is pointing at, over all of the above — the ramp
+  // included, because the row under the pointer is the question being asked
+  // and the open card's line is the previous answer. See setStackPeek. Simplified
+  // and tiled exactly as the shared source is, so it lies on its own line
+  // rather than beside it.
+  const peeked = stackPeek == null ? null : routeList.find((r) => r.id === stackPeek);
+  map.addSource('route-peek', {
+    type: 'geojson', data: peeked ? routesToFC([peeked]) : EMPTY,
+    tolerance: ROUTE_SIMPLIFY_PX, maxzoom: ROUTE_TILE_ZOOM,
+  });
+  map.addLayer({
+    id: 'route-peek-casing', type: 'line', source: 'route-peek',
+    layout: { ...lineLayout, ...groundLine },
+    paint: { 'line-color': '#000', 'line-width': metricWidth(1.6), 'line-opacity': 1 },
+  }, beforeRoutes);
+  map.addLayer({
+    id: 'route-peek-line', type: 'line', source: 'route-peek',
+    layout: { ...lineLayout, ...groundLine },
+    paint: { 'line-color': '#fff', 'line-width': metricWidth(1), 'line-opacity': 1 },
   }, beforeRoutes);
 
   // Where the trips are measured from. Off by default, and on top of the whole
