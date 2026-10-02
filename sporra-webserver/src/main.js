@@ -6000,8 +6000,7 @@ const routeAt = (point) => routesAt(point)[0] ?? null;
 
 // A tap on a route wins over the cell underneath it: you aimed at the line.
 // Isolated while the card is open. Closing the card puts the others back; the
-// chip above the map is the control that does it without closing. The stack
-// menu, if it is what did the picking, stays up.
+// chip above the map is the control that does it without closing.
 function showRouteInfo(route, keepMetric) {
   closeCellInfo();
   closePhotoInfo();
@@ -6027,9 +6026,9 @@ function showRouteInfo(route, keepMetric) {
 // list usable when six rows are the same word (see setStackPeek).
 //
 // Shaped like the trails card next door — a list of named things the map is
-// offering is one idea and should not look like two — and left open after a
-// pick, because a stack is something you go through rather than choose from
-// once.
+// offering is one idea and should not look like two. It closes on a pick: it
+// was once left open, as something you go through, and then it sat over the
+// very line and card it had just opened.
 //
 // ## Three things beyond the list itself
 //
@@ -6275,14 +6274,16 @@ function showRouteStack(e, found) {
       row.addEventListener('mouseenter', borrow);
       row.addEventListener('focus', borrow);
       row.addEventListener('click', () => {
-        // Which one you are looking at, kept on the row as well as on the map:
-        // the line is highlighted under a menu that may be covering it.
-        for (const other of items.querySelectorAll('.route-stack-row')) {
-          other.classList.toggle('picked', other === row);
-        }
-        // The pick is the new isolation. Restoring the hover's "before" would
-        // put the previous route back the moment the pointer leaves.
+        // The pick is the answer, so the menu goes. Left open, it covered the
+        // line it had just isolated and the card describing it. The next one
+        // in the pile is a tap on the same spot away, or a swipe of the pill.
+        //
+        // Closed before the card opens, not after: its `close` hands the map
+        // back to everything, and the card's isolation has to land on top of
+        // that rather than under it. Nothing to put back either — the pick is
+        // the new isolation, not the hover's borrowed one.
         stackSoloBefore = undefined;
+        closeRouteStack();
         showRouteInfo(route);
       });
       box.append(row);

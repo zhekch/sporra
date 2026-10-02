@@ -6591,14 +6591,6 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   outline-offset: -1px;
 }
 
-/* The one the card is currently open on. Fainter than a hover, because a hover
-   is happening now and this is only where you were — and it has to stay legible
-   *under* a hover, which is the state the row is in while you read the card and
-   come back for the next one. */
-.route-stack-row.picked {
-  background: rgba(255, 255, 255, 0.07);
-}
-
 .route-stack-name {
   font-weight: 600;
 }
@@ -6619,10 +6611,6 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 
 [data-theme='light'] .route-stack-row:focus-visible {
   outline-color: rgba(15, 23, 42, 0.4);
-}
-
-[data-theme='light'] .route-stack-row.picked {
-  background: rgba(15, 23, 42, 0.06);
 }
 
 [data-theme='light'] .route-stack-meta {
