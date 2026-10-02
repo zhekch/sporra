@@ -2249,6 +2249,48 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   white-space: nowrap;
 }
 
+/* On a roomy screen the graph stands beside the rows rather than under them.
+   Stacked, a 320px card was most of the way up a desktop window with the map
+   empty either side of it. Only while there is a graph: without one the card
+   is three rows, and two columns would leave the right one empty.
+
+   The graph reads its width when it is drawn, and it is drawn just after it
+   is unhidden — which is what switches this layout on, so the line is laid
+   out into the column and not into the narrow card it replaced. */
+@media (min-width: 720px) and (min-height: 560px) {
+  #route-info:has(#route-metric-graph:not([hidden])) {
+    width: min(640px, calc(100vw - 64px));
+  }
+
+  #route-info:has(#route-metric-graph:not([hidden])) .route-info-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+    grid-template-areas:
+      'head head'
+      'rows graph'
+      'actions actions';
+    column-gap: 24px;
+  }
+
+  #route-info .cell-info-head {
+    grid-area: head;
+  }
+
+  #route-info .cell-info-rows {
+    grid-area: rows;
+  }
+
+  #route-info .route-metric-graph {
+    grid-area: graph;
+    align-self: start;
+    margin-top: 0;
+  }
+
+  #route-info .route-info-actions {
+    grid-area: actions;
+  }
+}
+
 .modal-btn.danger {
   border-color: rgba(255, 122, 105, 0.55);
   background: rgba(255, 122, 105, 0.9);
