@@ -6282,9 +6282,14 @@ function showRouteStack(e, found) {
         // back to everything, and the card's isolation has to land on top of
         // that rather than under it. Nothing to put back either — the pick is
         // the new isolation, not the hover's borrowed one.
+        //
+        // Then framed, as a swipe of the pill frames the one it lands on. The
+        // pile was a few metres of shared street; the activity you picked out
+        // of it usually runs well off the screen in both directions.
         stackSoloBefore = undefined;
         closeRouteStack();
         showRouteInfo(route);
+        zoomToRoute(route);
       });
       box.append(row);
     }

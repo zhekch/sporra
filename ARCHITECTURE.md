@@ -2142,11 +2142,13 @@ the tracks really are on top of one another and zooming separates nothing. So
 more than one under the same tap opens a menu at the cursor instead: the count
 as its heading (*11 activities here*), a row each for what the activity was
 called, when it was and how far it went, and the card opens on whichever you
-pick. The pick closes it. It used to stay open, on the idea that a stack is
-something you go through, and in practice it sat over the line it had just
-isolated and the card describing it; the next one in the pile is a tap on the
-same spot away, or a swipe of the workout pill. Until that pick, every line in the pile stays
-on the map: the menu is the question, and answering it by isolating the first
+pick. The pick closes it and frames the activity, as a swipe of the workout
+pill does: the pile was a few metres of shared street, and the one picked out
+of it usually runs well off the screen. It used to stay open, on the idea that
+a stack is something you go through, and in practice it sat over the line it
+had just isolated and the card describing it; the next one in the pile is a
+tap on the same spot away, or a swipe of the pill. Until that pick, every line
+in the pile stays on the map: the menu is the question, and answering it by isolating the first
 row is how a tap on nineteen runs became one green line and a *Showing only*
 pill. MapLibre focuses the first button as the card opens (`focusAfterOpen`
 is turned off), and a phone sends `mouseenter` for whatever the finger was
