@@ -8619,8 +8619,8 @@ const setHexData = (fc) => setVecData(vecLive, fc);
 // populated at the continent level, and only exists at all on a basemap whose
 // style names a glyph server — see installGrid.
 const VEC_LAYERS = ['hex-fill', 'hex-bound-glow', 'hex-bound-line', 'hex-label'];
-// The first layer that must stay *above* the visited wash. See
-// raiseVectorLayers().
+// Continent labels stay beneath the trip track when the vector sources swap.
+// Fill and borders retain the separate wash anchor; see raiseVectorLayers().
 const VEC_ANCHOR = 'trip-glow';
 
 // Put one source's layers above the other's. crossPrev() derives the outgoing
@@ -8630,20 +8630,20 @@ const VEC_ANCHOR = 'trip-glow';
 // exact flash crossPrev exists to remove. moveLayer only reorders, it never
 // re-tiles.
 function raiseVectorLayers(sfx) {
-  // Anchored to the trip track rather than to the wash anchor. Everything added
-  // at `washBefore` after the two vector trios — the trip track, and the
-  // selection ring above it — has to stay above the visited wash; moving the
-  // wash to `washBefore` would lift it over both, and the trip you just clicked
-  // would disappear under the countries.
-  // The fallback is only reachable before `trip-glow` exists, and on Mapbox it
-  // would be a slot name rather than a layer id — which `moveLayer` would throw
-  // on, because a slot is a place to insert *into* and not a layer to sit
-  // before. Nothing to reorder at that point anyway.
-  const fallback = isSlot(vecInsertBefore) ? null : vecInsertBefore;
-  const anchor = map.getLayer(VEC_ANCHOR) ? VEC_ANCHOR : fallback;
-  if (!anchor) return;
+  // Fill and borders stay at the wash anchor: raising them to the trip track
+  // crosses the saved routes, which sit below that track, and tints their ink.
+  // With Mapbox the wash anchor is a slot sentinel, not a layer id. Moving to
+  // the end keeps the layer in its existing bottom slot and raises it above the
+  // outgoing wash without crossing into the routes' slots.
+  const washBefore = isSlot(vecInsertBefore) ? undefined : vecInsertBefore;
   for (const id of VEC_LAYERS) {
-    if (map.getLayer(`${id}${sfx}`)) map.moveLayer(`${id}${sfx}`, anchor);
+    const layer = `${id}${sfx}`;
+    if (!map.getLayer(layer)) continue;
+    // Continent labels belong over the basemap's labels, so keep their separate
+    // position beneath the trip track rather than moving them with the fill.
+    const anchor = id === 'hex-label' && map.getLayer(VEC_ANCHOR)
+      ? VEC_ANCHOR : washBefore;
+    map.moveLayer(layer, anchor);
   }
 }
 

@@ -8245,11 +8245,13 @@ fading out smoothly.
 derives the outgoing opacity on the assumption that the incoming layer
 composites *over* the outgoing one. Swap the sources without re-seating that and
 the composite sags in the middle of every crossing — the exact flash `crossPrev`
-exists to remove. It is anchored to `trip-fill`, not to the first symbol layer:
-everything inserted there after the two trios — the trip outline, the selection
-ring — has to stay above the visited wash, and anchoring to `firstSymbol` lifted
-the wash over both, so the trip you had just clicked disappeared under the
-countries. `moveLayer` only reorders; it never re-tiles.
+exists to remove. Fill and border layers are raised only to the wash anchor,
+beneath saved routes and the basemap's streets. On Mapbox they move to the end of their
+existing bottom slot. Raising them to the trip track crossed the saved routes
+and tinted activity colours whenever the region or country geometry was
+restacked. Continent labels keep their separate anchor at `trip-glow`, above
+the basemap's labels and below the trip track. `moveLayer` only reorders; it
+never re-tiles.
 
 **Warming generalised.** `warmVector` pre-tiles the first vector level on the
 live source while a blob level is showing (as before), and — new — pre-tiles the
