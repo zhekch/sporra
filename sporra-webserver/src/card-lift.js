@@ -22,8 +22,10 @@
 // notification hooked into each of them is a notification somebody forgets to
 // add to the thirteenth. Watching the cards themselves cannot drift.
 
-/** The three of them. All are `.cell-info` in the markup; the ids are the list. */
-const CARDS = ['cell-info', 'route-info', 'photo-info'];
+/** The cards that dock at the bottom. All are `.cell-info` in the markup; the ids
+ *  are the list. The last is the pile of activities, which is a card here only on
+ *  a phone — on a desktop that element is never shown, and measures 0. */
+const CARDS = ['cell-info', 'route-info', 'photo-info', 'route-stack-sheet'];
 
 /**
  * Watch the info cards, and keep `--card-h` and `body.card-open` true of them.

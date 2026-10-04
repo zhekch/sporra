@@ -2171,6 +2171,23 @@ pointer on its own and puts back whatever was showing when the pointer
 leaves. The ramp is emptied for that moment: it belongs to the open route, and
 leaving it up would paint the wrong line.
 
+**On a phone the menu is not a popup.** A popup opens where you tapped, and on a
+phone that is the middle of the screen — the card sat over the braid it was
+listing, and dragging it off by its heading was a second gesture to undo the
+first. Below the 560 px the other cards dock at, it goes into
+`#route-stack-sheet`, a `.cell-info` like the cell, route and photo cards: same
+glass, same place at the bottom, nothing to move, and listed in
+`src/card-lift.js` so the controls step over it. `routeStackSheet` answers the
+two calls the code makes of a popup, `remove()` and `on('close')`, so every path
+that closes the stack closes it too; it does not close itself on the next map
+tap the way a popup does, and needs not to, because the click handler closes the
+stack first thing. **A row there takes two taps**: the first lifts its line in
+white (the same `route-peek` as a hover) and lights the row, the second opens
+it. A finger has no hover, so without this a phone could only find out which
+line a row was by opening it. The `mouseenter` and `focus` listeners are left
+off that card for the same reason — iOS fires `mouseenter` just before the
+click, which would make every first tap look like the second.
+
 What counts as under the tap is `ROUTE_TAP_PAD_PX`: an 8-pixel box around the
 point rather than the point itself, because a hairline is hard to hit with a
 fingertip — and the same box is what finds the neighbours. The glow, much wider

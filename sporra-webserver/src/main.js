@@ -6048,6 +6048,19 @@ function showRouteInfo(route, keepMetric) {
 // three activities are three lists side by side rather than one list you scroll
 // through to find out there was a bike ride in it. On a phone, where the card is
 // most of the screen's width, it stays a single column.
+//
+// ## On a phone it is a card at the bottom, not a popup
+//
+// A popup opens where you tapped, and on a phone where you tapped is the middle
+// of the screen: the card covered the very braid it was listing, and dragging it
+// aside by its heading was a second gesture to undo the first. So there it docks
+// where the cell, route and photo cards do — same glass, same place, nothing to
+// move — and the map above it is left to show the lines.
+//
+// **And a row takes two taps.** The first lifts its line out of the pile in
+// white, the second opens it. On a desktop the hover is the first of those and
+// the click the second; a finger has no hover, so without this a phone could
+// only ever open an activity to find out which line it was.
 let routeStackPopup = null;
 
 const routeStackDay = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
@@ -6066,6 +6079,53 @@ const stackGoesWide = () => !coarsePointer.matches && window.innerWidth >= 720;
 function closeRouteStack() {
   routeStackPopup?.remove();
   routeStackPopup = null;
+}
+
+/**
+ * The pile as a card docked at the bottom of a phone — see above.
+ *
+ * Answers to the two calls the rest of this code makes of a popup, `remove()`
+ * and `on('close')`, so everything that already closes the stack closes this
+ * too. Unlike a popup it does not go away by itself on the next tap of the map;
+ * it does not need to, because the map's click handler closes the stack first
+ * thing anyway.
+ */
+function routeStackSheet(card) {
+  const el = document.getElementById('route-stack-sheet');
+  const closers = [];
+  let open = true;
+  const sheet = {
+    on(type, fn) {
+      if (type === 'close') closers.push(fn);
+      return sheet;
+    },
+    remove() {
+      // Once. The close handlers give the map back, and a second run would be
+      // doing that to whatever card has opened since.
+      if (!open) return sheet;
+      open = false;
+      el.hidden = true;
+      el.replaceChildren();
+      for (const fn of closers) fn();
+      return sheet;
+    },
+  };
+  // The heading and a close button in the row the other docked cards use. A
+  // popup brings its own ✕; this has to say it.
+  const h = card.querySelector('h4');
+  const head = document.createElement('div');
+  head.className = 'cell-info-head';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'cell-info-close';
+  close.setAttribute('aria-label', t('cell-info-close.close'));
+  close.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>';
+  close.addEventListener('click', () => closeRouteStack());
+  h.replaceWith(head);
+  head.append(h, close);
+  el.replaceChildren(card);
+  el.hidden = false;
+  return sheet;
 }
 
 /**
@@ -6218,7 +6278,16 @@ function showRouteStack(e, found) {
   // And nothing else on the map while it is open — see setStackOnly.
   setStackOnly(found.map((r) => r.id));
 
-  const wide = stackGoesWide() && groups.length > 1;
+  // Decided once, at opening. A phone turned on its side mid-card keeps the
+  // card it had rather than swapping shape under the finger.
+  const sheet = phoneMq.matches;
+  // Both of those are taking the bottom of the screen, and a card cannot be
+  // docked on top of another one.
+  if (sheet) {
+    closeCellInfo();
+    closePhotoInfo();
+  }
+  const wide = !sheet && stackGoesWide() && groups.length > 1;
   // What the columns want, and what there is room for. They are usually the
   // same number — three activities is 648 pixels of card — and where they are
   // not, the extra columns are reached by scrolling sideways rather than by a
@@ -6271,9 +6340,23 @@ function showRouteStack(e, found) {
         if (stackSoloBefore === undefined) stackSoloBefore = soloRoute;
         setSoloRoute(route.id, { keepStack: true });
       };
-      row.addEventListener('mouseenter', borrow);
-      row.addEventListener('focus', borrow);
+      // Not on the phone card. There a tap is the only way to point, and iOS
+      // fires `mouseenter` for it just before the click — which would make every
+      // first tap look like a second one.
+      if (!sheet) {
+        row.addEventListener('mouseenter', borrow);
+        row.addEventListener('focus', borrow);
+      }
       row.addEventListener('click', () => {
+        // On the phone card the first tap is the hover a finger does not have:
+        // the line goes white and the row stays lit, and only a second tap on
+        // the same row opens it. Another row's tap moves the light there.
+        if (sheet && stackPeek !== route.id) {
+          for (const lit of items.querySelectorAll('.route-stack-row.peeked')) lit.classList.remove('peeked');
+          row.classList.add('peeked');
+          borrow();
+          return;
+        }
         // The pick is the answer, so the menu goes. Left open, it covered the
         // line it had just isolated and the card describing it. The next one
         // in the pile is a tap on the same spot away, or a swipe of the pill.
@@ -6309,12 +6392,17 @@ function showRouteStack(e, found) {
   // One listener for leaving the list rather than one per row. Moving from a row
   // to the row below it *leaves* the first one, and clearing the highlight there
   // would blink the map between every pair of rows.
-  items.addEventListener('mouseleave', endStackHover);
-  items.addEventListener('focusout', (ev) => {
-    if (!items.contains(ev.relatedTarget)) endStackHover();
-  });
+  //
+  // Not on the phone card, where the light is a tap and stays until the next
+  // one: a finger lifting is not a pointer leaving.
+  if (!sheet) {
+    items.addEventListener('mouseleave', endStackHover);
+    items.addEventListener('focusout', (ev) => {
+      if (!items.contains(ev.relatedTarget)) endStackHover();
+    });
+  }
 
-  const popup = new gl.Popup({
+  const popup = sheet ? routeStackSheet(card) : new gl.Popup({
     closeButton: true,
     // MapLibre focuses the first button when the card opens, which is the
     // first activity. That focus is not a choice. `borrow` ignores it too;
@@ -6357,6 +6445,8 @@ function showRouteStack(e, found) {
     stackSoloBefore = undefined;
   });
   routeStackPopup = popup;
+  // The phone card is already on screen and stays where it is docked.
+  if (sheet) return true;
   popup.addTo(map);
   // Eleven activities is most of the window, and every one of the eleven runs
   // under it — so this is the card the handle was added for. See src/popup-drag.js.

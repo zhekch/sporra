@@ -6582,8 +6582,29 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 }
 
 .route-stack-row:hover,
-.route-stack-row:focus-visible {
+.route-stack-row:focus-visible,
+.route-stack-row.peeked {
   background: rgba(255, 255, 255, 0.12);
+}
+
+/* The row whose line the first tap lit, on the phone card — see showRouteStack.
+   Brighter than a hover, because it is a state the second tap acts on rather
+   than a passing pointer, and it has to be found again at a glance. */
+.route-stack-row.peeked {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* The pile docked at the bottom of a phone. No hover there, so the browser's
+   sticky one is turned off and only the lit row is lit. And a taller list than
+   the popup's, because this card has the width of the screen to itself and the
+   map above it is all the room the lines need — but never more than about half
+   the screen, which is the half those lines are drawn in. */
+.route-stack-sheet .route-stack-row:hover:not(.peeked) {
+  background: none;
+}
+
+.route-stack-sheet .route-stack .popup-list-items {
+  max-height: min(24em, 42dvh);
 }
 
 .route-stack-row:focus-visible {
@@ -6607,6 +6628,14 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 [data-theme='light'] .route-stack-row:hover,
 [data-theme='light'] .route-stack-row:focus-visible {
   background: rgba(15, 23, 42, 0.09);
+}
+
+[data-theme='light'] .route-stack-row.peeked {
+  background: rgba(15, 23, 42, 0.14);
+}
+
+[data-theme='light'] .route-stack-sheet .route-stack-row:hover:not(.peeked) {
+  background: none;
 }
 
 [data-theme='light'] .route-stack-row:focus-visible {
