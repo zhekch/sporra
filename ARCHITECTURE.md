@@ -8708,6 +8708,30 @@ a derived home that ignored the answer you gave when the guess was wrong would b
 worse than no derivation, and the alternative (every client sending its own home
 up with each request) is precisely the disagreement this exists to remove.
 
+### Render data for the Flutter port
+
+`GET /api/render/cells` is the first additive render endpoint. It requires a
+session and accepts `level` (0–5), `mode` (`flat`, `visits`, `oldest`, `type`),
+`accent` (six or eight digit hex), repeated `hidden` source names, and `bbox`
+(west,south,east,north in degrees; west greater than east crosses the date line).
+The client supplies appearance values from `/api/prefs`; defaults are level 0,
+flat, blue, no hidden sources, and the Mercator world.
+
+JSON contains `level`, Mercator `radius`, column names, and rows
+`[key,x,y,color,sparse]`. Centres use the canonical lattice (x in `[0,WORLD)`);
+the renderer chooses the world copy. Clients must pad their viewport for discs
+and blur. Sparse flags read neighbours outside the viewport too.
+
+`server/render.js` imports the existing rollup and colouring modules.
+`finishRollUpSteps` lives in `src/rollup.js` so palette ordering and colour
+scales remain shared; `src/blob-shaping.js` supplies the sparse test to the
+canvas and API. Scales are computed before viewport filtering, so panning
+does not recolour cells. Eight accounts and four filter/type variants per
+account bound the rollup cache; viewport changes never reread rows. The private
+ETag hashes the cell signature and every validated query input. Account deletion
+also drops the render cache. Regions, tap lookup, edits, search and file import
+are subsequent steps of the port.
+
 ### And the web app consumes them
 
 It used to derive its own, from the same modules, so the two could not drift in

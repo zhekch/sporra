@@ -84,6 +84,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeLimiter, clientIp } from './rate-limit.js';
 import * as derive from './derive.js';
+import * as render from './render.js';
 import { banner } from './banner.js';
 
 // ┌──────────────────────────────────────────────────────────────────────────┐
@@ -103,7 +104,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.129.1';
+export const SERVER_VERSION = '0.130.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -2195,6 +2196,7 @@ function deleteAccount(user) {
   // and ids are handed out by AUTOINCREMENT — but a cache that outlives its
   // account is a bug waiting for the reuse that proves it.
   derive.forget(user.id);
+  render.forget(user.id);
   const rows = Object.values(removed).reduce((a, b) => a + b, 0);
   console.log(`[visited-map] deleted account ${user.id} (${user.username}): ${rows} rows`);
   return removed;
@@ -2815,6 +2817,19 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       if (text.length > 64 * 1024) return send(res, 413, { error: 'preferences too large' });
       q.setPrefs.run(user.id, text, nowSec());
       return send(res, 200, { ok: true });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/render/cells') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      let options;
+      try { options = render.cellsOptions(query); }
+      catch (e) { return send(res, 400, { error: e.message }); }
+      mergeBakedImport(user);
+      const signature = cellsSignature(user);
+      const head = conditional(req, res, render.cellsTag(signature, options));
+      if (!head) return;
+      return send(res, 200, render.cells(user.id, signature, derivedInput(user, null), options), head);
     }
 
     if (req.method === 'GET' && pathname === '/api/cells') {

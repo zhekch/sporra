@@ -1,3 +1,4 @@
+import { sparseCell } from './blob-shaping.js';
 // Blob rendering.
 //
 // Visited cells are hexagons in storage, but nobody wants to look at a
@@ -190,17 +191,8 @@ const CELL_RADIUS = 0.9;
 // Every cell along the edge of a real blob has at least two neighbours, so the
 // floor never moves a blob. Past the point where a thing is too small to draw
 // honestly, drawing it slightly too big beats drawing nothing at all.
-const SPARSE_NEIGHBOURS = 1;
 const SPARSE_GROW = 1;
 const SPARSE_MIN_PX = 2;
-
-// The six neighbours of a cell, by column parity. Flat-top, odd-q: odd columns
-// sit half a row north, so which two rows the next column along contributes
-// depends on which parity you are standing on. Column counts are even at every
-// level by construction (see BASE_COLS), so a world copy never changes a
-// column's parity and the canonical column can be asked directly.
-const NEIGHBOURS_ODD = [[0, -1], [0, 1], [-1, 0], [-1, 1], [1, 0], [1, 1]];
-const NEIGHBOURS_EVEN = [[0, -1], [0, 1], [-1, -1], [-1, 0], [1, -1], [1, 0]];
 
 // Most discs one path is allowed before it is filled and a new one started.
 //
@@ -619,13 +611,7 @@ export function paintBlobSheet({
   // Has this cell got enough lit neighbours for the blur to leave it alone?
   // Counted on the canonical column, which is the one the keys are written in,
   // and stopped the moment the answer is no longer in doubt.
-  const sparse = (nc, row) => {
-    let n = 0;
-    for (const [dc, dr] of nc & 1 ? NEIGHBOURS_ODD : NEIGHBOURS_EVEN) {
-      if (cells.has(`${normCol(nc + dc, N)}/${row + dr}`) && ++n > SPARSE_NEIGHBOURS) return false;
-    }
-    return true;
-  };
+  const sparse = (nc, row) => sparseCell(cells, N, nc, row);
 
   // Mercator → canvas pixels (y grows north in Mercator, down on canvas).
   const px = (x) => (x - bb.xMin) * k;
@@ -946,13 +932,7 @@ export function patchBlobSheet({ buffers, stamp, cells, colorOf, changed, feathe
   // the full paint would have chosen. Clipped to the clear: the part of a
   // neighbour that was not erased is still the original disc, and painting
   // it again would composite the antialiased rim onto itself.
-  const sparse = (nc, row) => {
-    let n = 0;
-    for (const [dc, dr] of (nc & 1) ? NEIGHBOURS_ODD : NEIGHBOURS_EVEN) {
-      if (cells.has(`${normCol(nc + dc, N)}/${row + dr}`) && ++n > SPARSE_NEIGHBOURS) return false;
-    }
-    return true;
-  };
+  const sparse = (nc, row) => sparseCell(cells, N, nc, row);
   const mercX0 = bb.xMin + (clear.x - sparsePx) / k;
   const mercX1 = bb.xMin + (clear.x + clear.w + sparsePx) / k;
   const mercY1 = bb.yMax - (clear.y - sparsePx) / k;

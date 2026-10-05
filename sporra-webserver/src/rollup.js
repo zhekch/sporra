@@ -28,7 +28,7 @@
 // dated, a tally — and scripts/test/rollup.mjs holds it to the old walk.
 
 import { MAX_LEVEL, parentOf, parseCellId } from './hexgrid.js';
-import { HEAT_NEIGHBOURHOOD } from './coloring.js';
+import { HEAT_NEIGHBOURHOOD, TYPE_MAX, hotOf, ageStopsOf } from './coloring.js';
 
 const entry = (col, row, hits, time, age, cells, ids) => ({
   hits,
@@ -323,4 +323,54 @@ export function removeCell(litSets, litIndex, id, hits) {
       goneKey = null;
     }
   }
+}
+
+// Shared preparation keeps the browser and native render API on the same scales.
+export function* finishRollUpSteps(rolled, byType) {
+  const { litSets: sets, sourceCells } = rolled;
+  let order = [];
+  if (byType) {
+    // Hand out palette slots by how much of the map each source accounts for.
+    order = [...sourceCells.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([src]) => src);
+    const slot = new Map(order.map((src, i) => [src, i]));
+    let k = 0;
+    for (const lit of sets) {
+      for (const e of lit.values()) {
+        e.src = slot.get(dominantSource(e)) ?? TYPE_MAX;
+        // The tally has done its job; drop it so the entries stay small.
+        delete e.srcMap;
+        delete e.src1;
+        delete e.n1;
+        if (++k % 4096 === 0) yield;
+      }
+    }
+  }
+  rolled.sourceOrder = order;
+
+  yield* attachNeighbourhoodsSteps(sets);
+
+  rolled.litRange = [];
+  for (const lit of sets) {
+    const r = { maxHits: 1, hotHits: 2, minTime: 0, maxTime: 0, minAge: 0, maxAge: 0 };
+    r.hotHits = hotOf(lit);
+    // What the dates on this level actually look like, for the same reason
+    // `hotHits` exists: the ends of the range do not describe the middle.
+    r.ageStops = ageStopsOf(lit);
+    for (const e of lit.values()) {
+      if (e.hits > r.maxHits) r.maxHits = e.hits;
+      if (e.time) {
+        if (!r.minTime || e.time < r.minTime) r.minTime = e.time;
+        if (e.time > r.maxTime) r.maxTime = e.time;
+      }
+      if (e.age) {
+        if (!r.minAge || e.age < r.minAge) r.minAge = e.age;
+        if (e.age > r.maxAge) r.maxAge = e.age;
+      }
+    }
+    rolled.litRange.push(r);
+    yield;
+  }
+  return true;
 }
