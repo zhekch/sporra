@@ -85,6 +85,10 @@ import { fileURLToPath } from 'node:url';
 import { makeLimiter, clientIp } from './rate-limit.js';
 import * as derive from './derive.js';
 import * as render from './render.js';
+import * as renderGeo from './render-geography.js';
+import * as renderReference from './render-reference.js';
+import { expand, parseExpanded } from '../src/import-data.js';
+import localeEn from '../src/locales/en.js';
 import { banner } from './banner.js';
 
 // ┌──────────────────────────────────────────────────────────────────────────┐
@@ -104,7 +108,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.130.0';
+export const SERVER_VERSION = '0.131.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -1556,6 +1560,44 @@ function derivedFor(user) {
   return { signature: derivedSignature(user, home), supply: derivedInput(user, home) };
 }
 
+// One route write path for raw file uploads and the browser's parsed import.
+function storeImportedRoute(user, r, at) {
+  const geom = r && cleanGeom(r.geom);
+  const key = String(r?.key ?? '').slice(0, 64);
+  if (!geom || !key) {
+    return null;
+  }
+  const [minLng, minLat, maxLng, maxLat] = routeBounds(geom);
+  const points = geom.reduce((n, s) => n + s.length, 0);
+  const existed = !!q.hasRoute.get(user.id, key);
+  q.insRoute.run(
+    user.id,
+    key,
+    String(r.name ?? '').slice(0, 120) || 'Route',
+    String(r.place ?? '').slice(0, 120),
+    String(r.sport ?? '').slice(0, 40),
+    r.sportGuessed ? 1 : 0,
+    Math.max(0, Math.round(+r.elevUp || 0)),
+    String(r.source ?? 'other').slice(0, 40),
+    at,
+    Math.max(0, Math.trunc(+r.firstAt || 0)),
+    Math.max(0, Math.trunc(+r.lastAt || 0)),
+    Math.max(0, +r.lengthM || 0),
+    points,
+    minLng,
+    minLat,
+    maxLng,
+    maxLat,
+    String(r.thumb ?? '') || routeThumb(geom),
+    isKomootTourUrl(r.link) ? String(r.link).slice(0, 300) : '',
+    JSON.stringify(geom),
+    traceJson(geom, r.trace),
+  );
+  // A route already here is refreshed rather than duplicated — see
+  // insRoute — so it counts as updated, not as skipped.
+  return existed ? 'updated' : 'added';
+}
+
 // --- Routes ------------------------------------------------------------------
 // Geometry arrives from the browser already thinned out (src/routes.js), but
 // it's still client input: rebuild it here from numbers we've checked, so what
@@ -2197,6 +2239,7 @@ function deleteAccount(user) {
   // account is a bug waiting for the reuse that proves it.
   derive.forget(user.id);
   render.forget(user.id);
+  renderGeo.forget(user.id);
   const rows = Object.values(removed).reduce((a, b) => a + b, 0);
   console.log(`[visited-map] deleted account ${user.id} (${user.username}): ${rows} rows`);
   return removed;
@@ -2819,6 +2862,128 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       return send(res, 200, { ok: true });
     }
 
+    if (req.method === 'GET' && ['/api/render/style', '/api/render/reference'].includes(pathname)) {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      try {
+        const data = pathname.endsWith('/style') ? await renderReference.style(query.get('name')) : renderReference.reference(query.get('kind'), selfOrigin(req));
+        const tag = 'reference:' + createHash('sha1').update(JSON.stringify(data)).digest('base64url');
+        const head = conditional(req, res, tag);
+        if (!head) return;
+        return send(res, 200, data, head);
+      } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+
+    if (req.method === 'GET' && ['/api/render/regions', '/api/render/at', '/api/search', '/api/locale/en'].includes(pathname)) {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      mergeBakedImport(user);
+      const { signature, supply } = derivedFor(user);
+      const tag = 'render:' + createHash('sha1').update(JSON.stringify([signature, pathname, [...query]])).digest('base64url');
+      if (pathname === '/api/locale/en') {
+        const head = conditional(req, res, 'locale:' + SERVER_VERSION);
+        if (!head) return;
+        return send(res, 200, localeEn, head);
+      }
+      let options, point, level;
+      try {
+        if (pathname === '/api/render/regions') {
+          level = Number(query.get('level') ?? 6);
+          if (!Number.isInteger(level) || level < 6 || level > 8) throw new Error('region level must be 6–8');
+          const plain = new URLSearchParams(query); plain.set('level', '0');
+          options = { ...render.cellsOptions(plain), level };
+        }
+        if (pathname === '/api/render/at') {
+          point = renderGeo.coordinate(query.get('lng'), query.get('lat'));
+          const zoom = Number(query.get('zoom') ?? 13.6);
+          if (!Number.isFinite(zoom)) throw new Error('invalid zoom');
+          level = query.has('level') ? Number(query.get('level')) : Math.min(8, Math.max(0, Math.ceil((13.6 - zoom) / Math.log2(3) - 1e-9)));
+          if (!Number.isInteger(level) || level < 0 || level > 8) throw new Error('invalid level');
+        }
+      } catch (e) { return send(res, 400, { error: e.message }); }
+      const head = conditional(req, res, tag);
+      if (!head) return;
+      if (pathname === '/api/render/regions') return send(res, 200, await renderGeo.regions(renderGeo.inputFor(user.id, signature, supply), options), head);
+      if (pathname === '/api/render/at') return send(res, 200, await renderGeo.at(renderGeo.inputFor(user.id, signature, supply), ...point, level, query.getAll('hidden')), head);
+      const trips = await derive.trips(user.id, signature, supply);
+      return send(res, 200, { results: await renderGeo.search(query.get('q'), supply().routes, trips.trips) }, head);
+    }
+
+    if (req.method === 'POST' && ['/api/render/brush', '/api/render/region-clear'].includes(pathname)) {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      const body = await readBody(req, 512 * 1024);
+      mergeBakedImport(user);
+      const input = derivedInput(user, null)();
+      let add = [], remove = [];
+      try {
+        if (pathname.endsWith('brush')) {
+          const ids = renderGeo.brush(body);
+          if (body.action === 'paint') add = ids.filter(id => !input.cellMeta.has(id));
+          else remove = renderGeo.storedForBrush(input, ids);
+        } else {
+          const point = renderGeo.coordinate(body.lng, body.lat);
+          remove = await renderGeo.regionClear(input, ...point);
+          if (remove.length > MAX_CELLS_PER_MUTATE) throw new Error('region exceeds 50000 cells');
+        }
+      } catch (e) { return send(res, 400, { error: e.message }); }
+      const rows = remove.flatMap(id => (input.cellMeta.get(id) ?? []).map(m => [id, m.source, m.addedAt, m.firstAt, m.lastAt, m.hits, m.fixes]));
+      if (rows.length > MAX_CELLS_PER_MUTATE) return send(res, 400, { error: 'too many provenance rows to undo' });
+      const at = nowSec();
+      db.exec('BEGIN');
+      try {
+        for (const id of remove) q.delCell.run(user.id, id);
+        for (const id of add) q.touchRow.run(user.id, id, 'manual', at);
+        db.exec('COMMIT');
+      } catch (e) { db.exec('ROLLBACK'); throw e; }
+      return send(res, 200, { ok: true, total: cellCount(user), signature: cellsSignature(user), undo: { remove: add, rows } });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/import/file') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      if (bigRequestsInFlight >= MAX_BIG_REQUESTS) return send(res, 503, { error: 'Busy importing something else — try again.' });
+      bigRequestsInFlight++;
+      try {
+        const body = await readBody(req, BIG_BODY_LIMIT);
+        if (typeof body.name !== 'string' || (typeof body.text !== 'string' && typeof body.base64 !== 'string')) return send(res, 400, { error: 'name and text or base64 are required' });
+        const bytes = typeof body.text === 'string' ? Buffer.from(body.text) : Buffer.from(body.base64, 'base64');
+        let files;
+        try { files = await expand({ name: body.name.slice(0,200), arrayBuffer: async () => bytes }); }
+        catch (e) { return send(res, 400, { error: e.message }); }
+        if (files.items.length > MAX_ROUTES_PER_REQUEST || files.items.reduce((n,f) => n + f.bytes.length,0) > 64*1024*1024) return send(res, 400, { error: 'expanded archive is too large' });
+        const groups = new Map();
+        for (const file of files.items) {
+          let parsed;
+          try { parsed = parseExpanded(file.name, file.bytes); }
+          catch (e) { return send(res, 400, { error: e.message }); }
+          if (parsed.error) return send(res, 400, { error: parsed.error });
+          const source = String(body.source ?? files.source ?? parsed.source ?? 'other').slice(0,40);
+          let group = groups.get(source);
+          if (!group) groups.set(source, group = { points: [], tracks: [] });
+          for (const point of parsed.points) group.points.push(point);
+          for (const track of parsed.tracks) group.tracks.push(track);
+        }
+        const batches = [...groups].map(([source, group]) => ({ source, cells: pointsToCells(group.points), routes: buildRoutes(group.tracks, { source, fileName: body.name }) }));
+        const imported = batches.reduce((n,b) => n + b.cells.length,0);
+        if (!imported || imported > MAX_CELLS_PER_IMPORT) return send(res, 400, { error: imported ? 'too many cells' : 'No locations in this file.' });
+        let routeCount = 0;
+        const at = nowSec();
+        db.exec('BEGIN');
+        try {
+          for (const {source,cells,routes} of batches) {
+            for (const c of cells) {
+              q.upsertRow.run(user.id, c.id, source, at, c.first, c.last, c.hits, c.fixes);
+              clearPlaceholders(user.id, c.id, source);
+            }
+            for (const route of routes) if (storeImportedRoute(user, route, at)) routeCount++;
+          }
+          db.exec('COMMIT');
+        } catch (e) { db.exec('ROLLBACK'); throw e; }
+        return send(res, 200, { ok: true, imported, routes: routeCount, sources: [...groups.keys()], total: cellCount(user) });
+      } finally { bigRequestsInFlight--; }
+    }
+
     if (req.method === 'GET' && pathname === '/api/render/cells') {
       const user = currentUser(req);
       if (!user) return send(res, 401, { error: 'not authenticated' });
@@ -3053,42 +3218,10 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
         // so these chunks are much smaller than the cell ones.
         await chunked(body.routes, (slice) => {
           for (const r of slice) {
-            const geom = r && cleanGeom(r.geom);
-            const key = String(r?.key ?? '').slice(0, 64);
-            if (!geom || !key) {
-              skipped++;
-              continue;
-            }
-            const [minLng, minLat, maxLng, maxLat] = routeBounds(geom);
-            const points = geom.reduce((n, s) => n + s.length, 0);
-            const existed = !!q.hasRoute.get(user.id, key);
-            q.insRoute.run(
-              user.id,
-              key,
-              String(r.name ?? '').slice(0, 120) || 'Route',
-              String(r.place ?? '').slice(0, 120),
-              String(r.sport ?? '').slice(0, 40),
-              r.sportGuessed ? 1 : 0,
-              Math.max(0, Math.round(+r.elevUp || 0)),
-              String(r.source ?? 'other').slice(0, 40),
-              at,
-              Math.max(0, Math.trunc(+r.firstAt || 0)),
-              Math.max(0, Math.trunc(+r.lastAt || 0)),
-              Math.max(0, +r.lengthM || 0),
-              points,
-              minLng,
-              minLat,
-              maxLng,
-              maxLat,
-              String(r.thumb ?? '') || routeThumb(geom),
-              isKomootTourUrl(r.link) ? String(r.link).slice(0, 300) : '',
-              JSON.stringify(geom),
-              traceJson(geom, r.trace),
-            );
-            // A route already here is refreshed rather than duplicated — see
-            // insRoute — so it counts as updated, not as skipped.
-            if (existed) updated++;
-            else added++;
+            const result = storeImportedRoute(user, r, at);
+            if (result === 'updated') updated++;
+            else if (result === 'added') added++;
+            else skipped++;
           }
         });
         return send(res, 200, { ok: true, added, updated, skipped, total: routeCount(user) });
@@ -3268,7 +3401,8 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       if (!row) return send(res, 400, { error: 'Save your Strava app details first.' });
       const origin = selfOrigin(req);
       if (!origin) return send(res, 400, { error: 'Could not work out this server’s address.' });
-      const state = randomBytes(16).toString('hex');
+      const body = await readBody(req);
+      const state = (body.native === true ? 'flutter-' : '') + randomBytes(16).toString('hex');
       q.setStravaState.run(state, user.id);
       return send(res, 200, {
         url: strava.authorizeUrl({
@@ -3282,11 +3416,11 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
     // Strava sends the browser here. This is a navigation, not a fetch, so it
     // answers with a redirect back to the map either way.
     if (req.method === 'GET' && pathname === '/api/strava/callback') {
+      const state = query.get('state') ?? '';
       const back = (result) => {
-        res.writeHead(302, { Location: `/?strava=${result}` });
+        res.writeHead(302, { Location: state.startsWith('flutter-') ? `sporra-flutter://oauth?strava=${result}` : `/?strava=${result}` });
         res.end();
       };
-      const state = query.get('state') ?? '';
       const row = state && q.stravaByState.get(state);
       if (!row) return back('badstate');
       if (query.get('error')) {

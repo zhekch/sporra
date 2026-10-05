@@ -1,3 +1,5 @@
+import { summarizeCells } from './cell-info-data.js';
+import { areaGeometry, mergeAreas, tallyAreas, areaFeatures } from './area-render.js';
 import './style.css';
 import {
   MAX_LEVEL,
@@ -2959,47 +2961,14 @@ let areaTalliesGen = -1;
 // more than for the map: picking Countries as the detail while the picture is
 // of one country draws a shape four pixels per vertex across, and the seam
 // against the mask around it is the first thing you see.
-function areaGeometry(kind, id, fine) {
-  if (kind === 'continent') return continentGeometry(id);
-  const country = id.startsWith(WHOLE_COUNTRY) ? id.slice(WHOLE_COUNTRY.length) : null;
-  if (country) return sharpCountry(country, fine);
-  return kind === 'region' ? regionGeometry(id, fine) : sharpCountry(id, fine);
-}
 
-const sharpCountry = (id, fine) =>
-  (fine ? fineCountryOutline(countryIso(id)) : null) ?? countryGeometry(id);
+
+
 
 // Dissolve the lit areas into one shape. Countries and continents go straight to
 // their own merge; regions may include whole-country stand-ins, so those are
 // collected separately and unioned with the rest.
-function mergeAreas(kind, litIds, fine) {
-  if (kind === 'continent') return mergeContinents(litIds);
-  if (kind !== 'region') {
-    if (!fine) return mergeCountries(litIds);
-    // Same dissolve, over the sharper outlines where they have been fetched.
-    // Done here rather than inside mergeCountries so that countries.js does not
-    // have to know that regions exist.
-    const geoms = [];
-    for (const id of litIds) {
-      const g = sharpCountry(id, true);
-      if (g) geoms.push(asMulti(g));
-    }
-    return geoms.length ? unionGeometries(geoms) : { fill: [], rings: [] };
-  }
-  const plain = new Set();
-  const extra = [];
-  for (const id of litIds) {
-    if (id.startsWith(WHOLE_COUNTRY)) {
-      const g = countryGeometry(id.slice(WHOLE_COUNTRY.length));
-      if (g) extra.push(asMulti(g));
-    } else {
-      plain.add(id);
-    }
-  }
-  if (!extra.length) return mergeRegions(plain, fine);
-  const merged = mergeRegions(plain, fine);
-  return unionGeometries([...(merged.fill.length ? [merged.fill] : []), ...extra]);
-}
+
 
 /**
  * @param {'region'|'country'|'continent'} kind
@@ -3048,7 +3017,7 @@ function buildAreaFC(kind, { fine = false, mode = heatMode, record = true } = {}
     areaTalliesGen = areaGen;
   }
   const tallyKey = `${kind}|${byType ? 'type' : 'plain'}`;
-  const { litIds, perArea, countriesIn } = areaTallies.get(tallyKey) ?? tallyAreas(kind, byType);
+  const { litIds, perArea, countriesIn } = areaTallies.get(tallyKey) ?? tallyAreas(kind, byType, { sourceOrder, visibleCells, areaOfCellMemo, cellStatsOf });
   areaTallies.set(tallyKey, { litIds, perArea, countriesIn });
 
   // Recorded before the heat branch, which returns without reaching the merge:
@@ -3065,102 +3034,11 @@ function buildAreaFC(kind, { fine = false, mode = heatMode, record = true } = {}
 }
 
 // The pass over every stored cell that buildAreaFC's result is built from.
-function tallyAreas(kind, byType) {
-  const isContinentKind = kind === 'continent';
-  const slotOf = byType ? new Map(sourceOrder.map((src, i) => [src, i])) : null;
-  const litIds = new Set();
-  // Continent → the countries in it you have been to. The count is the whole
-  // point of the level; the set is what makes it a count of countries rather
-  // than of cells that happen to be in them.
-  const countriesIn = isContinentKind ? new Map() : null;
-  const perArea = new Map(); // id → rolled-up stats, for the heat maps
-  // `visibleCells`, not `visited`: a source switched off in the Type legend is
-  // off the whole map, so it cannot be what lights a region either — a country
-  // nothing visible remains in is a country you have not been to as far as this
-  // picture is concerned. The two are the same Set unless something is hidden.
-  for (const id of visibleCells) {
-    const cid = areaOfCellMemo(kind, id);
-    if (!cid) continue;
-    if (isContinentKind) {
-      const country = areaOfCellMemo('country', id);
-      let seen = countriesIn.get(cid);
-      if (!seen) countriesIn.set(cid, (seen = new Set()));
-      seen.add(country);
-    }
-    litIds.add(cid);
-    const stat = cellStatsOf(id, byType);
-    let e = perArea.get(cid);
-    // `near` stays 0: a whole region is its own neighbourhood, so it is read on
-    // its own count rather than against the ring of hexes around it.
-    if (!e) perArea.set(cid, (e = { hits: 0, time: 0, age: 0, near: 0, srcN: new Map() }));
-    e.hits += stat.hits;
-    if (stat.time > e.time) e.time = stat.time;
-    if (stat.age && (!e.age || stat.age < e.age)) e.age = stat.age;
-    // A whole country is colored by whichever app covers the most of it — by
-    // ground, not by visits, which is the question the country level answers.
-    if (byType && stat.own) {
-      const src = slotOf.get(stat.own) ?? TYPE_MAX;
-      e.srcN.set(src, (e.srcN.get(src) ?? 0) + 1);
-    }
-  }
-  for (const e of perArea.values()) {
-    let best = TYPE_MAX;
-    let bestN = -1;
-    for (const [src, n] of e.srcN ?? []) {
-      if (n > bestN || (n === bestN && src < best)) {
-        best = src;
-        bestN = n;
-      }
-    }
-    e.src = best;
-  }
-  return { litIds, perArea, countriesIn };
-}
+
 
 // The features for a tallied set of areas: one per area in a heat mode, the
 // lit areas dissolved into one shape otherwise.
-function areaFeatures(kind, mode, fine, litIds, perArea, labels, heat) {
-  if (heat) {
-    const range = {
-      maxHits: 1,
-      hotHits: hotOf(perArea),
-      // Areas get their own ladder: a country's first-seen is the earliest of
-      // everything inside it, so a hundred countries spread quite differently
-      // from the twenty thousand cells they are made of.
-      ageStops: ageStopsOf(perArea),
-      minTime: 0, maxTime: 0, minAge: 0, maxAge: 0,
-    };
-    for (const e of perArea.values()) {
-      if (e.hits > range.maxHits) range.maxHits = e.hits;
-      if (e.time) {
-        if (!range.minTime || e.time < range.minTime) range.minTime = e.time;
-        if (e.time > range.maxTime) range.maxTime = e.time;
-      }
-      if (e.age) {
-        if (!range.minAge || e.age < range.minAge) range.minAge = e.age;
-        if (e.age > range.maxAge) range.maxAge = e.age;
-      }
-    }
-    const features = [];
-    for (const [id, stat] of perArea) {
-      const geometry = areaGeometry(kind, id, fine);
-      if (geometry) {
-        features.push({ type: 'Feature', properties: { k: 1, v: heat(stat, range) }, geometry });
-      }
-    }
-    return { type: 'FeatureCollection', features: [...features, ...labels] };
-  }
 
-  const { fill, rings } = mergeAreas(kind, litIds, fine);
-  const features = [];
-  if (fill.length) {
-    features.push({ type: 'Feature', properties: { k: 1 }, geometry: { type: 'MultiPolygon', coordinates: fill } });
-  }
-  if (rings.length) {
-    features.push({ type: 'Feature', properties: { k: 2 }, geometry: { type: 'MultiLineString', coordinates: rings } });
-  }
-  return { type: 'FeatureCollection', features: [...features, ...labels] };
-}
 
 /**
  * One label per lit continent: its name, and how many of its countries you have
@@ -4326,31 +4204,7 @@ const cellSizeLabel = (level) =>
 // Roll the dates and counts of a set of stored cells into one summary. Taken by
 // the cell card and by the region/country card, which differ only in how they
 // decide which cells to ask about.
-function rollUpIds(ids) {
-  let addedAt = 0;
-  let firstAt = 0;
-  let lastAt = 0;
-  let hits = 0;
-  const earlier = (a, b) => (b && (!a || b < a) ? b : a); // 0 means "unknown"
-  for (const id of ids) {
-    for (const m of cellMeta.get(id) ?? []) {
-      // Only imported data has a meaningful count — a hand-marked cell carries
-      // a placeholder 1 that would be nonsense to show.
-      if (m.source !== 'manual' && m.source !== 'unknown') hits += m.hits || 0;
-      addedAt = earlier(addedAt, m.addedAt);
-      firstAt = earlier(firstAt, m.firstAt);
-      lastAt = Math.max(lastAt, m.lastAt || 0);
-    }
-  }
-  // Neither `fixes` nor the per-source breakdown is rolled up. Both are still
-  // stored — the import, sync and Sources screens report them — but as facts
-  // about a place they answer questions about the recording rather than about
-  // where you were: how often a recorder sampled, and which app was running.
-  // The number of cells is not rolled up either, and for the same reason: it
-  // was a count of the storage's own units, and the card that used to lead with
-  // it says how much ground and how much of the place instead.
-  return { hits, addedAt, firstAt, lastAt };
-}
+const rollUpIds = (ids) => summarizeCells(ids, cellMeta);
 
 function gatherInfo(L, col, row) {
   const ids = storedUnder(L, col, row);

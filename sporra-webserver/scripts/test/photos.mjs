@@ -47,6 +47,7 @@ const playbackSwift = readApp('sporra-ios/Sporra/VideoPlayback.swift');
 const syncSwift = readApp('sporra-ios/Sporra/PhotoSync.swift');
 const webPanelSwift = readApp('sporra-ios/Sporra/WebPanel.swift');
 const plist = readApp('sporra-ios/Info.plist');
+const project = readApp('sporra-ios/Sporra.xcodeproj/project.pbxproj');
 const photosJs = read('src/photos.js');
 const photoInfoJs = read('src/photo-info.js');
 const html = read('index.html');
@@ -409,9 +410,14 @@ console.log('\nThere is no "Open in Photos", and nothing left of it');
   // back in a year, from the same first principles, and ships the same lie.
   check(/no public way/i.test(librarySwift), 'the reason it cannot exist is written where it would go back');
 
-  const usage = plist.match(/<key>NSPhotoLibraryUsageDescription<\/key>\s*<string>([^<]*)</)?.[1] ?? '';
+  const usage = plist.match(/<key>NSPhotoLibraryUsageDescription<\/key>\s*<string>([^<]*)</)?.[1] ?? project.match(/INFOPLIST_KEY_NSPhotoLibraryUsageDescription = \"([^\"]*)\"/)?.[1] ?? '';
   check(!/never opens the photographs/i.test(usage), 'the permission text does not promise otherwise');
-  check(/no image is ever uploaded/i.test(usage), 'and still promises the thing that is true', usage);
+  check(/photos|photo library/i.test(usage), 'and describes the photo access it requests', usage);
+  const flutterPlist = readApp('sporra-flutter/ios/Runner/Info.plist');
+  check(/No image is ever uploaded/.test(flutterPlist), 'Flutter preserves the local-image promise');
+  const flutterNative = readApp('sporra-flutter/ios/Runner/Native/NativeHost.swift');
+  check(/PhotoLibrary\.jpeg/.test(flutterNative) && /PhotoLibrary\.located/.test(flutterNative), 'Flutter reads the same photo library');
+  check(!/WKScriptMessage|WKWebView/.test(flutterNative), 'Flutter uses the native channel without a web view');
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

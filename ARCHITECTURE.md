@@ -8729,8 +8729,29 @@ canvas and API. Scales are computed before viewport filtering, so panning
 does not recolour cells. Eight accounts and four filter/type variants per
 account bound the rollup cache; viewport changes never reread rows. The private
 ETag hashes the cell signature and every validated query input. Account deletion
-also drops the render cache. Regions, tap lookup, edits, search and file import
-are subsequent steps of the port.
+also drops the render cache.
+
+The Flutter preview adds `/api/render/regions` (levels 6–8), `/api/render/at`,
+`/api/search`, `/api/render/reference` and `/api/render/style`. Region responses
+contain the lit areas as GeoJSON. Shared `area-render.js`, `cell-info-data.js`
+and `search-data.js` keep browser and server rules together. Native rail styles
+resolve global-state expressions before reaching MapLibre iOS.
+
+`POST /api/render/brush` and `/api/render/region-clear` apply bounded edits in
+one transaction and return removed provenance rows and added keys for undo.
+`POST /api/import/file` accepts text or base64 binary input; shared
+`import-data.js` expands archives and parses text/FIT, then saves cells and
+routes in one transaction. Native Strava authorization uses a one-shot server
+state and the `sporra-flutter` callback scheme.
+
+`sporra-flutter/` contains the Flutter preview and a Pigeon Swift bridge. Swift
+owns CoreLocation, HealthKit, local photo indexing and the shared cookie jar;
+background launches do not start Flutter. Dart fetches server-derived cells,
+paints a Mercator image through the cut shader and crossfades MapLibre image
+sources. Golden vectors generated from the browser pin the alpha curves.
+Native maps, menus, edits, import, photos and account flows are implemented;
+advanced exports and complete UI parity are still pending. See its README for
+simulator installation and verification.
 
 ### And the web app consumes them
 

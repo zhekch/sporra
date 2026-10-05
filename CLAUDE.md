@@ -9,12 +9,13 @@ happens](#where-work-happens).
 
 ## Layout
 
-Three folders under one repo root, and the repo root is not any of them:
+Four folders under one repo root, and the repo root is not any of them:
 
 - **`sporra-webserver/`** — the web app and its Node/SQLite server. **npm runs
   here, not at the root**: `package.json`, `node_modules/`, `data.db` and the
   test suite all live inside this folder.
 - **`sporra-ios/`**, **`sporra-macos/`** — the two native apps.
+- **`sporra-flutter/`** — the Flutter iOS preview and its Swift bridge.
 
 `ARCHITECTURE.md`, `CLAUDE.md` and `LICENSE` sit at the root because they
 describe all three. Paths in this file are written from the root.
@@ -126,6 +127,9 @@ would tread on each other.
     *which build am I looking at* — a Mac that borrowed the phone's number
     would answer a question nobody asked. A change to only one project moves
     only that project's version.
+- Flutter versions live in `sporra-flutter/pubspec.yaml`; run `flutter analyze`
+  and `flutter test` after changes to that app. Regenerate its golden vectors
+  with `node sporra-flutter/Tools/gen-blob-vectors.mjs` after shaping changes.
 - **Never commit personal data.** `sporra-webserver/data.db`,
   `sporra-webserver/import/*` and `sporra-webserver/src/imported-cells.json`
   are real location history and are gitignored — check `git status` before

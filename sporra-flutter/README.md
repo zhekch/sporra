@@ -1,0 +1,48 @@
+# Sporra Preview
+
+The Flutter iOS preview lives here. It installs alongside the original Sporra
+app and connects to your Sporra server. Use server version **0.131.0 or newer**.
+Open `ios/Runner.xcworkspace` for the native project; Flutter development starts
+at `lib/main.dart`.
+
+## Install on an iOS simulator
+
+Install Flutter and Xcode, start an iOS simulator, then run from this folder:
+
+```sh
+./Tools/install-simulator.sh
+```
+
+You can pass a simulator UUID as the first argument. The script uses the selected Xcode installation; set `DEVELOPER_DIR` to use
+another installation.
+Sign in with your server URL and existing account. For a server running on this
+Mac, use `http://127.0.0.1:PORT`. Map tiles require internet access.
+
+## Preview scope
+
+The preview includes account sign-in/registration, native maps and visited
+blobs, region fills, routes, search, trips, statistics, paint/erase with undo,
+file imports, local photo browsing, tracking and sync settings, Strava and
+Home Assistant setup, snapshots, and backup sharing for administrators.
+The Swift bridge owns location, HealthKit, photo indexing, cookies and uploads.
+Photo thumbnails remain on the device.
+
+This is an early port. Advanced export layouts, Komoot setup, account deletion,
+full administration, fine boundary geometry and complete visual/localization
+parity still need work. Simulator location, HealthKit and photo availability
+are limited by the simulator's configured data.
+
+## Verify
+
+```sh
+flutter analyze
+flutter test
+```
+
+The integration test additionally needs a disposable server at port 3209 with
+registration enabled. It creates a test account and exercises authentication,
+render data, edits and undo, menus, session restoration and sign-out. Never run
+it against a personal database.
+
+Physical-device builds require your Apple signing team and provisioning profile
+in Xcode. The preview uses bundle ID `com.zhekch.sporra.flutter`.

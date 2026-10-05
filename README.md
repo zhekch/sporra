@@ -7,17 +7,19 @@ reads as spilled ink rather than a spreadsheet.
 
 Point it at your location history and it fills itself in.
 
-## The three pieces
+## The projects
 
 | | |
 |---|---|
 | **[sporra-webserver/](sporra-webserver/README.md)** | The web app and its Node/SQLite server. This is the product; the other two are ways to carry it. |
 | **[sporra-ios/](sporra-ios/README.md)** | An iPhone app that hosts the web app in a web view and adds the one thing a browser cannot do: record where you have been with the screen off. |
+| **[sporra-flutter/](sporra-flutter/README.md)** | An installable iOS simulator preview with Flutter menus and a native map. |
 | **[sporra-macos/](sporra-macos/README.md)** | The same program on a Mac. Its README is written as a diff against the iOS one, because the places the two differ are the only interesting part. |
 
-They live in one repo because they are one program. The apps are web views over
-the same site, the Swift hex-grid maths in `SporraCore` is checked against the
-JavaScript that defines it, and a change to the shape of the app usually lands
+They live in one repo because they share the same server. The original apps
+are web views over the same site; the Flutter preview uses native screens.
+The Swift hex-grid maths in `SporraCore` is checked against the JavaScript that
+defines it. A change to the shape of the app usually lands
 in more than one folder at once.
 
 ## Just want to run it?
@@ -36,9 +38,7 @@ empty database is always allowed**, and registration closes itself afterwards.
 [sporra-webserver/README.md](sporra-webserver/README.md) covers running it
 for real, getting your location history in, and the configuration.
 
-Nothing in the two app folders is needed to run the server, and nothing there is
-downloaded separately — together they are about 450 KB, next to the ~18 MB of
-map data the server itself ships with.
+The app folders are optional when running the server.
 
 ## Working on it rather than using it?
 

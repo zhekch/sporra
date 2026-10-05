@@ -1,0 +1,373 @@
+// `AVKit` for the video player, `UIKit` for the JPEG encoder and for the window
+// the player is put in front of, `Photos` for everything else here.
+import AVKit
+import CoreLocation
+import Foundation
+import Photos
+import UIKit
+
+/// Lets exactly one caller through, and tells it so.
+///
+/// For the one hazard `withCheckedContinuation` has: resuming twice is a crash,
+/// not a second answer, and `PHImageManager` will call a result handler more
+/// than once for some combinations of options. A captured `var` would say the
+/// same thing in fewer lines and is precisely the thing stricter concurrency
+/// checking refuses, so the flag is given a lock and a name instead.
+private nonisolated final class Latch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var closed = false
+
+    func close() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if closed { return false }
+        closed = true
+        return true
+    }
+}
+
+/// Reading the photo library — the only place in this app that opens `Photos`.
+///
+/// Two things want it and they want different amounts of it. ``PhotoSync`` sends
+/// the coordinates to the server and never needs to know which photograph a
+/// coordinate came from. ``PhotoBridge`` draws them on the map, where tapping a
+/// point has to produce the picture — so it needs the asset's identity kept.
+///
+/// The enumeration used to live inside the uploader, which was right while it
+/// was the only caller. It is here now so that "what counts as a geotagged
+/// photo" is answered once: a filter that disagreed between the two would put a
+/// point on the map the sync did not count, or the other way about, and nothing
+/// would say which was wrong.
+///
+/// ## `nonisolated`, and it has to be
+///
+/// This target builds with `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, so
+/// everything unannotated here would be main-actor isolated — including the walk
+/// over the whole library. `PhotoBridge` runs that walk inside a
+/// `Task.detached` precisely so a map on screen does not freeze for a second
+/// while it happens, and without this keyword the hop back to the main actor
+/// would undo exactly that, silently. The compiler does say so, as a warning
+/// today and an error under the Swift 6 language mode.
+///
+/// The two members that touch `UIApplication` are annotated back, because those
+/// genuinely do belong to the main actor.
+nonisolated enum PhotoLibrary {
+
+    /// One photograph, as much of it as leaves this file.
+    struct Located {
+        /// `PHAsset.localIdentifier`. Never crosses the bridge to the page — see
+        /// the note on ``PhotoBridge``.
+        let id: String
+        let lat: Double
+        let lng: Double
+        /// Unix seconds. A photo with no date is dropped rather than dated now.
+        let t: Int
+        /// Whether it moves. The map draws it the same either way; the card
+        /// offers it a play button, and playing it happens over here — see
+        /// ``play(id:)``.
+        let isVideo: Bool
+    }
+
+    /// The most photographs either caller will look at.
+    ///
+    /// Matches `MAX_PHOTO_FIXES` on the server, and the map's own ceiling is the
+    /// same number deliberately: a library that reached the map but not the
+    /// server, or the reverse, would be two different answers to "where have you
+    /// taken a picture" with nothing to say which one to believe.
+    static let ceiling = 200_000
+
+    static var authorization: PHAuthorizationStatus {
+        // `.readWrite` is the *read* level — Photos has no read-only one, and
+        // this app never writes. `.addOnly` is the write-only level, which is
+        // the opposite of what is wanted.
+        PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    }
+
+    /// Whether the library can be read at all. `.limited` counts: it is a
+    /// smaller library rather than a closed one, and the map says so out loud.
+    static var isReadable: Bool {
+        authorization == .authorized || authorization == .limited
+    }
+
+    /// Ask, once, and wait for the answer.
+    ///
+    /// The map overlay asks for itself rather than leaning on the sync switch:
+    /// looking at your photographs on a map and uploading where they were taken
+    /// are two different decisions, and someone who has made only the first one
+    /// should still get an overlay.
+    @discardableResult
+    static func authorize() async -> PHAuthorizationStatus {
+        if authorization != .notDetermined { return authorization }
+        return await withCheckedContinuation { continuation in
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+                continuation.resume(returning: status)
+            }
+        }
+    }
+
+    /// Every asset that knows where it was, newest first.
+    ///
+    /// Newest first so a library over the ceiling loses its oldest corner rather
+    /// than its most recent decade. There is no predicate for "has a location" —
+    /// `PHAsset.location` is not a queryable property — so the filter is the
+    /// loop, which is also why this reads the whole library however few photos
+    /// carry a coordinate.
+    ///
+    /// It is still fast: `location` and `creationDate` are metadata, so nothing
+    /// here opens an image, asks for image data or touches iCloud. Eighty
+    /// thousand photographs take a second or two because this is a database
+    /// query rather than a file walk.
+    ///
+    /// Videos are in it, marked. A video knows where it was taken exactly as a
+    /// photograph does, so it is a point on the map for the same reason and
+    /// evidence for the uploader for the same reason. What differs is only what
+    /// tapping it does — see ``play(id:)``.
+    static func located(limit: Int = ceiling) -> [Located] {
+        let options = PHFetchOptions()
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        options.includeHiddenAssets = false
+        let assets = PHAsset.fetchAssets(with: options)
+
+        var out: [Located] = []
+        out.reserveCapacity(min(assets.count, 4096))
+        assets.enumerateObjects { asset, _, stop in
+            guard let where_ = asset.location else { return }
+            let c = where_.coordinate
+            guard CLLocationCoordinate2DIsValid(c), c.latitude != 0 || c.longitude != 0 else { return }
+            // A photo with no date is a photo that could have been taken any
+            // time, and a visit with no date is not a visit — the server counts
+            // stays by the clock. `modificationDate` is not a fallback: it is
+            // when the file was edited, which is a fact about the file.
+            guard let taken = asset.creationDate else { return }
+            out.append(Located(
+                id: asset.localIdentifier,
+                // Five decimals is about a metre, which is finer than any
+                // camera's fix and coarser than the file it came from. The map
+                // and the server are handed the same rounding for the same
+                // reason: it is the precision the number actually has.
+                lat: (c.latitude * 1e5).rounded() / 1e5,
+                lng: (c.longitude * 1e5).rounded() / 1e5,
+                t: Int(taken.timeIntervalSince1970),
+                isVideo: asset.mediaType == .video
+            ))
+            if out.count >= limit { stop.pointee = true }
+        }
+        return out
+    }
+
+    /// One photograph as JPEG bytes, at most `px` on its longest side.
+    ///
+    /// This is the one call in the app that opens an image, and it happens only
+    /// when a point on the map has been tapped. `isNetworkAccessAllowed` is on
+    /// because a photo from four years ago is usually not on the phone any more
+    /// — refusing to fetch it would make the overlay work for this month and
+    /// mysteriously not for the rest of the library.
+    ///
+    /// `@concurrent` because `nonisolated async` is not enough on its own under
+    /// this target's approachable-concurrency setting: such a function runs on
+    /// whichever actor called it, and the caller is the main one. The encode and
+    /// the base64 of a 1600 px JPEG are tens of milliseconds, and the card's
+    /// strip asks for four dozen of them in a row.
+    @concurrent
+    static func jpeg(id: String, px: Int) async -> (data: Data, width: Int, height: Int)? {
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject else {
+            return nil
+        }
+        let options = PHImageRequestOptions()
+        // One request, one answer. `.opportunistic` — the default — calls the
+        // handler twice, with a blurred placeholder and then the real image, and
+        // a continuation resumed twice is a crash rather than a second picture.
+        // The degraded check below is belt and braces for the same hazard.
+        options.deliveryMode = .highQualityFormat
+        options.resizeMode = .fast
+        options.isNetworkAccessAllowed = true
+        options.isSynchronous = false
+
+        let size = CGSize(width: px, height: px)
+        let once = Latch()
+        let image: UIImage? = await withCheckedContinuation { continuation in
+            PHImageManager.default().requestImage(
+                for: asset, targetSize: size, contentMode: .aspectFit, options: options
+            ) { image, _ in
+                // Whatever arrives first is the answer, degraded or not. The
+                // tempting alternative — ignore anything flagged degraded and
+                // wait for the good one — turns a callback that never comes into
+                // a card that says "loading" forever, and a slightly soft
+                // photograph is a far better failure than a hang.
+                if once.close() { continuation.resume(returning: image) }
+            }
+        }
+        guard let image, let data = image.jpegData(compressionQuality: 0.82) else { return nil }
+        // The *pixel* dimensions, not `image.size`, which is in points and would
+        // describe a 1200 px thumbnail as 400 wide on a 3× phone. The page uses
+        // this to give the picture its shape before the bytes have decoded.
+        let cg = image.cgImage
+        return (data, cg?.width ?? Int(image.size.width), cg?.height ?? Int(image.size.height))
+    }
+
+    // MARK: - Showing one full screen
+
+    /// The longest side to ask for when showing one big.
+    ///
+    /// **Not `PHImageManagerMaximumSize`**, which was the first answer and was a
+    /// bad one: a recent iPhone photograph is 48 megapixels, which is a `UIImage`
+    /// of about 190 MB once decoded, and handing that to a `UIImageView` in the
+    /// middle of a presentation animation is seconds of stutter — the "small
+    /// preview at the bottom, then full screen" this used to do.
+    ///
+    /// 3,000 px is nine megapixels: sharper than any phone screen at 1× and
+    /// still sharp several stops into the zoom, at about a twentieth of the
+    /// memory. Photos itself does the same thing and calls it a degraded result.
+    private static let viewPixels: CGFloat = 3000
+
+    /// Put a whole group in front of the map, opened at one of them.
+    ///
+    /// **The group, not the photograph.** Tapping a point on the map is tapping
+    /// forty pictures of one dinner, and a viewer that shows the one you landed
+    /// on and nothing else makes you close it, find the next thumbnail in a
+    /// 54px strip, and open it again — forty times. Every photograph on this
+    /// device is looked at by swiping, so the viewer is a gallery and the strip
+    /// goes back to being what it is good at, which is jumping.
+    ///
+    /// There is no system dialog that does this. `PHPickerViewController` picks
+    /// rather than shows and hands back what you chose; `QLPreviewController`
+    /// genuinely does page through a list, and wants file URLs, which for a
+    /// `PHAsset` means exporting every item in the group to disk first — slow,
+    /// several gigabytes for a holiday, and it leaves the copies behind. Nothing
+    /// public opens Photos.app at a given asset (see the note at the foot of
+    /// this file). So the gallery is ours; see ``PhotoGalleryController``.
+    ///
+    /// It is shown here rather than sent for the same reason a video is: the
+    /// page already holds a copy scaled to the card, and the only version worth
+    /// going full screen for is one it would then be holding twice — once as
+    /// bytes and once as base64.
+    @MainActor
+    static func open(_ items: [Located], at: Int) -> Bool {
+        if alreadyShowing { return true }
+        guard items.indices.contains(at), let top = topViewController else { return false }
+        top.present(PhotoGalleryController(items: items, at: at), animated: true)
+        return true
+    }
+
+    /// One photograph at viewing size, whenever it turns up.
+    ///
+    /// Split out of the presenting so a page of the gallery can ask for its own
+    /// picture when it is nearly on screen, rather than the group's worth being
+    /// fetched at the moment one of them was tapped.
+    @MainActor
+    static func fullImage(id: String) async -> UIImage? {
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject
+        else { return nil }
+
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.resizeMode = .fast
+        options.isNetworkAccessAllowed = true
+        options.isSynchronous = false
+
+        let once = Latch()
+        let size = CGSize(width: viewPixels, height: viewPixels)
+        return await withCheckedContinuation { continuation in
+            PHImageManager.default().requestImage(
+                for: asset, targetSize: size, contentMode: .aspectFit, options: options
+            ) { image, _ in
+                if once.close() { continuation.resume(returning: image) }
+            }
+        }
+    }
+
+    // MARK: - Playing a video
+
+    /// Play one, over the web view.
+    ///
+    /// ## Why the video does not go to the page
+    ///
+    /// Everything else the overlay shows crosses the bridge as bytes, and for a
+    /// video that is the wrong shape of answer at every size. A minute of 4K is
+    /// ~350 MB; base64 makes it 470 MB of JavaScript string, and there is no
+    /// chunking clever enough to make that a good idea on a phone. The
+    /// alternatives are worse than they look:
+    ///
+    /// - **A `WKURLSchemeHandler`** could stream it properly, range requests and
+    ///   all — and the site's own Content-Security-Policy would refuse to load
+    ///   it, so it would also mean widening `media-src` for the app's benefit.
+    /// - **A local HTTP server** in the app has the same policy problem plus
+    ///   mixed content, because the page is https and `127.0.0.1` is not.
+    /// - **Transcoding** to something small enough to inline spends seconds and
+    ///   disk to arrive at a worse copy of a file that is already on the device.
+    ///
+    /// So the video is not transferred at all. `AVPlayerViewController` is put in
+    /// front of the web view with the asset's own player item, which is what a
+    /// native app would have done in the first place: full quality, no copy, the
+    /// system's own controls, scrubbing, AirPlay and picture-in-picture for free,
+    /// and iCloud originals fetched by Photos itself rather than by us. It is a
+    /// *page of the gallery* rather than a screen of its own, so a holiday of
+    /// stills and clips is one thing you swipe through — see ``open(_:at:)``.
+    ///
+    /// The page's part is one message. It has no URL for the video, never sees a
+    /// byte of it, and cannot save one — which is the same bargain the rest of
+    /// this bridge strikes.
+    @MainActor
+    static func playerItem(id: String) async -> AVPlayerItem? {
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject,
+              asset.mediaType == .video
+        else { return nil }
+
+        let options = PHVideoRequestOptions()
+        // An original that lives in iCloud is the common case for anything more
+        // than a few months old, and Photos does the fetching.
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .automatic
+
+        let once = Latch()
+        return await withCheckedContinuation { continuation in
+            PHImageManager.default().requestPlayerItem(forVideo: asset, options: options) { item, _ in
+                if once.close() { continuation.resume(returning: item) }
+            }
+        }
+    }
+
+    /// Whether one of our own full-screen presentations is already up.
+    ///
+    /// The card refuses a second tap while the first is in flight, and this is
+    /// the same guard on the other side of the bridge — because the failure it
+    /// prevents is a bad one and the check is one line. `topViewController`
+    /// walks to whatever is frontmost, so without it a second `play` presents a
+    /// second player *on top of the first*, and both have to be dismissed.
+    ///
+    /// Answering "yes, that is done" rather than failing: what was asked for is
+    /// on screen, which is what the tap wanted.
+    @MainActor
+    private static var alreadyShowing: Bool {
+        topViewController is PhotoGalleryController
+    }
+
+    /// Whatever is frontmost, which is what a modal has to be presented from.
+    @MainActor
+    private static var topViewController: UIViewController? {
+        let windows = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+        var top = (windows.first(where: \.isKeyWindow) ?? windows.first)?.rootViewController
+        while let next = top?.presentedViewController { top = next }
+        return top
+    }
+
+    // MARK: - There is no way out to Photos, and there was never going to be
+    //
+    // This briefly offered an "Open in Photos" button. It is gone, and the note
+    // is here so it does not come back.
+    //
+    // iOS has no public way to open one particular asset. `photos-redirect://`
+    // opens the Photos app — undocumented, but it works — and that is all it
+    // does: it lands wherever Photos was last, not on the photograph you tapped.
+    // The schemes that look like they take an identifier
+    // (`photos-navigation://…?assetUuid=`) are private and do not answer one.
+    //
+    // A button labelled "Open in Photos" that opens Photos at something else is
+    // a button that lies about what it does, and on a real library that is worse
+    // than no button: you tap it *because* you want that picture in the Photos
+    // app, and you arrive somewhere unrelated with your place on the map gone.
+    // The card shows the picture, which is what the button was mostly wanted
+    // for. If Apple ever ships a real deep link, this is the place for it.
+}
