@@ -2320,6 +2320,23 @@ class SettingsTabs extends StatefulWidget {
 
 class _SettingsTabsState extends State<SettingsTabs> {
   String tab = 'Personal';
+  late final Future<String?> serverVersion;
+  @override
+  void initState() {
+    super.initState();
+    serverVersion = readServerVersion();
+  }
+
+  Future<String?> readServerVersion() async {
+    try {
+      // Health is deliberately uncached: reopening Settings checks the running build.
+      final health = await widget.app.api.get('/api/health');
+      return health['app'] == 'sporra' ? health['version'] as String? : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Column(
     mainAxisSize: MainAxisSize.min,
@@ -2331,6 +2348,21 @@ class _SettingsTabsState extends State<SettingsTabs> {
           child: Text(
             'Signed in as ${widget.app.user?['username'] ?? ''}',
             style: const TextStyle(color: Colors.white60),
+          ),
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: FutureBuilder<String?>(
+            future: serverVersion,
+            builder: (context, snapshot) => Text(
+              snapshot.connectionState != ConnectionState.done
+                  ? 'Server version: checking…'
+                  : 'Server version: ${snapshot.data ?? 'unavailable'}',
+              style: const TextStyle(fontSize: 11, color: Colors.white54),
+            ),
           ),
         ),
       ),

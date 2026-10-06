@@ -45,6 +45,50 @@ final graph = <String, dynamic>{
   ],
 };
 void main() {
+  testWidgets(
+    'card resists initial pull, stays fixed upward and dismisses downward',
+    (tester) async {
+      var dismissed = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: ActivityCardDrag(
+                onDismiss: () => dismissed++,
+                child: const SizedBox(
+                  width: 300,
+                  height: 200,
+                  child: Text('Card'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      final original = tester.getTopLeft(find.text('Card'));
+      await tester.drag(find.byType(ActivityCardDrag), const Offset(0, -100));
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(find.text('Card')), original);
+      expect(dismissed, 0);
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(ActivityCardDrag)),
+      );
+      await gesture.moveBy(const Offset(0, 25));
+      await tester.pump();
+      final initial = tester.getTopLeft(find.text('Card')).dy - original.dy;
+      expect(initial, greaterThan(0));
+      expect(initial, lessThan(12));
+      await tester.pump(const Duration(milliseconds: 300));
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(find.text('Card')), original);
+      expect(dismissed, 0);
+      await tester.drag(find.byType(ActivityCardDrag), const Offset(0, 150));
+      await tester.pumpAndSettle();
+      expect(dismissed, 1);
+    },
+  );
+
   testWidgets('Focus sends duration and measured insets to the native camera', (
     tester,
   ) async {
@@ -314,8 +358,9 @@ void main() {
       expect(dismissed, 0);
       await tester.drag(find.byType(ActivityBanner), const Offset(5, 90));
       await tester.pumpAndSettle();
-      expect(dismissed, 1);
+      expect(dismissed, 0);
       expect(steps, [1, -1]);
+      expect(tester.getTopLeft(find.text('Evening walk')).dy, original.dy);
       expect(tester.takeException(), isNull);
     },
   );
@@ -340,10 +385,9 @@ void main() {
             child: SizedBox(
               width: 390,
               height: 360,
-              child: Dismissible(
+              child: ActivityCardDrag(
                 key: const ValueKey('activity'),
-                direction: DismissDirection.vertical,
-                onDismissed: (_) => dismissed = true,
+                onDismiss: () => dismissed = true,
                 child: Glass(
                   child: ActivityCard(app: app, onZoom: () {}),
                 ),

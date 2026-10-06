@@ -151,3 +151,18 @@ EdgeInsets activityMapPadding(Size viewport, Size card, EdgeInsets safeArea) {
           safeArea.bottom + gap,
         );
 }
+
+// Native feature IDs may arrive as strings or numbers, or refer to a folded import.
+Set<int> activityHitIds(
+  Iterable<dynamic> features,
+  Map<String, dynamic> duplicates,
+) {
+  final ids = <int>{};
+  for (final feature in features) {
+    final raw = feature['properties']['id'];
+    final canonical = duplicates['$raw'] ?? raw;
+    final id = int.tryParse('$canonical');
+    if (id != null) ids.add(id);
+  }
+  return ids;
+}

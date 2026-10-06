@@ -107,6 +107,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   List<double>? factsBounds;
   int tapRequest = 0;
   List<Map<String, dynamic>> routeSummaries = [];
+  Map<String, dynamic> routeDuplicates = {};
   String? routesView;
   String? renderedView;
   double? renderedZoom;
@@ -471,6 +472,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         : Future<dynamic>.value(empty);
     final results = await Future.wait([summaries, geometry]);
     routeSummaries = List<Map<String, dynamic>>.from(results[0]['routes']);
+    routeDuplicates = Map<String, dynamic>.from(results[0]['duplicates'] ?? {});
     final data = Map<String, dynamic>.from(results[1]);
     if (app.selectedRoute != null) {
       data['features'] = (data['features'] as List)
@@ -1074,7 +1076,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
           }
           return;
         }
-        final routeIds = results[3].map((f) => f['properties']['id']).toSet();
+        final routeIds = activityHitIds(results[3], routeDuplicates);
+        final candidates = routeSummaries
+            .where((r) => routeIds.contains(r['id']))
+            .toList();
+        if (candidates.isNotEmpty) {
+          routeIds.retainAll(candidates.map((r) => r['id']));
+        }
         if (routeIds.isNotEmpty) {
           setState(() => placeInfo = null);
           if (routeIds.length == 1) {
@@ -1715,12 +1723,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
                               focusActivity(app);
                             }
                           },
-                          child: Dismissible(
+                          child: ActivityCardDrag(
                             key: ValueKey(
                               'activity-${app.activity!['route']['id']}',
                             ),
-                            direction: DismissDirection.vertical,
-                            onDismissed: (_) => app.closeActivity(),
+                            onDismiss: app.closeActivity,
                             child: Glass(
                               child: ActivityCard(
                                 app: app,

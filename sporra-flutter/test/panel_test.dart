@@ -1,3 +1,6 @@
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:sporra_flutter/src/api.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,6 +10,62 @@ import 'package:sporra_flutter/src/appearance.dart';
 import 'package:sporra_flutter/src/state.dart';
 
 void main() {
+  testWidgets('Settings reads the live server version on each opening', (
+    tester,
+  ) async {
+    var version = '0.134.0', reads = 0;
+    final app = AppState(
+      api: SporraApi(
+        client: MockClient((request) async {
+          expect(request.url.path, '/api/health');
+          reads++;
+          return http.Response('{"app":"sporra","version":"$version"}', 200);
+        }),
+      )..server = 'https://example.test',
+    );
+    addTearDown(app.dispose);
+    Widget settings() => MaterialApp(
+      home: Scaffold(
+        body: SettingsTabs(
+          app: app,
+          childBuilder: (_) => const SizedBox(height: 100),
+        ),
+      ),
+    );
+    await tester.pumpWidget(settings());
+    await tester.pumpAndSettle();
+    expect(find.text('Server version: 0.134.0'), findsOneWidget);
+    version = '0.135.0';
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(settings());
+    await tester.pumpAndSettle();
+    expect(find.text('Server version: 0.135.0'), findsOneWidget);
+    expect(reads, 2);
+  });
+  testWidgets('Settings reports unavailable when version cannot be fetched', (
+    tester,
+  ) async {
+    final app = AppState(
+      api: SporraApi(
+        client: MockClient((_) async => http.Response('offline', 503)),
+      )..server = 'https://example.test',
+    );
+    addTearDown(app.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SettingsTabs(
+            app: app,
+            childBuilder: (_) => const SizedBox(height: 100),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Server version: unavailable'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'small panels fit content, hide map controls and follow phone corners',
     (tester) async {

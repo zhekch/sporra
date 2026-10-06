@@ -8,6 +8,40 @@ import 'package:sporra_flutter/src/blob.dart'
     show mercX, mercY, longitude, latitude;
 
 void main() {
+  test('route hits collapse string IDs, segments and server-ranked duplicate imports', () {
+    expect(
+      activityHitIds(
+        [
+          {
+            'properties': {'id': 10},
+          },
+          {
+            'properties': {'id': '10'},
+          },
+          {
+            'properties': {'id': 11},
+          },
+          {
+            'properties': {'id': '12'},
+          },
+        ],
+        {'11': 10, '12': 10},
+      ),
+      {10},
+    );
+    expect(
+      activityHitIds([
+        {
+          'properties': {'id': 10},
+        },
+        {
+          'properties': {'id': 20},
+        },
+      ], {}),
+      {10, 20},
+    );
+  });
+
   test(
     'activity camera fit excludes the measured card and phone safe area',
     () {

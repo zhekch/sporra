@@ -12,7 +12,8 @@ import 'native.g.dart';
 final appProvider = ChangeNotifierProvider((ref) => AppState());
 
 class AppState extends ChangeNotifier {
-  final api = SporraApi();
+  AppState({SporraApi? api}) : api = api ?? SporraApi();
+  final SporraApi api;
   final native = SporraNative();
   Map<String, dynamic> device = {};
   Map<String, dynamic> prefs = {};

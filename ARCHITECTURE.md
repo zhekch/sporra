@@ -9987,3 +9987,14 @@ Server 0.135.0 folds native activity maps and statistics with the browser's
 Flutter requests `/api/routes?fold=1` for lists, map metadata and swipe navigation;
 the unqualified endpoint still returns every import for the web's duplicate toggle.
 Stack IDs are resolved to the preferred recording before rendering.
+
+Flutter 0.5.2 constrains the activity banner to horizontal movement. Activity
+cards only move down: a 28 px exponential resistance precedes the normal pull;
+110 px dismisses, or a downward fling of at least 900 px/s after a 50 px pull.
+Short pulls animate back. Native hit IDs are normalized and resolved through
+the server's duplicate map before deciding whether a chooser is needed. One
+canonical activity opens directly even if multiple imported IDs were hit.
+
+Settings shows the connected server version under the signed-in account. Each
+opening reads uncached `/api/health` so a newly deployed server is reflected
+without restarting the app; failed reads display unavailable.

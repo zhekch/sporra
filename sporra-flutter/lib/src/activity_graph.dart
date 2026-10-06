@@ -208,8 +208,7 @@ class ActivityCard extends StatelessWidget {
   );
 }
 
-// One pan recognizer owns both axes so diagonal swipes cannot be stolen by
-// competing horizontal/vertical recognizers or the map behind the banner.
+// The banner navigates horizontally; the activity card owns dismissal.
 class ActivityBanner extends StatefulWidget {
   const ActivityBanner({
     super.key,
@@ -237,23 +236,19 @@ class _ActivityBannerState extends State<ActivityBanner> {
   Widget build(BuildContext context) => GestureDetector(
     behavior: HitTestBehavior.opaque,
     dragStartBehavior: DragStartBehavior.down,
-    onPanStart: (_) => setState(() {
+    onHorizontalDragStart: (_) => setState(() {
       dragging = true;
       travel = Offset.zero;
     }),
-    onPanUpdate: (event) => setState(() => travel += event.delta),
-    onPanCancel: reset,
-    onPanEnd: (event) {
-      final displacement = travel;
-      final velocity = event.velocity.pixelsPerSecond;
+    onHorizontalDragUpdate: (event) =>
+        setState(() => travel += Offset(event.delta.dx, 0)),
+    onHorizontalDragCancel: reset,
+    onHorizontalDragEnd: (event) {
+      final displacement = travel.dx;
+      final velocity = event.primaryVelocity ?? 0;
       reset();
-      if (displacement.dx.abs() > displacement.dy.abs()) {
-        if (!widget.busy &&
-            (displacement.dx.abs() >= 32 || velocity.dx.abs() >= 150)) {
-          widget.onStep(displacement.dx < 0 ? 1 : -1);
-        }
-      } else if (displacement.dy.abs() >= 60 || velocity.dy.abs() >= 150) {
-        widget.onDismiss();
+      if (!widget.busy && (displacement.abs() >= 32 || velocity.abs() >= 150)) {
+        widget.onStep(displacement < 0 ? 1 : -1);
       }
     },
     child: AnimatedContainer(
@@ -276,6 +271,79 @@ class _ActivityBannerState extends State<ActivityBanner> {
           ),
         ),
       ),
+    ),
+  );
+}
+
+// A short resisted pull makes accidental card dismissal less likely.
+const activityDragResistance = 28.0;
+const activityDismissDistance = 110.0;
+const activityDismissVelocity = 900.0;
+
+class ActivityCardDrag extends StatefulWidget {
+  const ActivityCardDrag({
+    super.key,
+    required this.child,
+    required this.onDismiss,
+  });
+  final Widget child;
+  final VoidCallback onDismiss;
+  @override
+  State<ActivityCardDrag> createState() => _ActivityCardDragState();
+}
+
+class _ActivityCardDragState extends State<ActivityCardDrag> {
+  double pull = 0;
+  bool dragging = false, closing = false;
+  double get displacement =>
+      pull -
+      activityDragResistance * (1 - math.exp(-pull / activityDragResistance));
+  void reset() => setState(() {
+    dragging = false;
+    pull = 0;
+  });
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    dragStartBehavior: DragStartBehavior.down,
+    onVerticalDragStart: closing
+        ? null
+        : (_) => setState(() {
+            dragging = true;
+            pull = 0;
+          }),
+    onVerticalDragUpdate: closing
+        ? null
+        : (event) => setState(() {
+            pull = math.max(0, pull + event.delta.dy);
+          }),
+    onVerticalDragCancel: reset,
+    onVerticalDragEnd: (event) {
+      final dismiss =
+          pull >= activityDismissDistance ||
+          (pull >= 50 &&
+              (event.primaryVelocity ?? 0) >= activityDismissVelocity);
+      if (dismiss) {
+        setState(() {
+          dragging = false;
+          closing = true;
+        });
+      } else {
+        reset();
+      }
+    },
+    child: AnimatedContainer(
+      duration: dragging ? Duration.zero : const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      transform: Matrix4.translationValues(
+        0,
+        closing ? MediaQuery.sizeOf(context).height : displacement,
+        0,
+      ),
+      onEnd: () {
+        if (closing) widget.onDismiss();
+      },
+      child: widget.child,
     ),
   );
 }
