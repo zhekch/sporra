@@ -110,7 +110,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.135.0';
+export const SERVER_VERSION = '0.136.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -2864,11 +2864,18 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       return send(res, 200, { ok: true });
     }
 
+    if (req.method === 'POST' && pathname === '/api/render/activity-palette') {
+      if (!currentUser(req)) return send(res, 401, { error: 'not authenticated' });
+      const body = await readBody(req);
+      try { return send(res, 200, { colors: renderReference.activityPalette(body?.keys) }); }
+      catch (e) { return send(res, 400, { error: e.message }); }
+    }
+
     if (req.method === 'GET' && ['/api/render/style', '/api/render/reference'].includes(pathname)) {
       const user = currentUser(req);
       if (!user) return send(res, 401, { error: 'not authenticated' });
       try {
-        const data = pathname.endsWith('/style') ? await renderReference.style(query.get('name')) : renderReference.reference(query.get('kind'), selfOrigin(req));
+        const data = pathname.endsWith('/style') ? await renderReference.style(query.get('name')) : await renderReference.reference(query.get('kind'), selfOrigin(req), query.get('group') ?? 'airline', query.get('index'));
         const tag = 'reference:' + createHash('sha1').update(JSON.stringify(data)).digest('base64url');
         const head = conditional(req, res, tag);
         if (!head) return;
@@ -2969,9 +2976,13 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
           for (const point of parsed.points) group.points.push(point);
           for (const track of parsed.tracks) group.tracks.push(track);
         }
-        const batches = [...groups].map(([source, group]) => ({ source, cells: pointsToCells(group.points), routes: buildRoutes(group.tracks, { source, fileName: body.name }) }));
+        const batches = [...groups].map(([source, group]) => ({ source, cells: pointsToCells(group.points), routes: body.includeRoutes === false ? [] : buildRoutes(group.tracks, { source, fileName: body.name }) }));
         const imported = batches.reduce((n,b) => n + b.cells.length,0);
         if (!imported || imported > MAX_CELLS_PER_IMPORT) return send(res, 400, { error: imported ? 'too many cells' : 'No locations in this file.' });
+        if (body.preview === true) return send(res, 200, {
+          preview: true, imported, routes: batches.reduce((n, b) => n + b.routes.length, 0),
+          sources: [...groups.keys()], files: files.items.map(f => f.name),
+        });
         let routeCount = 0;
         const at = nowSec();
         db.exec('BEGIN');

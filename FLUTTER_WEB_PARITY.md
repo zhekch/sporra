@@ -1,7 +1,7 @@
 # Flutter / mobile web feature comparison
 
-Audit date: 6 October 2026. Reference: the checked-in mobile web implementation,
-not the older preview checklist. Target: Flutter 0.3.1+4 with server 0.134.0.
+Audit date: 7 October 2026. Reference: the checked-in mobile web implementation,
+not the older preview checklist. Target: Flutter 0.6.0+9 with server 0.136.0.
 
 **Full parity has not been achieved.** A shared API proves identical data rules;
 it does not prove identical screen layout, gestures, transitions or rendering.
@@ -36,7 +36,7 @@ The verification section separates simulator evidence from source inspection.
 | Visits heat colouring | Present: shared aggregation and ramps |
 | Source/type colouring | Present: shared source allocation |
 | First-seen colouring / undated handling | Present: shared dates and ramps |
-| Press active colouring mode again to hide ground | Partial: Flutter lacks the same toggle gesture |
+| Press active colouring mode again to hide ground | Added: reselect the active mode to toggle ground; explicit Visited ground switch also available |
 | Separate dark/light accent, custom hex, opacity | Present |
 | Region/country dissolved geometry | Present: shared area rendering |
 | High-quality visible-country boundary LOD | Corrected: viewport-driven fine fetch and cache |
@@ -61,7 +61,7 @@ The verification section separates simulator evidence from source inspection.
 | Blank activity-type sentinel | Present: same shared key |
 | Colour each route palette | Present: shared paletteFor |
 | Reset activity appearance | Present |
-| Randomise palette | Missing |
+| Randomise palette | Added: shared randomPalette, preserves hidden types and disables per-route rainbow |
 | Route core zoom widths and selected scale | Corrected: web width stops and 1.7 selected scale |
 | Four phone glow rings, theme contrast and alpha | Corrected: concentric rings replace native blur |
 | Finger-sized route hit tolerance | Corrected: 8px box around tap |
@@ -79,12 +79,12 @@ The verification section separates simulator evidence from source inspection.
 | Explicit solo / show all | Present; opening an activity isolates it; Zoom to activity and Show all are available; named workout banner swipes between activities, with previous/next arrows and no distance/date line; exact web solo-chip presentation differs |
 | Zoom to activity | Present |
 | Edit name, type, place, source | Present; source editing added in this change |
-| Undo metadata edits | Missing |
+| Undo metadata edits | Added: restores the previous field value through the existing account endpoint |
 | Delete activity and undo | Added: account-owned delete endpoint and restore from returned route |
 | Route geometry thumbnail | Missing |
-| External Komoot source link | Partial: stored by server but Flutter details do not expose it |
+| External Komoot source link | Added: original activity link opens externally from More info |
 | Route-stack temporary colour / peek | Partial: shared temporary colours, grouped colour dots and map isolation added; row peek remains missing |
-| Duplicate folding and show duplicates | Missing |
+| Duplicate folding and show duplicates | Partial: automatic shared folding present since server 0.135.0; Show duplicates remains missing |
 | Route list sorting: newest / longest | Added |
 | Route list grouping: flat / app / activity | Added; exact vague-source group ordering remains different |
 | Total activity distance / duration / longest | Present: shared activity statistics |
@@ -133,9 +133,9 @@ The verification section separates simulator evidence from source inspection.
 | Station/site symbols and cards | Missing |
 | Railway tile-health banner | Missing |
 | Airline airports | Present |
-| Airfields / helipads / closed category toggles | Missing |
-| Airport labels and symbol parity | Partial: native circle pins |
-| Airport information card | Present; native hit uses feature coordinates |
+| Airfields / helipads / closed category toggles | Added: independently loaded groups in menu and Map layers settings |
+| Airport labels and symbol parity | Partial: code/name labels and shared kind/zoom thresholds added; native circle pins still differ from web icons |
+| Airport information card | Shared describeAirportFeature facts and links, keyed to the exact tapped group/index; avoids choosing a nearby airline airport for a helipad |
 | Hiking trail raster overlay | Present |
 | Cycling / MTB / slopes themes | Added |
 | Trail strength slider | Added; default corrected to web 75% |
@@ -168,22 +168,22 @@ The verification section separates simulator evidence from source inspection.
 | Region breakdown inside countries | Added; exact web eight-region preview expansion differs |
 | Area/share ordering and geographic grouping | Partial: area/share sorting added; geographic grouping differs |
 | File import shared format parsers | Present: server import path |
-| Import source choice / include-routes choice / preview report | Partial: Flutter imports immediately with fewer options |
-| Multi-file imports and archive selection | Partial |
+| Import source choice / include-routes choice / preview report | Added: source override, route inclusion and read-only preview report before each file is saved |
+| Multi-file imports and archive selection | Partial: selected files are reviewed and saved sequentially; choosing individual entries within an archive remains missing |
 | Komoot one-time tour-link lookup/import | Missing; web performs client-side fetch, not OAuth |
 | Source visibility | Present |
 | Source rename / merge | Added: existing shared rename endpoint |
 | Source removal with confirmation | Added: existing shared delete endpoint |
 | Strava setup, OAuth and manual sync | Present: native authentication bridge |
-| Strava schedule, status, activity-route settings, disconnect | Partial |
+| Strava schedule, status, activity-route settings, disconnect | Added: existing authenticated account APIs; live credentials unverified |
 | Home Assistant probe, entity selection, setup and sync | Present |
-| Home Assistant interval/accuracy/status/disconnect | Partial |
+| Home Assistant interval/accuracy/status/disconnect | Added: existing authenticated account APIs; live service unverified |
 | Home place selection | Present |
 | Automatic home / marker / show-home toggle | Partial |
 | 12h / 24h clock choice | Present; complete formatted-time use still differs |
 | Language chooser | Web currently ships English only; Flutter has generated English catalogue but many literal labels |
 | What's new frequency and banner | Missing |
-| Clear cache | Missing as a settings action |
+| Clear cache | Added: clears persisted API responses and encoded/decoded photo thumbnails, then refreshes the map |
 | Account login / registration / session cookie | Present: native shared cookie bridge |
 | Account sign out | Present |
 | Account deletion, password confirmation | Added: existing shared authenticated deletion endpoint |
@@ -202,14 +202,14 @@ The verification section separates simulator evidence from source inspection.
 | Swipeable top notification and replacement | Corrected: overlay above sheets, vertical swipe/timer; trip/day and workout banners identify the selection |
 | Reduced-motion handling | Added for toast, sheet and control lift; not all map animations |
 | Offline retry banner | Added at top; complete web recovery state differs |
-| Persistent offline recovery | Missing; reads have conditional in-memory cache |
+| Persistent offline recovery | Partial: account-scoped disk response cache and transport fallback added in 0.4.0; offline login remains missing |
 | Portrait glass, compact menu and responsive keyboard bounds | Content-sized panels with height cap; continuous 43px phone corners inside 12px screen margins; hardware-radius match is a visual approximation |
 | Landscape columns and responsive panel placement | Partial |
 | iOS transitions and segmented controls | Improved: Cupertino controls and transitions; web animation choreography remains different |
 
 ## Evidence and limits
 
-Verification for this change: `flutter analyze` passed, 18 Flutter tests passed,
+Verification for the earlier 0.3.1 audit: `flutter analyze` passed, 18 Flutter tests passed,
 the render API suite passed 100 checks, the full `npm test` suite passed, and the
 repeatable iPhone 17 Pro simulator integration flow passed. The simulator also
 verifies distinct overlap palette dots, hidden controls, calendar selection,
@@ -253,3 +253,31 @@ HTTP name enrichment. Cached region facts include ground coverage and its share;
 the at-point response includes outline geometry. Seen dates occupy one line,
 visit counts use separators, and coverage follows web precision. Unloaded ground
 still requires a lookup; no cached answer is invented for it.
+
+### Remaining-item pass (Flutter 0.6.0)
+
+This pass follows the remaining rows above. Airport categories use the web's
+GeoJSON, kind filters and zoom thresholds; all airport cards use the shared
+formatter and exact feature identity. Airline labels retain placement priority
+when smaller categories are loaded later. Native symbols still use circle pins.
+Random activity colours run the shared palette generator on the server.
+Reselecting a colouring mode toggles ground visibility without hiding activities
+or reference overlays. Activity details expose original source links, and each
+metadata edit offers Undo.
+
+Import options apply to every selected file. Each file is parsed with the same
+server code used for saving, then its cell, route and source counts are shown
+for confirmation. Preview does not write ground or activities; excluding routes
+still imports visited ground. Archive entry selection remains a separate item.
+Connector screens expose saved schedules, status, route saving or accuracy, and
+disconnect with confirmation. Credentials are never fetched back to the client.
+
+Verification for this pass: Flutter analysis reported no issues; all 38 Flutter
+tests, all 132 render API checks and the full `npm test` suite passed. The iPhone
+17 Pro integration flow passed after its old activity footer/arrow assertions
+were updated to the current Focus footer and swipe navigation. It loads all
+four airport sources and their native circle/label layers without map errors.
+Menu and map screenshots were inspected; the airport-load screenshot is over
+the activity fixture and does not establish airport icon/label visual parity.
+Live Strava/Home Assistant credentials, external browser handoff and physical
+background tracking were not exercised in this pass.

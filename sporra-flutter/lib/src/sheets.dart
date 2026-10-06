@@ -15,6 +15,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'state.dart';
 import 'appearance.dart';
@@ -277,6 +278,10 @@ Future<void> showMenuSheet(
             ChoiceRow(
               label: 'Colouring',
               value: a.mode,
+              onReselected: () {
+                a.ground = !a.ground;
+                a.changed();
+              },
               choices: const {
                 'flat': 'Single',
                 'visits': 'Visits',
@@ -284,9 +289,18 @@ Future<void> showMenuSheet(
                 'type': 'Type',
               },
               onChanged: (v) {
+                a.ground = v != a.mode || !a.ground;
                 a.mode = v;
                 a.changed();
                 a.run(a.saveAppearance);
+              },
+            ),
+            GlassSwitch(
+              title: const Text('Visited ground'),
+              value: a.ground,
+              onChanged: (v) {
+                a.ground = v;
+                a.changed();
               },
             ),
             if (a.mode == 'flat')
@@ -400,6 +414,7 @@ Future<void> showMenuSheet(
                 a.changed();
               },
             ),
+            if (a.airports) airportCategoryControls(a),
             GlassSwitch(
               title: const Text('Waymarked trails'),
               value: a.trails,
@@ -1126,18 +1141,118 @@ Future<void> importFile(BuildContext context, AppState app) async {
     ],
   );
   if (result.isEmpty) return;
-  await app.run(() async {
-    final f = result.single;
-    final bytes = await f.readAsBytes();
-    final data = await app.api.post('/api/import/file', {
-      'name': f.name,
-      'base64': base64Encode(bytes),
+  if (!context.mounted) return;
+  var source = '', includeRoutes = true;
+  final options = await showDialog<bool>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) => AlertDialog(
+        shape: menuShape(context),
+        title: const Text('Import options'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${result.length} selected file${result.length == 1 ? '' : 's'}',
+            ),
+            TextField(
+              decoration: const InputDecoration(
+                labelText: 'Source',
+                hintText: 'Automatic from file',
+              ),
+              maxLength: 40,
+              onChanged: (v) => source = v.trim(),
+            ),
+            GlassSwitch(
+              title: const Text('Include activity routes'),
+              value: includeRoutes,
+              onChanged: (v) => setState(() => includeRoutes = v),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Review'),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (options != true || !context.mounted) return;
+  // Files are parsed and committed one at a time so a large selection does not
+  // hold every archive and its base64 representation in memory together.
+  for (final f in result) {
+    if (!context.mounted) break;
+    var canceled = false;
+    await app.run(() async {
+      final bytes = await f.readAsBytes();
+      final body = <String, dynamic>{
+        'name': f.name,
+        'base64': base64Encode(bytes),
+        'includeRoutes': includeRoutes,
+        if (source.isNotEmpty) 'source': source,
+      };
+      final preview = await app.api.post('/api/import/file', {
+        ...body,
+        'preview': true,
+      });
+      if (!context.mounted) {
+        canceled = true;
+        return;
+      }
+      final accepted = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          shape: menuShape(context),
+          title: Text(f.name),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${preview['imported']} cells · ${preview['routes']} activity routes',
+              ),
+              const SizedBox(height: 8),
+              Text('Sources: ${(preview['sources'] as List).join(', ')}'),
+              if ((preview['files'] as List).length > 1)
+                Text('${(preview['files'] as List).length} files in archive'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Import'),
+            ),
+          ],
+        ),
+      );
+      if (accepted != true) {
+        canceled = true;
+        return;
+      }
+      final data = await app.api.post('/api/import/file', body);
+      app.changed();
+      if (context.mounted) {
+        showToast(
+          context,
+          'Imported ${data['imported']} cells and ${data['routes']} activities from ${f.name}.',
+        );
+      }
     });
-    app.changed();
-    if (context.mounted) {
-      showToast(context, 'Imported ${data['imported']} cells from ${f.name}.');
+    if (app.error != null && context.mounted) {
+      showToast(context, app.error!);
     }
-  });
+    if (canceled || app.error != null) break;
+  }
 }
 
 Future<void> showPhotos(
@@ -1328,6 +1443,21 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
                 value: d['photos'] == true,
                 onChanged: (v) => configure(app, {'photos': v}),
               ),
+              ListTile(
+                title: const Text('Clear cache'),
+                subtitle: const Text('Reload map data and photo thumbnails'),
+                leading: const Icon(Icons.cleaning_services_outlined),
+                onTap: app.busy
+                    ? null
+                    : () => app.run(() async {
+                        await app.clearDeviceCache();
+                        PaintingBinding.instance.imageCache.clear();
+                        PaintingBinding.instance.imageCache.clearLiveImages();
+                        if (context.mounted) {
+                          showToast(context, 'Cache cleared');
+                        }
+                      }),
+              ),
               fact('Queued locations', d['pending'] ?? 0),
               ListTile(
                 title: const Text('Sync now'),
@@ -1483,7 +1613,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
                 },
               ),
               GlassSwitch(
-                title: const Text('Airfields'),
+                title: const Text('Airports'),
                 value: app.airports,
                 onChanged: (v) {
                   app.airports = v;
@@ -1491,6 +1621,8 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
                 },
               ),
             ],
+            if (tab == 'Map layers' && app.airports)
+              airportCategoryControls(app),
             if (tab == 'Sources')
               ListTile(
                 title: const Text('Manage sources'),
@@ -1586,13 +1718,15 @@ Future<void> showConnections(BuildContext context, AppState app) => panel(
         ),
         ListTile(
           title: const Text('Strava'),
-          onTap: () => setupStrava(context, app),
+          onTap: () => showConnector(context, app, 'strava'),
           subtitle: Text(
-            data['strava']['link'] == null ? 'Not connected' : 'Connected',
+            data['strava']['link']?['connected'] == true
+                ? 'Connected'
+                : 'Not connected',
           ),
           leading: const Icon(Icons.directions_bike),
           trailing: TextButton(
-            onPressed: data['strava']['link'] == null
+            onPressed: data['strava']['link']?['connected'] != true
                 ? null
                 : () => app.run(() async {
                     await app.api.post('/api/strava/sync', {});
@@ -1603,7 +1737,7 @@ Future<void> showConnections(BuildContext context, AppState app) => panel(
         ),
         ListTile(
           title: const Text('Home Assistant'),
-          onTap: () => setupHomeAssistant(context, app),
+          onTap: () => showConnector(context, app, 'ha'),
           subtitle: Text(
             data['ha']['link'] == null ? 'Not connected' : 'Connected',
           ),
@@ -1661,6 +1795,19 @@ Future<void> showActivityDetails(
           fact('Elevation gain', '${route['elevUp'] ?? 0} m'),
           fact('Started', date(route['firstAt'])),
           fact('Finished', date(route['lastAt'])),
+          if (activityLink(route['link']) case final Uri link)
+            ListTile(
+              title: const Text('Open original activity'),
+              leading: const Icon(Icons.open_in_new),
+              onTap: () => app.run(() async {
+                if (!await launchUrl(
+                  link,
+                  mode: LaunchMode.externalApplication,
+                )) {
+                  throw Exception('Could not open this activity link.');
+                }
+              }),
+            ),
           ListTile(
             title: Text(
               app.selectedRoute == route['id']
@@ -1693,8 +1840,11 @@ Future<void> showActivityDetails(
                         field.value,
                         '${route[field.key] ?? ''}',
                       );
+                      if (!context.mounted) return;
                       if (text != null &&
                           (field.key != 'name' || text.isNotEmpty)) {
+                        final before = route[field.key] ?? '';
+                        final toastContext = Navigator.of(context).context;
                         await app.run(() async {
                           await app.api.post('/api/routes/update', {
                             'id': route['id'],
@@ -1702,6 +1852,21 @@ Future<void> showActivityDetails(
                           });
                           route[field.key] = text;
                           app.changed();
+                          if (toastContext.mounted) {
+                            showToast(
+                              toastContext,
+                              'Activity updated',
+                              action: 'Undo',
+                              onAction: () => app.run(() async {
+                                await app.api.post('/api/routes/update', {
+                                  'id': route['id'],
+                                  field.key: before,
+                                });
+                                route[field.key] = before;
+                                app.changed();
+                              }),
+                            );
+                          }
                         });
                       }
                     },
@@ -1876,13 +2041,22 @@ Future<void> showActivities(
 Future<void> showAirport(BuildContext context, Map<String, dynamic> airport) =>
     panel(
       context,
-      '${airport['name'] ?? 'Airport'}',
+      '${airport['title'] ?? 'Airport'}',
       ListView(
         shrinkWrap: true,
         children: [
-          for (final field in ['iata', 'icao', 'city', 'country', 'elevation'])
-            if (airport[field] != null && '${airport[field]}'.isNotEmpty)
-              fact(field.toUpperCase(), airport[field]),
+          if (airport['subtitle'] != null)
+            ListTile(title: Text('${airport['subtitle']}')),
+          for (final row in airport['rows'] ?? []) fact('${row[0]}', row[1]),
+          for (final link in airport['links'] ?? [])
+            if (activityLink(link['url']) case final Uri url)
+              ListTile(
+                title: Text('${link['label']}'),
+                leading: const Icon(Icons.open_in_new),
+                onTap: () async {
+                  await launchUrl(url, mode: LaunchMode.externalApplication);
+                },
+              ),
         ],
       ),
     );
@@ -2229,6 +2403,13 @@ Future<void> showActivityStyle(BuildContext context, AppState app) => panel(
                   ? null
                   : (v) => a.run(() => a.saveRouteView({'rainbow': v})),
             ),
+            ListTile(
+              title: const Text('Random colors'),
+              leading: const Icon(Icons.shuffle),
+              onTap: a.busy || sports.isEmpty
+                  ? null
+                  : () => a.run(() => a.randomActivityColors(sports)),
+            ),
             for (final sport in sports)
               ListTile(
                 title: Text(sport == '\u0000none' ? 'Other activities' : sport),
@@ -2393,5 +2574,249 @@ class _SettingsTabsState extends State<SettingsTabs> {
       const Divider(height: 1),
       Flexible(child: widget.childBuilder(tab)),
     ],
+  );
+}
+
+const airportLayerGroups = {
+  'airline': ['large', 'medium'],
+  'airfields': ['small', 'water'],
+  'helipads': ['helipad'],
+  'closed': ['closed'],
+};
+
+Widget airportCategoryControls(AppState app) => Column(
+  children: [
+    for (final entry in const {
+      'airline': 'Airline airports',
+      'airfields': 'Airfields',
+      'helipads': 'Helipads',
+      'closed': 'Closed airfields',
+    }.entries)
+      GlassSwitch(
+        title: Text(entry.value),
+        value: app.airportGroups.contains(entry.key),
+        onChanged: (enabled) {
+          if (enabled) {
+            app.airportGroups.add(entry.key);
+          } else {
+            app.airportGroups.remove(entry.key);
+          }
+          app.changed();
+        },
+      ),
+  ],
+);
+
+Uri? activityLink(dynamic value) {
+  final uri = Uri.tryParse('$value');
+  return uri != null &&
+          ['https', 'http'].contains(uri.scheme) &&
+          uri.host.isNotEmpty
+      ? uri
+      : null;
+}
+
+Future<void> showConnector(BuildContext context, AppState app, String kind) =>
+    panel(
+      context,
+      kind == 'strava' ? 'Strava' : 'Home Assistant',
+      ConnectorSettings(app: app, kind: kind),
+    );
+
+class ConnectorSettings extends StatefulWidget {
+  const ConnectorSettings({super.key, required this.app, required this.kind});
+  final AppState app;
+  final String kind;
+  @override
+  State<ConnectorSettings> createState() => _ConnectorSettingsState();
+}
+
+class _ConnectorSettingsState extends State<ConnectorSettings> {
+  Map<String, dynamic>? link;
+  bool loading = true;
+  String? failure;
+  AppState get app => widget.app;
+  String get path => '/api/${widget.kind}';
+  bool get strava => widget.kind == 'strava';
+
+  @override
+  void initState() {
+    super.initState();
+    reload();
+  }
+
+  Future<void> reload() async {
+    try {
+      final result = await app.api.get(path, refresh: true);
+      if (mounted) {
+        setState(() {
+          link = result['link'] == null
+              ? null
+              : Map<String, dynamic>.from(result['link']);
+          loading = false;
+          failure = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          failure = '$e';
+          loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> update(Map<String, dynamic> patch) => app.run(() async {
+    await app.api.post(path, patch);
+    await reload();
+  });
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: app,
+    builder: (context, _) {
+      if (loading) {
+        return const Padding(
+          padding: EdgeInsets.all(32),
+          child: Center(child: CupertinoActivityIndicator()),
+        );
+      }
+      if (failure != null) {
+        return ListTile(
+          title: Text(failure!),
+          trailing: TextButton(onPressed: reload, child: const Text('Retry')),
+        );
+      }
+      final connected = link != null && (!strava || link!['connected'] == true);
+      return ListView(
+        shrinkWrap: true,
+        children: [
+          if (app.error != null) ListTile(title: Text(app.error!)),
+          ListTile(
+            title: Text(connected ? 'Connected' : 'Not connected'),
+            subtitle: Text(
+              strava
+                  ? '${link?['athlete'] ?? ''}'
+                  : '${link?['baseUrl'] ?? ''}',
+            ),
+          ),
+          if (!connected)
+            ListTile(
+              title: const Text('Connect'),
+              leading: const Icon(Icons.link),
+              onTap: app.busy
+                  ? null
+                  : () async {
+                      if (strava) {
+                        await setupStrava(context, app);
+                      } else {
+                        await setupHomeAssistant(context, app);
+                      }
+                      await reload();
+                    },
+            ),
+          if (link != null) ...[
+            GlassSwitch(
+              title: const Text('Sync automatically'),
+              value: link!['enabled'] == true,
+              onChanged: app.busy ? null : (v) => update({'enabled': v}),
+            ),
+            ListTile(
+              title: const Text('Sync interval'),
+              trailing: DropdownButton<int>(
+                value: link!['intervalMin'] as int,
+                items: (strava ? [15, 30, 60, 180, 720] : [5, 15, 30, 60, 180])
+                    .map(
+                      (n) => DropdownMenuItem(
+                        value: n,
+                        child: Text('Every $n minutes'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: app.busy
+                    ? null
+                    : (v) {
+                        if (v != null) update({'intervalMin': v});
+                      },
+              ),
+            ),
+            if (strava)
+              GlassSwitch(
+                title: const Text('Save activity routes'),
+                value: link!['saveRoutes'] == true,
+                onChanged: app.busy ? null : (v) => update({'saveRoutes': v}),
+              ),
+            if (!strava) ...[
+              ListTile(
+                title: const Text('Location accuracy'),
+                trailing: DropdownButton<int>(
+                  value: link!['maxAccuracy'] as int,
+                  items: [0, 100, 250, 500, 1000]
+                      .map(
+                        (n) => DropdownMenuItem(
+                          value: n,
+                          child: Text(n == 0 ? 'Any accuracy' : 'Within $n m'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: app.busy
+                      ? null
+                      : (v) {
+                          if (v != null) update({'maxAccuracy': v});
+                        },
+                ),
+              ),
+              fact('Followed devices', (link!['entities'] as List).join(', ')),
+            ],
+            fact('Last attempt', date(link!['lastRun'])),
+            fact('Last successful sync', date(link!['lastOk'])),
+            fact(
+              strava ? 'Activities synced' : 'Locations synced',
+              link![strava ? 'totalCount' : 'totalFixes'] ?? 0,
+            ),
+            if ('${link!['lastError'] ?? ''}'.isNotEmpty)
+              ListTile(title: Text('${link!['lastError']}')),
+            if (connected)
+              ListTile(
+                title: const Text('Sync now'),
+                leading: const Icon(Icons.sync),
+                onTap: app.busy
+                    ? null
+                    : () => app.run(() async {
+                        try {
+                          await app.api.post('$path/sync', {});
+                          app.changed();
+                        } finally {
+                          await reload();
+                        }
+                      }),
+              ),
+            ListTile(
+              title: const Text(
+                'Disconnect',
+                style: TextStyle(color: CupertinoColors.systemRed),
+              ),
+              leading: const Icon(Icons.link_off),
+              onTap: app.busy
+                  ? null
+                  : () async {
+                      if (!await confirmRemoval(
+                        context,
+                        'Disconnect this service?',
+                        'Automatic sync stops. Your imported ground and activities stay on the map.',
+                      )) {
+                        return;
+                      }
+                      await app.run(() async {
+                        await app.api.post('$path/delete', {});
+                        await reload();
+                      });
+                    },
+            ),
+          ],
+        ],
+      );
+    },
   );
 }

@@ -125,7 +125,9 @@ class ChoiceRow extends StatelessWidget {
     required this.value,
     required this.choices,
     required this.onChanged,
+    this.onReselected,
   });
+  final VoidCallback? onReselected;
   final String? label;
   final String value;
   final Map<String, String> choices;
@@ -151,15 +153,18 @@ class ChoiceRow extends StatelessWidget {
             for (final c in choices.entries)
               c.key: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 5),
-                child: Text(
-                  c.value,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: c.key == value
-                        ? FontWeight.w600
-                        : FontWeight.w400,
-                    color: c.key == value ? Colors.white : Colors.white60,
+                child: GestureDetector(
+                  onTap: c.key == value ? onReselected : null,
+                  child: Text(
+                    c.value,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: c.key == value
+                          ? FontWeight.w600
+                          : FontWeight.w400,
+                      color: c.key == value ? Colors.white : Colors.white60,
+                    ),
                   ),
                 ),
               ),

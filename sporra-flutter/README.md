@@ -1,7 +1,7 @@
 # Sporra Preview
 
 The Flutter iOS preview lives here. It installs alongside the original Sporra
-app and connects to your Sporra server. Use server version **0.135.0 or newer**.
+app and connects to your Sporra server. Use server version **0.136.0 or newer**.
 Open `ios/Runner.xcworkspace` for the native project; Flutter development starts
 at `lib/main.dart`.
 
@@ -25,8 +25,8 @@ blobs, region/country/continent fills, activity colours and visibility,
 continuous speed/elevation routes with map scrubbing, annual charts, route selection,
 yellow trip/day tracks, recorded-day calendar, search, trips,
 statistics with regional breakdown and activity sorting, paint/erase and region clearing with undo,
-source management, undoable activity deletion, file imports, local photo browsing, tracking and sync settings, Strava and
-Home Assistant setup, snapshots, and backup sharing for administrators.
+source management, undoable activity edits and deletion, reviewed multi-file imports with source and route options, local photo browsing, tracking and sync settings, Strava and
+Home Assistant setup and schedule/status/disconnect controls, airport category switches and labels, random activity colours, device cache clearing, snapshots, and backup sharing for administrators.
 The Swift bridge owns location, HealthKit, photo indexing, cookies and uploads.
 Photo thumbnails remain on the device.
 

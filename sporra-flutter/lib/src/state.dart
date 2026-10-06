@@ -101,6 +101,26 @@ class AppState extends ChangeNotifier {
   String trailTheme = 'hiking';
   double trailStrength = 0.75;
   bool airports = false;
+  final airportGroups = <String>{'airline'};
+  bool ground = true;
+
+  Future<void> randomActivityColors(List<String> sports) async {
+    final result = await api.post('/api/render/activity-palette', {
+      'keys': sports,
+    });
+    await saveRouteView({
+      'colors': {...?routeView['colors'] as Map?, ...result['colors'] as Map},
+      'rainbow': false,
+    });
+  }
+
+  Future<void> clearDeviceCache() async {
+    api.clear();
+    clearPhotos();
+    changed();
+    await api.flushCache();
+  }
+
   final hidden = <String>{};
   int revision = 0;
   bool cellInfo = true;

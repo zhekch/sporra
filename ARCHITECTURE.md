@@ -9998,3 +9998,40 @@ canonical activity opens directly even if multiple imported IDs were hit.
 Settings shows the connected server version under the signed-in account. Each
 opening reads uncached `/api/health` so a newly deployed server is reflected
 without restarting the app; failed reads display unavailable.
+
+
+### Remaining Flutter parity items (0.6.0 / server 0.136.0)
+
+Native airport references accept an optional `group` (airline by default).
+`render-reference.js` loads that dataset once and calls the web's `loadAirports`,
+`airportGeoJson` and `airportLayers`; it returns the exact shared kind filters
+and minimum zooms alongside the collection. Flutter loads each enabled group
+independently and adds code/name labels, retaining airline placement priority.
+`kind=airport&group=...&index=...` returns `describeAirportFeature` for the exact
+hit. The location-notification `/api/airport` deliberately narrows its lookup to
+scheduled airline fields, so it cannot correctly describe helipads or a smaller
+field near a large airport. It remains unchanged for its original callers.
+
+`POST /api/render/activity-palette` accepts a bounded list of sport keys and
+returns the shared `randomPalette` allocation. Flutter saves these colours in
+`routeView.colors`, preserves hidden types, and turns off per-route rainbow,
+matching the web action. Colour-mode reselect toggles only ground opacity; the
+render cache key includes this visibility so reused sheets cannot leave it on.
+Metadata Undo sends the original field value through `/api/routes/update`.
+Activity links allow HTTP(S) and open through the system browser.
+
+`POST /api/import/file` accepts `preview: true` to run the exact expansion,
+parsing, source grouping and cell/route generation used for commit, then return
+counts without opening a database transaction. `includeRoutes: false` excludes
+route generation in both paths while preserving ground. The Flutter picker
+reviews and commits selected files sequentially, holding one encoded upload at
+a time; cancelling stops the remaining selection. It does not yet select
+individual archive entries. Each file commit remains atomic; the whole selected
+batch is not one transaction.
+
+Flutter connector settings use the existing Strava and Home Assistant endpoints
+for interval, enabled state, route saving, accuracy, status and disconnect.
+Updates send only changed fields, allowing the server to retain credentials.
+Cache clearing invalidates in-flight response/thumbnail generations, clears
+encoded and Flutter decoded images, flushes device responses and requests a new
+map render. It preserves authentication and imported data.

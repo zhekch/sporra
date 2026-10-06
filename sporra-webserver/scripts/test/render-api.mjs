@@ -96,6 +96,15 @@ try {
   check((await api('GET','/api/render/cells',undefined,{'If-None-Match':first.etag})).status===200,'edit invalidates');
 
   const gpx = '<?xml version="1.0"?><gpx><trk><name>Zurich walk</name><trkseg><trkpt lat="47.37" lon="8.54"><time>2024-08-10T09:00:00Z</time></trkpt><trkpt lat="47.371" lon="8.542"><time>2024-08-10T09:01:00Z</time></trkpt><trkpt lat="47.372" lon="8.544"><time>2024-08-10T09:02:00Z</time></trkpt></trkseg></trk></gpx>';
+  const beforePreview = await api('GET', '/api/cells');
+  const routesBeforePreview = await api('GET', '/api/routes');
+  const preview = await api('POST', '/api/import/file', {name:'walk.gpx', text:gpx, preview:true, source:'preview-test'});
+  check(preview.status === 200 && preview.body.preview && preview.body.imported > 0 && preview.body.routes > 0 && preview.body.sources[0] === 'preview-test', 'import preview reports shared cells, routes and chosen source');
+  check((await api('GET', '/api/cells')).text === beforePreview.text && (await api('GET', '/api/routes')).text === routesBeforePreview.text, 'preview leaves ground and routes unchanged');
+  const noRoutesPreview = await api('POST', '/api/import/file', {name:'walk.gpx', text:gpx, preview:true, includeRoutes:false});
+  check(noRoutesPreview.body.imported === preview.body.imported && noRoutesPreview.body.routes === 0, 'preview respects route exclusion without dropping visited ground');
+  const noRoutesImport = await api('POST', '/api/import/file', {name:'walk.gpx', text:gpx, includeRoutes:false, source:'ground-only'});
+  check(noRoutesImport.status === 200 && noRoutesImport.body.routes === 0 && (await api('GET', '/api/routes')).text === routesBeforePreview.text, 'ground-only import saves no activity routes');
   const imported = await api('POST', '/api/import/file', {name:'walk.gpx', text:gpx});
   check(imported.status===200 && imported.body.imported>0 && imported.body.routes>0, 'raw GPX imports shared cells and activity geometry');
   const nativeRoutes = await api('GET', '/api/render/routes');
@@ -207,7 +216,31 @@ try {
   await api('POST','/api/cells/restore',{rows:clear.body.undo.rows});
   check((await api('GET','/api/cells')).body.rows.length===beforeClear.body.rows.length,'region undo restores provenance');
   for (const body of [{points:[]},{level:6,size:1,action:'paint',points:[[0,0]]},{level:0,size:1,action:'paint',points:[[0,0],[90,0]]}]) check((await api('POST','/api/render/brush',body)).status===400,'invalid or enormous stroke is refused');
-  check((await api('GET','/api/render/reference?kind=airports')).body.features.length>0,'airports are native GeoJSON');
+  const { readFileSync } = await import('node:fs');
+  const { airportGeoJson, airportLayers, loadAirports, describeAirportFeature } = await import('../../src/airports.js');
+  for (const group of ['airline', 'airfields', 'helipads', 'closed']) {
+    const tuples = JSON.parse(readFileSync(new URL(`../../src/airports-${group}.json`, import.meta.url)));
+    await loadAirports([group], { [group]: tuples });
+    const airports = await api('GET', `/api/render/reference?kind=airports&group=${group}`);
+    const expected = airportGeoJson([group]);
+    check(airports.status === 200 && airports.body.features.length === expected.features.length && airports.body.features.every((f, i) => JSON.stringify(f.geometry) === JSON.stringify(expected.features[i].geometry) && Object.entries(expected.features[i].properties).every(([k,v]) => f.properties[k] === v)), `${group} airport points and details match the web dataset`);
+    const card = await api('GET', `/api/render/reference?kind=airport&group=${group}&index=0`);
+    check(JSON.stringify(card.body) === JSON.stringify(describeAirportFeature(expected.features[0])), `${group} airport card uses exact web facts and links`);
+    check(JSON.stringify(airports.body.layers) === JSON.stringify(airportLayers().filter(l => l.group === group)), `${group} native zoom and kind rules match the web`);
+    check((await api('GET', `/api/render/reference?kind=airports&group=${group}`, undefined, {'If-None-Match': airports.etag})).status === 304, `${group} reference revalidates`);
+  }
+  check((await api('GET', '/api/render/reference?kind=airports&group=../../secret')).status === 400, 'unknown airport groups are rejected');
+  for (const index of ['', '-1', '1.5', '999999', 'bad']) check((await api('GET', '/api/render/reference?kind=airport&index=' + index)).status === 400, 'invalid airport identity refused');
+  const defaultAirports = await api('GET', '/api/render/reference?kind=airports');
+  check(defaultAirports.text === (await api('GET', '/api/render/reference?kind=airports&group=airline')).text, 'default reference remains airline airports');
+  const paletteKeys = ['Run', 'Ride', '\u0000none'];
+  const randomColors = await api('POST', '/api/render/activity-palette', {keys:paletteKeys});
+  const { ROUTE_PALETTE } = await import('../../src/route-colors.js');
+  check(randomColors.status === 200 && paletteKeys.every(k => ROUTE_PALETTE.includes(randomColors.body.colors[k])) && new Set(Object.values(randomColors.body.colors)).size === paletteKeys.length, 'random activity colors use distinct shared palette entries including the blank sport');
+  for (const keys of [null, [42], Array(257).fill('Run'), ['x'.repeat(201)]]) check((await api('POST', '/api/render/activity-palette', {keys})).status === 400, 'invalid palette input rejected');
+  const savedCookie = cookie; cookie = '';
+  check((await api('POST', '/api/render/activity-palette', {keys:paletteKeys})).status === 401, 'palette requires authentication');
+  cookie = savedCookie;
   check((await api('GET','/api/render/reference?kind=rail')).body.layers.every(l=>l.type==='line'),'rail native layers use line geometry');
   forget(); let reads=0; const supply=()=>{reads++;return input;}; const opts=cellsOptions(new URLSearchParams());
   cells(1,'a',supply,opts);cells(1,'a',supply,{...opts,bbox:[-1,-1,1,1]});check(reads===1,'viewport reuses rollup');

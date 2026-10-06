@@ -380,24 +380,26 @@ void main() {
     await tester.pumpAndSettle();
     expect(state.activity?['route']['name'], 'Overlapping ride');
     expect(state.selectedRoute, state.activity!['route']['id']);
-    expect(find.text('Zoom to activity'), findsOneWidget);
+    expect(find.text('Focus'), findsOneWidget);
+    expect(find.text('More info'), findsOneWidget);
     await tester.tap(find.text('Show all'));
     await tester.pumpAndSettle();
     expect(state.selectedRoute, isNull);
     expect(state.activity, isNotNull);
     final selectedWorkout = state.activity!['route']['id'];
-    for (final direction in ['Previous workout', 'Next workout']) {
-      await tester.tap(find.byTooltip(direction));
+    for (final delta in [500.0, -500.0]) {
+      await tester.drag(
+        find.byKey(ValueKey('workout-${state.activity!['route']['id']}')),
+        Offset(delta, 0),
+      );
+      await tester.pumpAndSettle();
       await tester.runAsync(() async {
         for (var i = 0; i < 100 && state.busy; i++) {
           await Future<void>.delayed(const Duration(milliseconds: 100));
         }
       });
       await tester.pumpAndSettle();
-      expect(
-        state.activity!['route']['id'] == selectedWorkout,
-        direction == 'Next workout',
-      );
+      expect(state.activity!['route']['id'] == selectedWorkout, delta < 0);
     }
     await IntegrationTestWidgetsFlutterBinding.instance.takeScreenshot(
       'parity-workout-banner',
@@ -481,6 +483,35 @@ void main() {
       reason: 'train track numeric properties load natively',
     );
     expect(screen.sources.contains('rail-ready'), isTrue);
+    state.airports = true;
+    state.airportGroups.addAll(['airfields', 'helipads', 'closed']);
+    state.changed();
+    await tester.pump();
+    await tester.runAsync(() async {
+      await screen.refresh();
+      for (var i = 0; i < 400 && (screen.refreshing || screen.pending); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    });
+    await tester.pumpAndSettle();
+    expect(
+      screen.mapError,
+      isNull,
+      reason: 'all airport group layers and labels load natively',
+    );
+    for (final group in ['airline', 'airfields', 'helipads', 'closed']) {
+      expect(screen.sources.contains('airports-$group'), isTrue);
+    }
+    expect(
+      screen.layers.contains('airport-pins-sporra-air-large-label'),
+      isTrue,
+    );
+    final airportBytes = await IntegrationTestWidgetsFlutterBinding.instance
+        .takeScreenshot('parity-airports');
+    await File('${Directory.systemTemp.path}/sporra-parity-airports.png')
+        .writeAsBytes(airportBytes);
+    state.airports = false;
+
     state.rail = false;
     state.changed();
     await tester.tap(find.byTooltip('Menu'));

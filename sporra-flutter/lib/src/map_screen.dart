@@ -209,6 +209,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         generation,
         app.api.revision,
         app.renderQuery(level),
+        app.ground,
         zoom >= regionFineZoom,
         mapSize.width,
         mapSize.height,
@@ -278,7 +279,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
       final alpha = app.accent.length == 9
           ? int.parse(app.accent.substring(7), radix: 16) / 255
           : 1.0;
-      final opacity = app.mode == 'flat' ? 0.3 * alpha : 0.5;
+      final opacity = !app.ground
+          ? 0.0
+          : app.mode == 'flat'
+          ? 0.3 * alpha
+          : 0.5;
       if (level < 6) {
         cellFacts.clear();
         for (final row in data['rows'] as List) {
@@ -726,6 +731,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final view = (
       generation,
       app.airports,
+      app.airportGroups.toList().join(','),
       app.rail,
       app.trails,
       app.trailTheme,
@@ -735,33 +741,81 @@ class _MapScreenState extends ConsumerState<MapScreen>
       app.photoItems,
     );
     if (overlaysView == view) return;
-    if (app.airports && !sources.contains('airports')) {
-      await geoSource(
-        'airports',
-        Map<String, dynamic>.from(
-          await app.api.get('/api/render/reference?kind=airports'),
-        ),
-      );
-      await map!.addCircleLayer(
-        'airports',
-        'airport-pins',
-        const CircleLayerProperties(
-          circleColor: '#f4cc69',
-          circleRadius: 4,
-          circleStrokeColor: '#20252d',
-          circleStrokeWidth: 1,
-        ),
-      );
-      layers.add('airport-pins');
-    }
-    if (layers.contains('airport-pins')) {
-      await patchLayer(
-        'airport-pins',
-        CircleLayerProperties(
-          circleOpacity: app.airports ? 1 : 0,
-          circleStrokeOpacity: app.airports ? 1 : 0,
-        ),
-      );
+    for (final group in ['airline', 'airfields', 'helipads', 'closed']) {
+      final source = 'airports-$group';
+      final enabled = app.airports && app.airportGroups.contains(group);
+      if (enabled && !sources.contains(source)) {
+        final data = Map<String, dynamic>.from(
+          await app.api.get('/api/render/reference?kind=airports&group=$group'),
+        );
+        final specs = data.remove('layers') as List;
+        await geoSource(source, data);
+        for (final spec in specs.reversed) {
+          final id = 'airport-pins-${spec['id']}';
+          await map!.addCircleLayer(
+            source,
+            id,
+            const CircleLayerProperties(
+              circleColor: '#f4cc69',
+              circleRadius: 4,
+              circleStrokeColor: '#20252d',
+              circleStrokeWidth: 1,
+            ),
+            belowLayerId:
+                group != 'airline' &&
+                    layers.contains('airport-pins-sporra-air-medium')
+                ? 'airport-pins-sporra-air-medium'
+                : null,
+            minzoom: (spec['minzoom'] as num).toDouble(),
+            filter: spec['filter'],
+          );
+          layers.add(id);
+          await map!.addSymbolLayer(
+            source,
+            '$id-label',
+            SymbolLayerProperties(
+              textField: [
+                'step',
+                ['zoom'],
+                [
+                  'case',
+                  [
+                    '!=',
+                    ['get', 'code'],
+                    '',
+                  ],
+                  ['get', 'code'],
+                  ['get', 'name'],
+                ],
+                10,
+                ['get', 'name'],
+              ],
+              textSize: 11,
+              textColor: '#f4cc69',
+              textHaloColor: '#20252d',
+              textHaloWidth: 1.5,
+              textOffset: [0, 1.1],
+              textAnchor: 'top',
+            ),
+            belowLayerId:
+                group != 'airline' &&
+                    layers.contains('airport-pins-sporra-air-medium')
+                ? 'airport-pins-sporra-air-medium'
+                : null,
+            minzoom: (spec['minzoom'] as num).toDouble(),
+            filter: spec['filter'],
+          );
+          layers.add('$id-label');
+        }
+      }
+      for (final spec in airportLayerGroups[group]!) {
+        final id = 'airport-pins-sporra-air-$spec';
+        for (final layer in [id, '$id-label']) {
+          if (layers.contains(layer)) {
+            await map!.setLayerVisibility(layer, enabled);
+          }
+        }
+      }
     }
     if (app.rail && !sources.contains('rail-ready')) {
       final data = await app.api.get('/api/render/reference?kind=rail');
@@ -1040,7 +1094,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         final results = await Future.wait([
           query(['activity-metric-line']),
           query(['photos-pins']),
-          query(['airport-pins']),
+          query(layers.where((id) => id.startsWith('airport-pins-')).toList()),
           query(['activities-line']),
         ]);
         if (!mounted || request != tapRequest) return;
@@ -1064,15 +1118,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
         if (results[2].isNotEmpty) {
           setState(() => placeInfo = null);
           final hit = results[2].first;
-          final coord = hit['geometry']['coordinates'];
+          final props = hit['properties'];
           final data = await app.api.get(
-            '/api/airport?lng=${coord[0]}&lat=${coord[1]}',
+            '/api/render/reference?kind=airport&group=${Uri.encodeQueryComponent(props['group'])}&index=${(props['index'] as num).toInt()}',
           );
           if (mounted && request == tapRequest) {
-            await showAirport(
-              context,
-              Map<String, dynamic>.from(data['airport'] ?? hit['properties']),
-            );
+            await showAirport(context, Map<String, dynamic>.from(data));
           }
           return;
         }
