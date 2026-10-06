@@ -1,3 +1,5 @@
+import { graphValue, formatGraphSpeed, formatMetres, formatAxisTime, graphTimeStep, graphData } from './route-graph.js';
+export { formatGraphSpeed, graphTimeStep } from './route-graph.js';
 // The card you get by tapping a saved route on the map: what it was, when, how
 // far. Two ways on from here — zoom to it, or open it properly.
 //
@@ -41,55 +43,6 @@ function whenLine(r) {
   return startClock ? `${started}, ${startClock}` : started;
 }
 
-// Elevation is the point's own. Speed is the span that arrived here, or, at
-// the first point of a segment, the span that leaves — a segment has no
-// incoming speed, and the graph would otherwise open with a hole.
-function graphValue(samples, metric, index) {
-  const s = samples[index];
-  if (!s) return null;
-  if (metric === 'elev') return s.ele;
-  if (s.speed != null) return s.speed;
-  const next = samples[index + 1];
-  if (next && next.seg === s.seg && next.speed != null) return next.speed;
-  return null;
-}
-
-// The same rounding the dot on the map uses, so the axis and the label agree.
-// A stop is not a reading: 0 km/h, and the 0.1 km/h a crawl rounds to, are
-// left off. Showing either of them is what made the start of a ride look measured.
-export function formatGraphSpeed(ms) {
-  if (ms == null || !Number.isFinite(ms) || ms <= 0) return null;
-  const kmh = ms * 3.6;
-  const text = kmh < 10 ? kmh.toFixed(1) : String(Math.round(kmh));
-  if (text === '0' || text === '0.0' || text === '0.1') return null;
-  return `${text} km/h`;
-}
-
-function formatMetres(m) {
-  const rounded = Math.abs(m) >= 10 ? Math.round(m) : Math.round(m * 10) / 10;
-  return `${rounded} m`;
-}
-
-// Minutes and hours only. Zero is not a label — the line already starts at
-// the left edge — and a few seconds still reads as a minute, because a blank
-// end would say the clock was never kept.
-function formatAxisTime(sec) {
-  if (!(sec > 0)) return null;
-  const totalMin = Math.round(sec / 60);
-  const shown = totalMin === 0 ? 1 : totalMin;
-  const h = Math.floor(shown / 60);
-  const m = shown % 60;
-  if (h && m) return `${h} h ${m} min`;
-  if (h) return `${h} h`;
-  return `${shown} min`;
-}
-
-// A short activity is marked every quarter hour. Past two hours that is a
-// fence of lines, so the mark becomes the hour.
-export function graphTimeStep(endSec) {
-  return endSec <= 2 * 3600 ? 15 * 60 : 3600;
-}
-
 function readout(className, values) {
   const row = document.createElement('div');
   row.className = `route-metric-readout ${className}`;
@@ -99,28 +52,6 @@ function readout(className, values) {
     row.append(span);
   }
   return row;
-}
-
-function runsOf(samples, metric, xOf) {
-  const runs = [];
-  let run = [];
-  const cut = () => {
-    if (run.length) runs.push(run);
-    run = [];
-  };
-  for (let i = 0; i < samples.length; i++) {
-    const y = graphValue(samples, metric, i);
-    const prev = samples[i - 1];
-    if (prev && prev.seg !== samples[i].seg) cut();
-    const x = xOf(samples[i]);
-    if (y == null || x == null) {
-      cut();
-      continue;
-    }
-    run.push({ i, x, y });
-  }
-  cut();
-  return runs;
 }
 
 /**
@@ -136,16 +67,11 @@ export function fillMetricGraph(graphEl, samples, metric) {
   // and hours, and the line has to be drawn against the same clock or a
   // pause would sit in the wrong place. Distance is the fallback for a
   // trace that kept heights and lost its times.
-  const endSec = samples.reduce((m, s) => (s.elapsed > m ? s.elapsed : m), 0);
-  const byTime = endSec > 0;
-  const xOf = (s) => {
-    if (!s) return null;
-    if (byTime) return s.elapsed == null ? null : s.elapsed;
-    return Number.isFinite(s.distM) ? s.distM : null;
-  };
-  const runs = runsOf(samples, metric, xOf);
-  const ys = runs.flat().map((p) => p.y);
-  if (!ys.length) return null;
+  const graph = graphData(samples, metric);
+  if (!graph) return null;
+  const { byTime, runs } = graph;
+  const endSec = byTime ? graph.maxX : 0;
+  const xOf = (s) => !s ? null : byTime ? s.elapsed : s.distM;
   graphEl.setAttribute(
     'aria-label',
     metric === 'elev' ? t('route-metric-graph.elevation') : t('route-metric-graph.speed'),
@@ -154,10 +80,10 @@ export function fillMetricGraph(graphEl, samples, metric) {
   const h = GRAPH_H;
   const padX = 2;
   const padY = 6;
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
+  const minY = graph.min;
+  const maxY = graph.max;
   const spanY = maxY - minY || 1;
-  const maxX = byTime ? endSec : samples[samples.length - 1]?.distM || 1;
+  const maxX = graph.maxX;
   const spanX = maxX || 1;
   const X = (x) => padX + (x / spanX) * (w - padX * 2);
   const Y = (y) => padY + (1 - (y - minY) / spanY) * (h - padY * 2);

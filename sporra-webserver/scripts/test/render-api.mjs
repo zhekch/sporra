@@ -98,6 +98,22 @@ try {
   const gpx = '<?xml version="1.0"?><gpx><trk><name>Zurich walk</name><trkseg><trkpt lat="47.37" lon="8.54"><time>2024-08-10T09:00:00Z</time></trkpt><trkpt lat="47.371" lon="8.542"><time>2024-08-10T09:01:00Z</time></trkpt><trkpt lat="47.372" lon="8.544"><time>2024-08-10T09:02:00Z</time></trkpt></trkseg></trk></gpx>';
   const imported = await api('POST', '/api/import/file', {name:'walk.gpx', text:gpx});
   check(imported.status===200 && imported.body.imported>0 && imported.body.routes>0, 'raw GPX imports shared cells and activity geometry');
+  const nativeRoutes = await api('GET', '/api/render/routes');
+  check(nativeRoutes.status === 200 && nativeRoutes.body.features.length > 0, 'native routes return geometry with web appearance');
+  const sport = nativeRoutes.body.features[0].properties.sport || '\u0000none';
+  const activityId = nativeRoutes.body.features[0].properties.id;
+  const activity = await api('GET', '/api/render/activity?id=' + activityId);
+  check(activity.status === 200 && activity.body.graphs.speed && activity.body.samples.length > 1, 'activity API returns speed graph and aligned samples');
+  check((await api('GET', '/api/render/activity?id=' + activityId, undefined, {'If-None-Match':activity.etag})).status === 304, 'activity graph revalidates');
+  check((await api('GET', '/api/render/activity?id=bad')).status === 400, 'invalid activity id is refused');
+  check((await api('GET', '/api/render/activity-stats')).body.years.length > 0, 'activity statistics include annual distance readings');
+
+  await api('POST', '/api/prefs', { prefs: { routeView: { colors: { [sport]: '#ff000080' } } } });
+  const colored = await api('GET', '/api/render/routes', undefined, { 'If-None-Match': nativeRoutes.etag });
+  check(colored.status === 200 && colored.body.features[0].properties.color === '#ff0000' && colored.body.features[0].properties.alpha === 128/255, 'activity preferences invalidate route rendering and preserve alpha');
+  await api('POST', '/api/prefs', { prefs: { routeView: { hidden: [sport] } } });
+  check((await api('GET', '/api/render/routes')).body.features.length === 0, 'hidden activity categories leave native map');
+  await api('POST', '/api/prefs', { prefs: {} });
   const info = await api('GET', '/api/render/at?lng=8.54&lat=47.37&level=0');
   check(info.status===200 && info.body.visited && info.body.hits>0, 'tap resolves imported visit facts');
   for (const level of [6,7,8]) {
@@ -132,6 +148,10 @@ try {
   check(cells(2,'a',()=>dateInput,crossing).rows.length===1,'crossing viewport includes date-line cell');
   check(cells(3,'a',()=>({cellIds:[],cellMeta:new Map()}),opts).rows.length===0,'account caches are isolated');
   check(cells(1,'b',supply,{...opts,bbox:[40,40,41,41]}).rows.length===0,'empty viewport');
+  await api('POST', '/api/register', {username:'renderother', password:'a-long-enough-pw'});
+  check((await api('GET', '/api/render/activity?id=' + activityId)).status === 404, 'activity detail is isolated to its owner');
+  check((await api('GET', '/api/render/routes')).body.features.length === 0, 'native activity geometry is account isolated');
+
 
 } catch(e) { check(false,'test run',e.stack); }
 finally { server.kill();await rm(dir,{recursive:true,force:true}); }

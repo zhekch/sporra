@@ -28,6 +28,55 @@ class AppState extends ChangeNotifier {
   bool airports = false;
   final hidden = <String>{};
   int revision = 0;
+  bool cellInfo = true;
+  bool clearingRegion = false;
+  dynamic selectedRoute;
+  Map<String, dynamic>? activity;
+  String? activityMetric;
+  int? activitySample;
+  Future<void> openActivity(dynamic id, {bool keepMetric = false}) =>
+      run(() async {
+        final data = Map<String, dynamic>.from(
+          await api.get('/api/render/activity?id=$id'),
+        );
+        final graphs = data['graphs'] as Map;
+        activityMetric = keepMetric && graphs[activityMetric] != null
+            ? activityMetric
+            : graphs['speed'] != null
+            ? 'speed'
+            : graphs['elev'] != null
+            ? 'elev'
+            : null;
+        activity = data;
+        activitySample = null;
+        selectedRoute = id;
+        changed();
+      });
+  void closeActivity() {
+    activity = null;
+    activitySample = null;
+    activityMetric = null;
+    selectedRoute = null;
+    changed();
+  }
+
+  void scrubActivity(int index) {
+    activitySample = index;
+    notifyListeners();
+  }
+
+  Future<void> stepActivity(int delta) async {
+    final routes = List<Map<String, dynamic>>.from(
+      (await api.get('/api/routes'))['routes'],
+    );
+    routes.sort((a, b) => (a['firstAt'] as num).compareTo(b['firstAt'] as num));
+    final index = routes.indexWhere((r) => r['id'] == activity?['route']['id']);
+    final next = index + delta;
+    if (index >= 0 && next >= 0 && next < routes.length) {
+      await openActivity(routes[next]['id'], keepMetric: true);
+    }
+  }
+
   bool editing = false;
   String brushAction = 'paint';
   int brushSize = 1;
@@ -95,10 +144,31 @@ class AppState extends ChangeNotifier {
     if (!['flat', 'visits', 'oldest', 'type'].contains(mode)) mode = 'flat';
   }
 
+  String get accentTheme => style == 'voyager' ? 'light' : 'dark';
+  Map<String, dynamic> get routeView =>
+      Map<String, dynamic>.from(prefs['routeView'] ?? {});
+  String activityColor(String sport) =>
+      '${(routeView['colors'] as Map?)?[sport] ?? '#ff9147'}';
+  bool activityVisible(String sport) =>
+      !(routeView['hidden'] as List? ?? []).contains(sport);
+  Future<void> saveRouteView(Map<String, dynamic> patch) async {
+    await patchPrefs({
+      'routeView': {...routeView, ...patch},
+    });
+    changed();
+  }
+
+  void setStyle(String value) {
+    style = value;
+    accent =
+        '${(prefs['accents'] as Map?)?[accentTheme] ?? prefs['accent'] ?? '#60acff'}';
+    changed();
+  }
+
   Future<void> saveAppearance() async {
     await patchPrefs({
-      'accent': accent,
-      'accents': {...?prefs['accents'] as Map?, 'dark': accent},
+      'accent': accentTheme == 'dark' ? accent : prefs['accent'] ?? '#60acff',
+      'accents': {...?prefs['accents'] as Map?, accentTheme: accent},
       'heatMode': mode,
     });
   }
@@ -158,6 +228,13 @@ class AppState extends ChangeNotifier {
       prefs = {};
       user = null;
       undo = null;
+      hidden.clear();
+      activity = null;
+      activityMetric = null;
+      activitySample = null;
+      selectedRoute = null;
+      editing = false;
+      clearingRegion = false;
       revision++;
     }
   });

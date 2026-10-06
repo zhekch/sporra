@@ -9,6 +9,19 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 import 'blob.dart';
 import 'state.dart';
 import 'sheets.dart';
+import 'activity_graph.dart';
+
+// MapLibre's setter serializes omitted properties as null, which resets them.
+// A patch must retain the colors/widths already installed on the native layer.
+class LayerPatch implements LayerProperties {
+  const LayerPatch(this.properties);
+  final LayerProperties properties;
+  @override
+  Map<String, dynamic> toJson({bool skipNulls = true}) => properties.toJson();
+}
+
+const activityCardMaxHeight = 430.0;
+const activityCardHeightShare = 0.64;
 
 const styles = {
   'dark': 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
@@ -43,15 +56,25 @@ class MapScreen extends ConsumerStatefulWidget {
 class _MapScreenState extends ConsumerState<MapScreen> {
   MapLibreMapController? map;
   final painter = BlobPainter();
+  Future<void> patchLayer(String id, LayerProperties properties) =>
+      map!.setLayerProperties(id, LayerPatch(properties));
   bool loaded = false, refreshing = false;
   bool pending = false;
   int generation = 0;
   int observed = -1;
+  int? observedSample;
+  dynamic observedActivity;
   int sheetSlot = 0;
   int currentLevel = 0;
   final sources = <String>{};
   final layers = <String>{};
   LatLng? location;
+  bool locationEnabled = false;
+  bool locating = false;
+  CameraPosition camera = const CameraPosition(
+    target: LatLng(46.95, 8.28),
+    zoom: 7,
+  );
   String? mapError;
   Timer? fade;
   Size mapSize = const Size(390, 844);
@@ -108,7 +131,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 
   Future<void> refresh() async {
-    if (!loaded || map == null) return;
+    if (!mounted || !loaded || map == null) return;
     if (refreshing) {
       pending = true;
       return;
@@ -121,6 +144,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       final zoom = map!.cameraPosition?.zoom ?? 8;
       final level = app.detail == 'tiny'
           ? 0
+          : app.detail == 'region'
+          ? 6
+          : app.detail == 'continent'
+          ? 8
           : app.detail == 'country'
           ? 7
           : levelForZoom(zoom);
@@ -155,7 +182,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         ),
       );
       if (!mounted || token != generation) return;
-      final opacity = app.mode == 'flat' ? 0.3 : 0.5;
+      final alpha = app.accent.length == 9
+          ? int.parse(app.accent.substring(7), radix: 16) / 255
+          : 1.0;
+      final opacity = app.mode == 'flat' ? 0.3 * alpha : 0.5;
       if (level < 6) {
         final width = math.min(
           1536,
@@ -203,33 +233,33 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           }
           final t = (++step / 20).clamp(0.0, 1.0);
           unawaited(
-            map!
-                .setLayerProperties(
-                  id,
-                  RasterLayerProperties(rasterOpacity: opacity * t),
-                )
-                .catchError((_) {}),
+            patchLayer(
+              id,
+              RasterLayerProperties(rasterOpacity: opacity * t),
+            ).catchError((_) {}),
           );
           if (layers.contains('blob-$old')) {
             unawaited(
-              map!
-                  .setLayerProperties(
-                    'blob-$old',
-                    RasterLayerProperties(rasterOpacity: opacity * (1 - t)),
-                  )
-                  .catchError((_) {}),
+              patchLayer(
+                'blob-$old',
+                RasterLayerProperties(rasterOpacity: opacity * (1 - t)),
+              ).catchError((_) {}),
             );
           }
           if (t >= 1) timer.cancel();
         });
         if (layers.contains('areas-fill')) {
-          await map!.setLayerProperties(
+          await patchLayer(
             'areas-fill',
             const FillLayerProperties(fillOpacity: 0),
           );
         }
       } else {
-        await geoSource('areas', data);
+        final fills = Map<String, dynamic>.from(data);
+        fills['features'] = (data['features'] as List)
+            .where((f) => f['properties']['k'] == 1)
+            .toList();
+        await geoSource('areas', fills);
         if (!layers.contains('areas-fill')) {
           await map!.addFillLayer(
             'areas',
@@ -238,16 +268,11 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               fillColor: ['get', 'color'],
               fillOpacity: opacity,
             ),
-            filter: [
-              '==',
-              ['get', 'k'],
-              1,
-            ],
             belowLayerId: await below(),
           );
           layers.add('areas-fill');
         } else {
-          await map!.setLayerProperties(
+          await patchLayer(
             'areas-fill',
             FillLayerProperties(fillOpacity: opacity),
           );
@@ -255,15 +280,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         fade?.cancel();
         for (final id in ['blob-0', 'blob-1']) {
           if (layers.contains(id)) {
-            await map!.setLayerProperties(
-              id,
-              const RasterLayerProperties(rasterOpacity: 0),
-            );
+            await patchLayer(id, const RasterLayerProperties(rasterOpacity: 0));
           }
         }
       }
       await updateRoutes(app);
       await updateOverlays(app);
+      await updateActivityFocus(app);
       if (mounted) setState(() => mapError = null);
     } catch (e) {
       if (mounted) setState(() => mapError = '$e');
@@ -285,32 +308,32 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 
   Future<void> updateRoutes(AppState app) async {
-    final result = app.routes
-        ? await app.api.get('/api/routes?geom=1')
-        : {'routes': []};
-    final features = <Map<String, dynamic>>[];
-    for (final r in result['routes']) {
-      for (final segment in r['geom'] ?? []) {
-        if ((segment as List).length < 2) continue;
-        features.add({
-          'type': 'Feature',
-          'properties': {'name': r['name'], 'id': r['id']},
-          'geometry': {'type': 'LineString', 'coordinates': segment},
-        });
-      }
+    final data = app.routes
+        ? Map<String, dynamic>.from(await app.api.get('/api/render/routes'))
+        : Map<String, dynamic>.from(empty);
+    if (app.selectedRoute != null) {
+      data['features'] = (data['features'] as List)
+          .where((f) => f['properties']['id'] == app.selectedRoute)
+          .toList();
     }
-    await geoSource('activities', {
-      'type': 'FeatureCollection',
-      'features': features,
-    });
+    if (app.activity != null && app.activityMetric != null) {
+      data['features'] = (data['features'] as List)
+          .where((f) => f['properties']['id'] != app.activity!['route']['id'])
+          .toList();
+    }
+    await geoSource('activities', data);
     if (!layers.contains('activities-line')) {
       await map!.addLineLayer(
         'activities',
         'activities-glow',
-        const LineLayerProperties(
-          lineColor: '#60acff',
+        LineLayerProperties(
+          lineColor: ['get', 'color'],
           lineWidth: 7,
-          lineOpacity: 0.2,
+          lineOpacity: [
+            '*',
+            0.2,
+            ['get', 'alpha'],
+          ],
           lineBlur: 3,
         ),
       );
@@ -318,13 +341,69 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       await map!.addLineLayer(
         'activities',
         'activities-line',
-        const LineLayerProperties(
-          lineColor: '#60acff',
+        LineLayerProperties(
+          lineColor: ['get', 'color'],
           lineWidth: 2.5,
-          lineOpacity: 0.9,
+          lineOpacity: [
+            '*',
+            0.9,
+            ['get', 'alpha'],
+          ],
         ),
       );
       layers.add('activities-line');
+    }
+  }
+
+  Future<void> updateActivityFocus(AppState app) async {
+    final data = app.activity;
+    await geoSource(
+      'activity-metric',
+      data != null && app.activityMetric != null
+          ? Map<String, dynamic>.from(data['lines'][app.activityMetric])
+          : Map<String, dynamic>.from(empty),
+    );
+    if (!layers.contains('activity-metric-line')) {
+      await map!.addLineLayer(
+        'activity-metric',
+        'activity-metric-line',
+        LineLayerProperties(
+          lineColor: ['get', 'color'],
+          lineWidth: 4,
+          lineOpacity: 1,
+        ),
+      );
+      layers.add('activity-metric-line');
+    }
+    final sample = data != null && app.activitySample != null
+        ? data['samples'][app.activitySample]
+        : null;
+    await geoSource('activity-cursor', {
+      'type': 'FeatureCollection',
+      'features': [
+        if (sample != null)
+          {
+            'type': 'Feature',
+            'properties': <String, dynamic>{},
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [sample['lng'], sample['lat']],
+            },
+          },
+      ],
+    });
+    if (!layers.contains('activity-cursor-dot')) {
+      await map!.addCircleLayer(
+        'activity-cursor',
+        'activity-cursor-dot',
+        const CircleLayerProperties(
+          circleRadius: 6,
+          circleColor: '#ffffff',
+          circleStrokeColor: '#262626',
+          circleStrokeWidth: 2,
+        ),
+      );
+      layers.add('activity-cursor-dot');
     }
   }
 
@@ -342,7 +421,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       final properties = Map<String, dynamic>.from(
         features.first['properties'] ?? {},
       );
-      if (layer == 'photos-pins') {
+      if (layer == 'activity-metric-line') {
+        app.scrubActivity((properties['i'] as num).toInt());
+      } else if (layer == 'photos-pins') {
         await showPhotos(context, app);
       } else if (layer == 'activities-line') {
         final data = await app.api.get('/api/routes?geom=1');
@@ -392,7 +473,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       layers.add('airport-pins');
     }
     if (layers.contains('airport-pins')) {
-      await map!.setLayerProperties(
+      await patchLayer(
         'airport-pins',
         CircleLayerProperties(
           circleOpacity: app.airports ? 1 : 0,
@@ -433,7 +514,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       sources.add('rail-ready');
     }
     for (final id in layers.where((id) => id.startsWith('sporra-orm-'))) {
-      await map!.setLayerProperties(
+      await patchLayer(
         id,
         LineLayerProperties(visibility: app.rail ? 'visible' : 'none'),
       );
@@ -462,7 +543,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       layers.add('trails-layer');
     }
     if (layers.contains('trails-layer')) {
-      await map!.setLayerProperties(
+      await patchLayer(
         'trails-layer',
         RasterLayerProperties(rasterOpacity: app.trails ? 0.65 : 0),
       );
@@ -497,7 +578,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       layers.add('photos-pins');
     }
     if (layers.contains('photos-pins')) {
-      await map!.setLayerProperties(
+      await patchLayer(
         'photos-pins',
         CircleLayerProperties(
           circleOpacity: app.photos ? 1 : 0,
@@ -511,22 +592,30 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final app = ref.read(appProvider);
     if (app.editing) {
       await app.run(() async {
-        final result = await app.api.post('/api/render/brush', {
-          'level': 0,
-          'size': app.brushSize,
-          'action': app.brushAction,
-          'points': [
-            [point.longitude, point.latitude],
-          ],
-        });
+        final result = await app.api.post(
+          app.clearingRegion ? '/api/render/region-clear' : '/api/render/brush',
+          {
+            if (app.clearingRegion) ...{
+              'lng': point.longitude,
+              'lat': point.latitude,
+            },
+            'level': 0,
+            'size': app.brushSize,
+            'action': app.brushAction,
+            'points': [
+              [point.longitude, point.latitude],
+            ],
+          },
+        );
         app.undo = Map<String, dynamic>.from(result['undo']);
         app.changed();
       });
       return;
     }
     try {
+      if (!app.cellInfo || app.activity != null) return;
       final info = await app.api.get(
-        '/api/render/at?lng=${point.longitude}&lat=${point.latitude}&level=$currentLevel',
+        '/api/render/at?lng=${point.longitude}&lat=${point.latitude}&${app.renderQuery(currentLevel)}',
       );
       if (mounted) await showInfo(context, Map<String, dynamic>.from(info));
     } catch (e) {
@@ -561,6 +650,30 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         unawaited(refresh());
       });
     }
+    if (observedSample != app.activitySample) {
+      observedSample = app.activitySample;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (loaded) unawaited(updateActivityFocus(app));
+      });
+    }
+    if (observedActivity != app.activity?['route']['id']) {
+      observedActivity = app.activity?['route']['id'];
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (map != null && app.activity != null) {
+          goTo(
+            map!,
+            app.activity!['route'],
+            bottom: mapSize.width < 600
+                ? math.min(
+                        activityCardMaxHeight,
+                        mapSize.height * activityCardHeightShare,
+                      ) +
+                      60
+                : 150,
+          );
+        }
+      });
+    }
     return Scaffold(
       body: LayoutBuilder(
         builder: (context, constraints) {
@@ -570,13 +683,12 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               MapLibreMap(
                 key: ValueKey((app.style, resolvedStyle)),
                 styleString: resolvedStyle ?? mapStyle(app.style),
-                initialCameraPosition: const CameraPosition(
-                  target: LatLng(46.95, 8.28),
-                  zoom: 7,
-                ),
+                initialCameraPosition: camera,
                 trackCameraPosition: true,
-                myLocationEnabled: true,
-                myLocationRenderMode: MyLocationRenderMode.compass,
+                myLocationEnabled: locationEnabled,
+                myLocationRenderMode: locationEnabled
+                    ? MyLocationRenderMode.compass
+                    : MyLocationRenderMode.normal,
                 scaleControlEnabled: true,
                 attributionButtonPosition: AttributionButtonPosition.topRight,
                 onMapCreated: (c) {
@@ -593,14 +705,23 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 },
                 onCameraIdle: () => unawaited(refresh()),
                 onCameraMove: (p) {
+                  camera = p;
                   if (p.tilt > 60) {
                     unawaited(map!.moveCamera(CameraUpdate.tiltTo(60)));
                   }
                 },
-                onUserLocationUpdated: (p) => location = p.position,
+                onUserLocationUpdated: (p) {
+                  location = p.position;
+                  if (locating && location != null) {
+                    locating = false;
+                    map?.animateCamera(
+                      CameraUpdate.newLatLngZoom(location!, 13.6),
+                    );
+                  }
+                },
                 onMapClick: (_, p) => unawaited(tap(p)),
               ),
-              if (app.editing)
+              if (app.editing && !app.clearingRegion)
                 Positioned.fill(
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
@@ -657,33 +778,57 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Align(
-                    alignment: Alignment.topLeft,
-                    child: Glass(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            tooltip: 'Menu',
-                            onPressed: () => showMenuSheet(
-                              context,
-                              app,
-                              () => unawaited(refresh()),
-                              map,
+                    alignment:
+                        constraints.maxWidth < 600 &&
+                            constraints.maxHeight > 560
+                        ? Alignment.bottomRight
+                        : Alignment.topLeft,
+                    child: Padding(
+                      padding: EdgeInsets.only(
+                        bottom:
+                            constraints.maxWidth < 600 &&
+                                constraints.maxHeight > 560
+                            ? 112 +
+                                  (app.activity != null
+                                      ? math.min(
+                                              activityCardMaxHeight,
+                                              constraints.maxHeight *
+                                                  activityCardHeightShare,
+                                            ) +
+                                            10
+                                      : 0)
+                            : 0,
+                      ),
+                      child: Glass(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: 'Menu',
+                              onPressed: () => showMenuSheet(
+                                context,
+                                app,
+                                () => unawaited(refresh()),
+                                map,
+                              ),
+                              icon: const Icon(Icons.menu),
                             ),
-                            icon: const Icon(Icons.menu),
-                          ),
-                          IconButton(
-                            tooltip: 'Search',
-                            onPressed: () =>
-                                showSporraSearch(context, app, map!),
-                            icon: const Icon(Icons.search),
-                          ),
-                          IconButton(
-                            tooltip: 'Trips and calendar',
-                            onPressed: () => showTrips(context, app, map!),
-                            icon: const Icon(Icons.calendar_month),
-                          ),
-                        ],
+                            IconButton(
+                              tooltip: 'Search',
+                              onPressed: () => map == null
+                                  ? null
+                                  : showSporraSearch(context, app, map!),
+                              icon: const Icon(Icons.search),
+                            ),
+                            IconButton(
+                              tooltip: 'Trips and calendar',
+                              onPressed: map == null
+                                  ? null
+                                  : () => showTrips(context, app, map!),
+                              icon: const Icon(Icons.calendar_month),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -691,7 +836,20 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               ),
               SafeArea(
                 child: Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    16,
+                    16,
+                    16 +
+                        (app.activity != null && constraints.maxWidth < 600
+                            ? math.min(
+                                    activityCardMaxHeight,
+                                    constraints.maxHeight *
+                                        activityCardHeightShare,
+                                  ) +
+                                  10
+                            : 0),
+                  ),
                   child: Align(
                     alignment: Alignment.bottomRight,
                     child: Glass(
@@ -701,7 +859,12 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                           IconButton(
                             tooltip: 'Your location',
                             onPressed: () {
-                              if (location != null) {
+                              if (!locationEnabled) {
+                                setState(() {
+                                  locationEnabled = true;
+                                  locating = true;
+                                });
+                              } else if (location != null) {
                                 map?.animateCamera(
                                   CameraUpdate.newLatLngZoom(location!, 13.6),
                                 );
@@ -718,9 +881,16 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                             icon: const Icon(Icons.my_location),
                           ),
                           IconButton(
-                            tooltip: 'Refresh',
-                            onPressed: () => unawaited(refresh()),
-                            icon: const Icon(Icons.refresh),
+                            tooltip: 'Reset compass',
+                            onPressed: () => map?.animateCamera(
+                              CameraUpdate.newCameraPosition(
+                                CameraPosition(
+                                  target: map!.cameraPosition!.target,
+                                  zoom: map!.cameraPosition!.zoom,
+                                ),
+                              ),
+                            ),
+                            icon: const Icon(Icons.explore_outlined),
                           ),
                         ],
                       ),
@@ -741,6 +911,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                             IconButton(
                               tooltip: 'Paint',
                               onPressed: () {
+                                app.clearingRegion = false;
                                 app.brushAction = 'paint';
                                 app.changed();
                               },
@@ -754,6 +925,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                             IconButton(
                               tooltip: 'Erase',
                               onPressed: () {
+                                app.clearingRegion = false;
                                 app.brushAction = 'erase';
                                 app.changed();
                               },
@@ -761,6 +933,19 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                                 Icons.auto_fix_normal,
                                 color: app.brushAction == 'erase'
                                     ? Colors.lightBlueAccent
+                                    : null,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Clear a region',
+                              onPressed: () {
+                                app.clearingRegion = !app.clearingRegion;
+                                app.changed();
+                              },
+                              icon: Icon(
+                                Icons.map_outlined,
+                                color: app.clearingRegion
+                                    ? Colors.orangeAccent
                                     : null,
                               ),
                             ),
@@ -805,6 +990,55 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                               icon: const Icon(Icons.check),
                             ),
                           ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (app.activity != null)
+                SafeArea(
+                  child: Align(
+                    alignment: constraints.maxWidth < 600
+                        ? Alignment.bottomCenter
+                        : Alignment.bottomLeft,
+                    child: Padding(
+                      padding: EdgeInsets.only(
+                        left: 10,
+                        right: constraints.maxWidth < 600 ? 10 : 80,
+                        bottom: 10,
+                      ),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: 440,
+                          maxHeight: math.min(
+                            activityCardMaxHeight,
+                            constraints.maxHeight * activityCardHeightShare,
+                          ),
+                        ),
+                        child: Glass(child: ActivityCard(app: app)),
+                      ),
+                    ),
+                  ),
+                ),
+              if (app.selectedRoute != null || app.clearingRegion)
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: Glass(
+                        child: TextButton.icon(
+                          icon: const Icon(Icons.close, size: 18),
+                          label: Text(
+                            app.clearingRegion
+                                ? 'Tap a region to clear · Cancel'
+                                : 'One activity · Show all',
+                          ),
+                          onPressed: () {
+                            app.selectedRoute = null;
+                            app.clearingRegion = false;
+                            app.changed();
+                          },
                         ),
                       ),
                     ),

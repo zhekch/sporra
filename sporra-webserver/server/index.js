@@ -87,6 +87,7 @@ import * as derive from './derive.js';
 import * as render from './render.js';
 import * as renderGeo from './render-geography.js';
 import * as renderReference from './render-reference.js';
+import { routeFeatures, activityData, activityStats } from './render-routes.js';
 import { expand, parseExpanded } from '../src/import-data.js';
 import localeEn from '../src/locales/en.js';
 import { banner } from './banner.js';
@@ -108,7 +109,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.131.0';
+export const SERVER_VERSION = '0.132.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -3134,6 +3135,35 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
 
     // Saved routes. The list is metadata only unless ?geom=1 — the map holds
     // off on the (much larger) geometry until the routes layer is switched on.
+    if (req.method === 'GET' && pathname === '/api/render/activity-stats') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      const head = conditional(req, res, routesSignature(user, false) + ':activity-stats');
+      if (!head) return;
+      return send(res, 200, activityStats(q.routes.all(user.id).map(routeOut)), head);
+    }
+
+    if (req.method === 'GET' && pathname === '/api/render/activity') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      const id = Number(query.get('id'));
+      if (!Number.isSafeInteger(id) || id < 1) return send(res, 400, { error: 'invalid activity id' });
+      const row = q.routeById.get(user.id, id);
+      if (!row) return send(res, 404, { error: 'No such activity.' });
+      const head = conditional(req, res, routesSignature(user, true) + ':activity:' + id);
+      if (!head) return;
+      return send(res, 200, activityData(routeOut(row)), head);
+    }
+
+    if (req.method === 'GET' && pathname === '/api/render/routes') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      const prefs = JSON.parse(q.prefs.get(user.id)?.prefs ?? '{}');
+      const head = conditional(req, res, routesSignature(user, true) + ':' + JSON.stringify(prefs.routeView ?? {}));
+      if (!head) return;
+      return send(res, 200, routeFeatures(q.routesGeom.all(user.id).map(routeOut), prefs.routeView), head);
+    }
+
     if (req.method === 'GET' && pathname === '/api/routes') {
       const user = currentUser(req);
       if (!user) return send(res, 401, { error: 'not authenticated' });

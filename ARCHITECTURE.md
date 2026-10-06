@@ -8753,6 +8753,84 @@ Native maps, menus, edits, import, photos and account flows are implemented;
 advanced exports and complete UI parity are still pending. See its README for
 simulator installation and verification.
 
+### Flutter visual and feature parity (0.2.0)
+
+The native appearance uses the web's neutral glass recipe: RGB 38 at 54%
+opacity, a 26 px backdrop blur, a fine white edge and 20 px corners. Sheets
+have a transparent background, so the backdrop filter can see the map.
+Appearance choices use compact segmented controls; toggles use Cupertino
+switches. Portrait controls occupy the bottom-right corner and lift above
+an open activity card. Activity cards remain in the map's widget stack,
+allowing the exposed native map to receive taps while the graph is open.
+Their maximum height is 430 logical pixels, capped at 64% of the viewport.
+
+Area drawing supplies only polygon features to its fill source. The API's
+`k:2` boundary lines are distinct geometry, not candidate fill features.
+Layer-property updates use `LayerPatch`, which omits unspecified fields.
+MapLibre's default setter sends nulls for those fields and resets the fill
+colour, line width and other previously installed styling. The native QA
+checks both polygon hits and blue screenshot pixels across level changes.
+Region, country and continent can each be selected explicitly; Auto retains
+the existing camera ladder. Appearance changes preserve the camera rather
+than reopening over Switzerland. Ground taps include the hidden-source
+filter, so the card answers about the same visits that the map displays.
+
+`GET /api/render/routes` applies account `routeView` preferences to native
+GeoJSON: per-activity colour and alpha, hidden sports, and the exact
+`paletteFor` allocation used by the browser's Color each route option. Its
+ETag includes those preferences as well as the route signature. Saving an
+activity colour preserves the other preference fields and uses the web's
+blank-sport sentinel (`\u0000none`). A light-basemap accent is saved under
+`accents.light`, without overwriting the dark accent.
+
+`GET /api/render/activity?id=…` reads an account-owned route and returns its
+summary, aligned samples, speed/elevation graph readings, and both metric
+line collections. `src/route-graph.js` contains the DOM-free graph rules,
+consumed by the browser card and the API. Samples and metric colours still
+come from `routes.js` and `route-metric.js`: no independent Dart calculation
+of speed, elevation ranges or recording gaps. The Flutter graph is 72 logical
+pixels tall, retains per-span colours and gaps, uses elapsed time when
+recorded and distance otherwise, and omits missing metrics. Dragging the
+graph selects a recorded point on the map; tapping a metric span selects its
+graph sample. Closing the activity restores the ordinary activity layer.
+Previous/next navigation retains the metric when available.
+
+`GET /api/render/activity-stats` supplies activity totals and annual distance
+bars. `distanceByYear` in `routes.js` is also used by web statistics. Undated
+activities contribute to distance totals but not a dated bar; duration uses
+`recordedSeconds` so an unstopped clock does not inflate the total. Ground
+statistics already supply `years`, including gap years, and Flutter renders
+those as a second interactive yearly chart.
+
+The audit below compares the web menus, cards and flows against the native
+preview. A partial row means the remaining behaviour still needs a port;
+this release does not claim complete web parity.
+
+| Area | Native status | Remaining web behaviour |
+|---|---|---|
+| Basemaps | Dark, Light, Terrain and Satellite using native styles | Mapbox Standard 3D, automatic sun and snow |
+| Visited ground | Blobs; explicit Region/Country/Continent; all colouring modes | Fine boundary geometry, region outlines, continent count labels, matching level crossfades |
+| Appearance | Neutral blurred glass, segmented choices, custom hex colour and opacity, separate dark/light accents | Exact responsive landscape columns and desktop popover placement |
+| Activity appearance | Per-type colours and opacity, visibility, shared per-route palette, reset | Randomize activity colours and per-stack temporary colours |
+| Activity inspection | Speed/elevation graphs, shared ramps, graph/map scrub, totals, previous/next, solo route, metadata editing | Overlapping-route chooser, undoable deletion, thumbnails, source/link editing |
+| Activity statistics | Totals, annual distance chart, browse activities | Full sort/group controls and duplicate-route management |
+| Ground statistics | Summary, country coverage, annual new-ground chart | Full regions/continents breakdown, sorting and grouping |
+| Search | Places, regions, trips, activities and dates; activity opens graph | Web's integrated calendar presentation and ranked list layout |
+| Trips and days | Trip list, day picker and activity list | Trip/day-only layers, day stepping/swiping, trip naming/hiding and date-filtered photos |
+| Editing | Paint/erase strokes, sizes, undo, region clearing | Preview/highlight before region clear, track-span paint, car/train route construction |
+| Rail | Native line overlay | Group/technical controls, station cards, tile-health feedback |
+| Airports | Airline airports and information cards | Airfield/helipad/closed groups, category controls and label parity |
+| Trails | Hiking raster overlay | Other trail themes, strength control, nearby-route inspection and export |
+| Photos | Local pins, gallery, zoom, video playback | Clusters, tapped-photo filtering, trip/day association and map-following gallery navigation |
+| Native tracking | Swift location, HealthKit, photo indexing and sync settings | Physical-device background-wake validation remains separate from simulator QA |
+| Sync | Strava authorization and Home Assistant setup/manual sync | Komoot; full connector schedule, status and disconnect controls |
+| Sources/import | Provenance visibility and shared file parsers | Source removal/restore and full import options/reporting |
+| Export | Native map snapshot saved to Photos | Captions, crops, layouts, quality/resolution and share composition |
+| Personal/settings | Home selection, clock, device name, sign-out | Home map marker/automatic home, account/password/deletion flows and full language UI |
+| Administration/backups | Account listing; server backup run/download | Account administration/impersonation and backup configuration/restore |
+| Introduction/updates | English strings generated from web catalogue | Intro deck, permission onboarding and What's new UI |
+| Offline/recovery | Conditional in-memory reads and error display | Persistent offline map state, retry banners and full session-recovery experience |
+
 ### And the web app consumes them
 
 It used to derive its own, from the same modules, so the two could not drift in

@@ -1215,3 +1215,14 @@ export function duplicateRoutes(routes) {
   }
   return folded;
 }
+
+/** Dated activities contribute to the year they started; undated ones do not. */
+export function distanceByYear(routes) {
+  const byYear = new Map();
+  for (const r of routes) {
+    if (!r.firstAt) continue;
+    const year = new Date(r.firstAt * 1000).getFullYear();
+    byYear.set(year, (byYear.get(year) ?? 0) + r.lengthM);
+  }
+  return [...byYear.entries()].sort((a, b) => a[0] - b[0]);
+}

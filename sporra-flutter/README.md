@@ -1,7 +1,7 @@
 # Sporra Preview
 
 The Flutter iOS preview lives here. It installs alongside the original Sporra
-app and connects to your Sporra server. Use server version **0.131.0 or newer**.
+app and connects to your Sporra server. Use server version **0.132.0 or newer**.
 Open `ios/Runner.xcworkspace` for the native project; Flutter development starts
 at `lib/main.dart`.
 
@@ -21,11 +21,17 @@ Mac, use `http://127.0.0.1:PORT`. Map tiles require internet access.
 ## Preview scope
 
 The preview includes account sign-in/registration, native maps and visited
-blobs, region fills, routes, search, trips, statistics, paint/erase with undo,
+blobs, region/country/continent fills, activity colours and visibility,
+speed/elevation graphs with map scrubbing, annual charts, routes, search, trips,
+statistics, paint/erase and region clearing with undo,
 file imports, local photo browsing, tracking and sync settings, Strava and
 Home Assistant setup, snapshots, and backup sharing for administrators.
 The Swift bridge owns location, HealthKit, photo indexing, cookies and uploads.
 Photo thumbnails remain on the device.
+
+Menus and cards use the web app’s neutral glass surfaces and backdrop blur.
+The full feature-by-feature audit is in the root ARCHITECTURE.md under
+“Flutter visual and feature parity”.
 
 This is an early port. Advanced export layouts, Komoot setup, account deletion,
 full administration, fine boundary geometry and complete visual/localization
@@ -41,7 +47,11 @@ flutter test
 
 The integration test additionally needs a disposable server at port 3209 with
 registration enabled. It creates a test account and exercises authentication,
-render data, edits and undo, menus, session restoration and sign-out. Never run
+render data, visible region/country/continent fills, activity graphs and map
+scrubbing, edits and undo, menus, session restoration and sign-out.
+Run it with `flutter drive --driver=test_driver/integration_test.dart
+--target=integration_test/app_test.dart -d <simulator-id>`; screenshots are saved
+to `/tmp/sporra-parity-*.png`. Never run
 it against a personal database.
 
 Physical-device builds require your Apple signing team and provisioning profile

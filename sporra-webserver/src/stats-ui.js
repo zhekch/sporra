@@ -5,7 +5,7 @@
 
 import { EARTH_LAND_KM2, formatKm2, formatPct } from './stats.js';
 import { sourceLabel, IMPORT_SOURCES } from './locations.js';
-import { formatDistance, formatDuration, totalLength, thumbSegments, recordedSeconds } from './routes.js';
+import { formatDistance, formatDuration, totalLength, thumbSegments, recordedSeconds, distanceByYear } from './routes.js';
 import { auth } from './auth.js';
 import { derived } from './derived.js';
 import { isKomootTourUrl } from './komoot.js';
@@ -728,12 +728,7 @@ export function mountStats({
     }
 
     // Distance per year, on the same chart the cells tab uses for new ground.
-    const byYear = new Map();
-    for (const r of list) {
-      if (!r.firstAt) continue;
-      const y = new Date(r.firstAt * 1000).getFullYear();
-      byYear.set(y, (byYear.get(y) ?? 0) + r.lengthM);
-    }
+    const byYear = new Map(distanceByYear(list));
     if (byYear.size > 1) {
       side.append(headRow('Distance by year'));
       const years = [...byYear.entries()].sort((a, b) => a[0] - b[0]);

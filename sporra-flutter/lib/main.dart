@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'src/state.dart';
+import 'src/appearance.dart';
 import 'src/map_screen.dart';
 
 void main() {
@@ -20,18 +21,7 @@ class SporraApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp.router(
     title: 'Sporra',
     debugShowCheckedModeBanner: false,
-    theme: ThemeData.dark(useMaterial3: true).copyWith(
-      scaffoldBackgroundColor: const Color(0xff0b0f17),
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xff60acff),
-        brightness: Brightness.dark,
-      ),
-      inputDecorationTheme: const InputDecorationTheme(
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.all(Radius.circular(16)),
-        ),
-      ),
-    ),
+    theme: webTheme(),
     routerConfig: router,
   );
 }

@@ -10,22 +10,25 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'state.dart';
+import 'appearance.dart';
+import 'blob.dart' show parseColor;
+import 'year_chart.dart';
 
 class Glass extends StatelessWidget {
   const Glass({super.key, required this.child});
   final Widget child;
   @override
   Widget build(BuildContext context) => ClipRRect(
-    borderRadius: BorderRadius.circular(24),
+    borderRadius: BorderRadius.circular(20),
     child: BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+      filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: const Color(0xe6181c25),
+          color: const Color(0x8a262626),
           border: Border.all(color: Colors.white12),
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(20),
         ),
-        child: child,
+        child: Material(type: MaterialType.transparency, child: child),
       ),
     ),
   );
@@ -35,36 +38,44 @@ Future<void> panel(BuildContext context, String title, Widget child) =>
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      showDragHandle: true,
-      backgroundColor: const Color(0xff151923),
+      showDragHandle: false,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black54,
       builder: (context) => SafeArea(
         child: Padding(
           padding: EdgeInsets.only(
             bottom: MediaQuery.viewInsetsOf(context).bottom,
           ),
-          child: SizedBox(
-            height: MediaQuery.sizeOf(context).height * 0.82,
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 0, 12, 12),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          title,
-                          style: Theme.of(context).textTheme.headlineSmall,
-                        ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
+            child: Glass(
+              child: SizedBox(
+                width: 520,
+                height: MediaQuery.sizeOf(context).height * 0.82,
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 12, 8, 6),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: Theme.of(context).textTheme.headlineSmall,
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.pop(context),
+                            icon: const Icon(Icons.close),
+                          ),
+                        ],
                       ),
-                      IconButton(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close),
-                      ),
-                    ],
-                  ),
+                    ),
+                    const Divider(height: 1),
+                    Expanded(child: child),
+                  ],
                 ),
-                Expanded(child: child),
-              ],
+              ),
             ),
           ),
         ),
@@ -87,7 +98,7 @@ Widget section(String title) => Padding(
     style: const TextStyle(
       fontSize: 12,
       color: Colors.white54,
-      letterSpacing: 1.2,
+      letterSpacing: 1.5,
     ),
   ),
 );
@@ -132,98 +143,65 @@ Future<void> showMenuSheet(
       return ListView(
         children: [
           section('Appearance'),
-          ListTile(
-            title: const Text('Basemap'),
-            trailing: DropdownButton<String>(
+          ChoiceRow(
+            label: 'Basemap',
+            value: a.style == 'satellite' ? 'satellite' : 'flat',
+            choices: const {'flat': '2D', 'satellite': 'Satellite'},
+            onChanged: (v) => a.setStyle(v == 'flat' ? 'dark' : v),
+          ),
+          if (a.style != 'satellite')
+            ChoiceRow(
+              label: 'Theme',
               value: a.style,
-              items: const [
-                DropdownMenuItem(value: 'dark', child: Text('Dark')),
-                DropdownMenuItem(value: 'voyager', child: Text('Light')),
-                DropdownMenuItem(value: 'terrain', child: Text('Terrain')),
-                DropdownMenuItem(value: 'satellite', child: Text('Satellite')),
-              ],
-              onChanged: (v) {
-                a.style = v!;
-                a.changed();
+              choices: const {
+                'dark': 'Dark',
+                'terrain': 'Terrain',
+                'voyager': 'Light',
               },
+              onChanged: a.setStyle,
             ),
+          ChoiceRow(
+            label: 'Detail',
+            value: a.detail,
+            choices: const {
+              'tiny': 'Tiniest',
+              'auto': 'Auto',
+              'region': 'Region',
+              'country': 'Country',
+              'continent': 'World',
+            },
+            onChanged: (v) {
+              a.detail = v;
+              a.changed();
+            },
           ),
-          ListTile(
-            title: const Text('Detail'),
-            trailing: DropdownButton<String>(
-              value: a.detail,
-              items: const [
-                DropdownMenuItem(value: 'auto', child: Text('Auto')),
-                DropdownMenuItem(value: 'tiny', child: Text('Tiniest')),
-                DropdownMenuItem(value: 'country', child: Text('Country')),
-              ],
-              onChanged: (v) {
-                a.detail = v!;
-                a.changed();
-              },
-            ),
-          ),
-          ListTile(
-            title: const Text('Colouring'),
-            trailing: DropdownButton<String>(
-              value: a.mode,
-              items: const [
-                DropdownMenuItem(value: 'flat', child: Text('Single colour')),
-                DropdownMenuItem(value: 'visits', child: Text('Most visited')),
-                DropdownMenuItem(value: 'oldest', child: Text('First seen')),
-                DropdownMenuItem(value: 'type', child: Text('Type')),
-              ],
-              onChanged: (v) {
-                a.mode = v!;
-                a.changed();
-                a.run(a.saveAppearance);
-              },
-            ),
+          ChoiceRow(
+            label: 'Colouring',
+            value: a.mode,
+            choices: const {
+              'flat': 'Single',
+              'visits': 'Visits',
+              'oldest': 'First seen',
+              'type': 'Type',
+            },
+            onChanged: (v) {
+              a.mode = v;
+              a.changed();
+              a.run(a.saveAppearance);
+            },
           ),
           if (a.mode == 'flat')
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-              child: Wrap(
-                spacing: 12,
-                children:
-                    [
-                          '#60acff',
-                          '#ff7ab8',
-                          '#5fd0a8',
-                          '#ffcf5c',
-                          '#b98cff',
-                          '#ff8f5c',
-                        ]
-                        .map(
-                          (color) => InkWell(
-                            onTap: () {
-                              a.accent = color;
-                              a.changed();
-                              a.run(a.saveAppearance);
-                            },
-                            child: Container(
-                              width: 32,
-                              height: 32,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Color(
-                                  int.parse(
-                                    'ff${color.substring(1)}',
-                                    radix: 16,
-                                  ),
-                                ),
-                                border: Border.all(
-                                  color: a.accent == color
-                                      ? Colors.white
-                                      : Colors.transparent,
-                                  width: 3,
-                                ),
-                              ),
-                            ),
-                          ),
-                        )
-                        .toList(),
-              ),
+            ListTile(
+              title: const Text('Map colour'),
+              trailing: ColorDot(a.accent),
+              onTap: () async {
+                final color = await chooseColor(context, a.accent);
+                if (color != null) {
+                  a.accent = color;
+                  a.changed();
+                  await a.run(a.saveAppearance);
+                }
+              },
             ),
           if (a.mode == 'visits' || a.mode == 'oldest')
             Padding(
@@ -261,7 +239,16 @@ Future<void> showMenuSheet(
               ),
             ),
           section('Your map'),
-          SwitchListTile(
+          GlassSwitch(
+            title: const Text('Places answer a tap'),
+            value: a.cellInfo,
+            onChanged: (v) {
+              a.cellInfo = v;
+              a.changed();
+            },
+          ),
+
+          GlassSwitch(
             title: const Text('Activities'),
             value: a.routes,
             onChanged: (v) {
@@ -269,7 +256,13 @@ Future<void> showMenuSheet(
               a.changed();
             },
           ),
-          SwitchListTile(
+          ListTile(
+            title: const Text('Activity colours and visibility'),
+            leading: const Icon(Icons.palette_outlined),
+            trailing: const Icon(Icons.chevron_right, size: 18),
+            onTap: () => showActivityStyle(context, a),
+          ),
+          GlassSwitch(
             title: const Text('Photo pins'),
             subtitle: const Text('Pictures stay on your phone'),
             value: a.photos,
@@ -279,12 +272,17 @@ Future<void> showMenuSheet(
             },
           ),
           ListTile(
+            title: const Text('Browse activities'),
+            leading: const Icon(Icons.route_outlined),
+            onTap: () => showActivities(context, a, map),
+          ),
+          ListTile(
             title: const Text('Photos'),
             leading: const Icon(Icons.photo_library_outlined),
             onTap: () => showPhotos(context, a),
           ),
           section('Reference overlays'),
-          SwitchListTile(
+          GlassSwitch(
             title: const Text('Train tracks'),
             value: a.rail,
             onChanged: (v) {
@@ -292,7 +290,7 @@ Future<void> showMenuSheet(
               a.changed();
             },
           ),
-          SwitchListTile(
+          GlassSwitch(
             title: const Text('Airports'),
             value: a.airports,
             onChanged: (v) {
@@ -300,7 +298,7 @@ Future<void> showMenuSheet(
               a.changed();
             },
           ),
-          SwitchListTile(
+          GlassSwitch(
             title: const Text('Hiking trails'),
             value: a.trails,
             onChanged: (v) {
@@ -368,7 +366,7 @@ Future<void> showMenuSheet(
           const Padding(
             padding: EdgeInsets.all(24),
             child: Text(
-              'Sporra Preview · 0.1.0',
+              'Sporra Preview · 0.2.0',
               style: TextStyle(color: Colors.white38),
             ),
           ),
@@ -439,6 +437,18 @@ Future<void> showStats(BuildContext context, AppState app) => panel(
         fact('Longest streak', '${s['streakDays']} days'),
         fact('First seen', date(s['firstAt'])),
         fact('Last seen', date(s['lastAt'])),
+        if ((s['years'] as List? ?? []).length > 1) ...[
+          section('New ground by year'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: YearChart(
+              entries: [
+                for (final y in s['years'])
+                  {'year': y[0], 'value': y[1], 'label': '${y[1]} cells'},
+              ],
+            ),
+          ),
+        ],
         section('Countries'),
         for (final c in s['countries'])
           ListTile(
@@ -464,7 +474,7 @@ Future<void> showSources(BuildContext context, AppState app) => panel(
         return ListView(
           children: [
             for (final s in data['sources'])
-              CheckboxListTile(
+              GlassSwitch(
                 title: Text('${s['key']}'),
                 subtitle: Text(
                   '${s['cells']} cells · ${s['routes']} activities',
@@ -557,8 +567,16 @@ class _SearchState extends State<_Search> {
                   '${r['kind']}${r['country'] == null ? '' : ' · ${r['country']}'}',
                 ),
                 onTap: () {
-                  goTo(widget.map, r);
-                  Navigator.pop(context);
+                  if (r['kind'] == 'route') {
+                    showRoute(
+                      context,
+                      widget.app,
+                      Map<String, dynamic>.from(r),
+                    );
+                  } else {
+                    goTo(widget.map, r);
+                    Navigator.pop(context);
+                  }
                 },
               ),
           ],
@@ -568,7 +586,7 @@ class _SearchState extends State<_Search> {
   );
 }
 
-void goTo(MapLibreMapController map, Map r) {
+void goTo(MapLibreMapController map, Map r, {double bottom = 150}) {
   final bounds = r['bbox'] ?? r['bounds'];
   if (bounds is List && bounds.length == 4) {
     map.animateCamera(
@@ -586,7 +604,7 @@ void goTo(MapLibreMapController map, Map r) {
         left: 50,
         right: 50,
         top: 100,
-        bottom: 150,
+        bottom: bottom,
       ),
     );
   } else if (r['lng'] != null && r['lat'] != null) {
@@ -687,8 +705,7 @@ Future<void> showDay(
             title: Text('${r['name']}'),
             subtitle: Text('${r['sport'] ?? 'Activity'}'),
             onTap: () {
-              goTo(map, r);
-              Navigator.pop(context);
+              showRoute(context, app, Map<String, dynamic>.from(r));
             },
           ),
         if ((d['routes'] ?? []).isEmpty)
@@ -888,12 +905,12 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               onChanged: (v) => configure(app, {'precision': v}),
             ),
           ),
-          SwitchListTile(
+          GlassSwitch(
             title: const Text('Apple Health workouts'),
             value: d['health'] == true,
             onChanged: (v) => configure(app, {'health': v}),
           ),
-          SwitchListTile(
+          GlassSwitch(
             title: const Text('Photo locations'),
             value: d['photos'] == true,
             onChanged: (v) => configure(app, {'photos': v}),
@@ -962,7 +979,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
           ),
           const ListTile(
             title: Text('Sporra Preview'),
-            subtitle: Text('0.1.0 · Native map for iOS'),
+            subtitle: Text('0.2.0 · Native map for iOS'),
           ),
         ],
       );
@@ -1010,7 +1027,8 @@ Future<void> showBackup(BuildContext context, AppState app) => panel(
                   files: [XFile(file.path)],
                   sharePositionOrigin: context.mounted
                       ? ((context.findRenderObject() as RenderBox?)
-                                ?.localToGlobal(Offset.zero) ?? Offset.zero) &
+                                    ?.localToGlobal(Offset.zero) ??
+                                Offset.zero) &
                             const Size(1, 1)
                       : null,
                 ),
@@ -1094,44 +1112,134 @@ Future<void> showAdmin(BuildContext context, AppState app) => panel(
   ),
 );
 
-Future<void> showRoute(
+Future<void> showActivityDetails(
   BuildContext context,
   AppState app,
   Map<String, dynamic> route,
 ) => panel(
   context,
   '${route['name'] ?? 'Activity'}',
-  ListView(
-    children: [
-      fact('Activity', route['sport'] ?? 'Recorded route'),
-      fact(
-        'Distance',
-        '${((route['lengthM'] as num?)?.toDouble() ?? 0) / 1000} km',
-      ),
-      fact('Elevation gain', '${route['elevUp'] ?? 0} m'),
-      fact('Started', date(route['firstAt'])),
-      fact('Finished', date(route['lastAt'])),
-      ListTile(
-        title: const Text('Rename activity'),
-        leading: const Icon(Icons.edit_outlined),
-        onTap: () async {
-          final name = await askText(
-            context,
-            'Activity name',
-            '${route['name'] ?? ''}',
-          );
-          if (name != null) {
-            await app.run(() async {
-              await app.api.post('/api/routes/update', {
-                'id': route['id'],
-                'name': name,
-              });
+  Consumer(
+    builder: (context, ref, _) {
+      ref.watch(appProvider);
+      return ListView(
+        children: [
+          fact('Activity', route['sport'] ?? 'Recorded route'),
+          fact(
+            'Distance',
+            '${(((route['lengthM'] as num?)?.toDouble() ?? 0) / 1000).toStringAsFixed(2)} km',
+          ),
+          fact('Elevation gain', '${route['elevUp'] ?? 0} m'),
+          fact('Started', date(route['firstAt'])),
+          fact('Finished', date(route['lastAt'])),
+          ListTile(
+            title: Text(
+              app.selectedRoute == route['id']
+                  ? 'Show all activities'
+                  : 'Show only this activity',
+            ),
+            leading: const Icon(Icons.route_outlined),
+            onTap: () {
+              app.selectedRoute = app.selectedRoute == route['id']
+                  ? null
+                  : route['id'];
               app.changed();
-            });
-          }
-        },
-      ),
-    ],
+              Navigator.pop(context);
+            },
+          ),
+          for (final field in {
+            'name': 'Name',
+            'sport': 'Activity type',
+            'place': 'Place',
+          }.entries)
+            ListTile(
+              title: Text('Edit ${field.value.toLowerCase()}'),
+              leading: const Icon(Icons.edit_outlined),
+              onTap: app.busy
+                  ? null
+                  : () async {
+                      final text = await askText(
+                        context,
+                        field.value,
+                        '${route[field.key] ?? ''}',
+                      );
+                      if (text != null &&
+                          (field.key != 'name' || text.isNotEmpty)) {
+                        await app.run(() async {
+                          await app.api.post('/api/routes/update', {
+                            'id': route['id'],
+                            field.key: text,
+                          });
+                          route[field.key] = text;
+                          app.changed();
+                        });
+                      }
+                    },
+            ),
+          ListTile(
+            title: const Text('Activity colour'),
+            trailing: ColorDot(
+              app.activityColor(
+                '${route['sport'] ?? ''}'.isEmpty
+                    ? '\u0000none'
+                    : '${route['sport']}',
+              ),
+            ),
+            onTap: () => showActivityStyle(context, app),
+          ),
+        ],
+      );
+    },
+  ),
+);
+
+Future<void> showActivities(
+  BuildContext context,
+  AppState app,
+  MapLibreMapController? map,
+) => panel(
+  context,
+  'Activities',
+  AsyncList(
+    load: () => app.api.get('/api/render/activity-stats'),
+    builder: (context, data) => ListView(
+      children: [
+        fact('Activities', (data['routes'] as List).length),
+        fact('Total distance', data['distance']),
+        if (data['duration'] != null) fact('Time recorded', data['duration']),
+        if (data['longest'] != null)
+          fact(
+            'Longest',
+            '${data['longest']['distance']} · ${data['longest']['name']}',
+          ),
+        if ((data['years'] as List).length > 1) ...[
+          section('Distance by year'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: YearChart(
+              entries: List<Map<String, dynamic>>.from(data['years']),
+            ),
+          ),
+        ],
+        section('Your activities'),
+        for (final route in data['routes'])
+          ListTile(
+            title: Text('${route['name']}'),
+            subtitle: Text('${route['sport']} · ${date(route['firstAt'])}'),
+            trailing: const Icon(Icons.chevron_right, size: 18),
+            onTap: () {
+              if (map != null) goTo(map, route);
+              showRoute(context, app, Map<String, dynamic>.from(route));
+            },
+          ),
+        if ((data['routes'] as List).isEmpty)
+          const ListTile(
+            title: Text(
+              'No activities yet. Import a file or connect a sync source.',
+            ),
+          ),
+      ],
+    ),
   ),
 );
 Future<void> showAirport(BuildContext context, Map<String, dynamic> airport) =>
@@ -1239,7 +1347,7 @@ Future<void> setupHomeAssistant(BuildContext context, AppState app) async {
               shrinkWrap: true,
               children: [
                 for (final entity in result['entities'])
-                  CheckboxListTile(
+                  GlassSwitch(
                     title: Text('${entity['name'] ?? entity['id']}'),
                     value: selected.contains(entity['id']),
                     onChanged: (on) => setState(() {
@@ -1314,4 +1422,216 @@ Future<void> chooseHome(BuildContext context, AppState app) async {
     }
     app.changed();
   });
+}
+
+class ColorDot extends StatelessWidget {
+  const ColorDot(this.hex, {super.key});
+  final String hex;
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 28,
+    height: 28,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      color: parseColor(hex),
+      border: Border.all(color: Colors.white38, width: 2),
+    ),
+  );
+}
+
+Future<String?> chooseColor(BuildContext context, String initial) async {
+  final text = TextEditingController(text: initial.substring(0, 7));
+  double opacity = initial.length == 9
+      ? int.parse(initial.substring(7), radix: 16) / 255
+      : 1;
+  String value = initial.substring(0, 7);
+  final result = await showDialog<String>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, set) => AlertDialog(
+        title: const Text('Colour'),
+        content: SizedBox(
+          width: 280,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Wrap(
+                  spacing: 14,
+                  runSpacing: 14,
+                  children: [
+                    for (final hex in [
+                      '#60acff',
+                      '#ff9147',
+                      '#ff7ab8',
+                      '#5fd0a8',
+                      '#ffcf5c',
+                      '#b98cff',
+                      '#df4949',
+                      '#ffffff',
+                    ])
+                      InkWell(
+                        onTap: () => set(() {
+                          value = hex;
+                          text.text = hex;
+                        }),
+                        child: ColorDot(hex),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                TextField(
+                  controller: text,
+                  decoration: InputDecoration(
+                    labelText: 'Hex colour',
+                    errorText: RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(text.text)
+                        ? null
+                        : 'Use #RRGGBB',
+                  ),
+                  onChanged: (v) => set(() {
+                    if (RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(v)) value = v;
+                  }),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    ColorDot(value),
+                    const Spacer(),
+                    Text('Opacity ${(opacity * 100).round()}%'),
+                  ],
+                ),
+                Slider(
+                  value: opacity,
+                  onChanged: (v) => set(() => opacity = v),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(text.text)
+                ? () => Navigator.pop(
+                    context,
+                    '$value${(opacity * 255).round().toRadixString(16).padLeft(2, '0')}',
+                  )
+                : null,
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    ),
+  );
+  await Future<void>.delayed(const Duration(milliseconds: 300));
+  text.dispose();
+  return result;
+}
+
+Future<void> showActivityStyle(BuildContext context, AppState app) => panel(
+  context,
+  'Activities',
+  AsyncList(
+    load: () => app.api.get('/api/routes'),
+    builder: (context, data) => Consumer(
+      builder: (context, ref, _) {
+        final a = ref.watch(appProvider);
+        final sports =
+            (data['routes'] as List)
+                .map(
+                  (r) => '${r['sport'] ?? ''}'.isEmpty
+                      ? '\u0000none'
+                      : '${r['sport']}',
+                )
+                .toSet()
+                .toList()
+              ..sort();
+        return ListView(
+          children: [
+            GlassSwitch(
+              title: const Text('Color each route'),
+              subtitle: const Text('Give every activity line its own colour'),
+              value: a.routeView['rainbow'] == true,
+              onChanged: a.busy
+                  ? null
+                  : (v) => a.run(() => a.saveRouteView({'rainbow': v})),
+            ),
+            for (final sport in sports)
+              ListTile(
+                title: Text(sport == '\u0000none' ? 'Other activities' : sport),
+                leading: IconButton(
+                  tooltip: a.activityVisible(sport)
+                      ? 'Hide activity'
+                      : 'Show activity',
+                  icon: Icon(
+                    a.activityVisible(sport)
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                  ),
+                  onPressed: a.busy
+                      ? null
+                      : () => a.run(() async {
+                          final hidden = Set<String>.from(
+                            a.routeView['hidden'] ?? [],
+                          );
+                          if (!hidden.remove(sport)) hidden.add(sport);
+                          await a.saveRouteView({'hidden': hidden.toList()});
+                        }),
+                ),
+                trailing: ColorDot(a.activityColor(sport)),
+                onTap: a.busy
+                    ? null
+                    : () async {
+                        final color = await chooseColor(
+                          context,
+                          a.activityColor(sport),
+                        );
+                        if (color != null) {
+                          await a.run(
+                            () => a.saveRouteView({
+                              'colors': {
+                                ...?a.routeView['colors'] as Map?,
+                                sport: color,
+                              },
+                            }),
+                          );
+                        }
+                      },
+              ),
+            if (sports.isEmpty)
+              const ListTile(
+                title: Text(
+                  'Import or sync activities to customize their colours.',
+                ),
+              ),
+            ListTile(
+              title: const Text('Reset activity appearance'),
+              leading: const Icon(Icons.restart_alt),
+              onTap: a.busy
+                  ? null
+                  : () => a.run(
+                      () => a.saveRouteView({
+                        'colors': {},
+                        'hidden': [],
+                        'rainbow': false,
+                      }),
+                    ),
+            ),
+          ],
+        );
+      },
+    ),
+  ),
+);
+
+Future<void> showRoute(
+  BuildContext context,
+  AppState app,
+  Map<String, dynamic> route,
+) async {
+  Navigator.of(context).popUntil((r) => r.isFirst);
+  await app.openActivity(route['id']);
 }
