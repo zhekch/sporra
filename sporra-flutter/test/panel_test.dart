@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sporra_flutter/src/sheets.dart';
+import 'package:sporra_flutter/src/appearance.dart';
 import 'package:sporra_flutter/src/state.dart';
 
 void main() {
@@ -28,12 +29,21 @@ void main() {
                     onPressed: () => panel(
                       c,
                       'Choose an activity',
-                      ListView(
-                        shrinkWrap: true,
-                        children: const [
-                          ListTile(title: Text('Ride')),
-                          ListTile(title: Text('Walk')),
-                        ],
+                      Builder(
+                        builder: (menuContext) => ListView(
+                          shrinkWrap: true,
+                          children: [
+                            const ListTile(title: Text('Ride')),
+                            ListTile(
+                              title: const Text('Walk'),
+                              onTap: () => panel(
+                                menuContext,
+                                'Nested menu',
+                                const Text('Submenu content'),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                     child: const Text('Open'),
@@ -52,6 +62,16 @@ void main() {
       expect(glass.radius, 43);
       expect(tester.getSize(find.byType(Glass)).height, lessThan(280));
       expect(tester.getBottomLeft(find.byType(Glass)).dy, 832);
+      await tester.tap(find.text('Walk'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<Glass>(find.byType(Glass)).radius, glass.radius);
+      expect(find.text('Submenu content'), findsOneWidget);
+      expect(
+        webTheme(menuRadius: menuCornerRadius(context)).dialogTheme.shape,
+        RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.circular(glass.radius),
+        ),
+      );
       panel(context, 'Settings', const Text('Only the new panel'));
       await tester.pumpAndSettle();
       expect(find.text('Choose an activity'), findsNothing);

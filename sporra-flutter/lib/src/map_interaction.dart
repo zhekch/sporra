@@ -114,3 +114,21 @@ String formatPercent(num value) => value >= 1
     : value >= 0.005
     ? '${value.toStringAsFixed(2)}%'
     : '<0.01%';
+
+// Compare directed longitude intervals, including views crossing the date line.
+bool viewportWithin(
+  List<double> outer,
+  List<double> inner, {
+  double inset = 0,
+}) {
+  final latMargin = (outer[3] - outer[1]) * inset;
+  if (inner[1] < outer[1] + latMargin || inner[3] > outer[3] - latMargin) {
+    return false;
+  }
+  double span(List<double> b) => b[2] - b[0] == 360 ? 360 : (b[2] - b[0]) % 360;
+  final available = span(outer);
+  final offset = (inner[0] - outer[0]) % 360;
+  final lngMargin = available * inset;
+  return available == 360 ||
+      (offset >= lngMargin && offset + span(inner) <= available - lngMargin);
+}

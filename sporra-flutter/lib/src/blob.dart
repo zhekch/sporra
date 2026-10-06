@@ -69,6 +69,8 @@ class BlobPainter {
     final unit = math.max((data['radius'] as num).toDouble() * scale, 0.85);
     var recorder = ui.PictureRecorder();
     var canvas = Canvas(recorder);
+    final colors = <String, Color>{};
+    final discPaint = Paint();
     for (final row in data['rows'] as List) {
       var x = (row[1] as num).toDouble();
       // Choose the nearest world copy even around the date line.
@@ -80,7 +82,11 @@ class BlobPainter {
       canvas.drawCircle(
         Offset((x - west) * scale, (north - y) / (north - south) * height),
         row[4] == true ? math.max(unit * 0.9, 2.0) : unit * 0.9,
-        Paint()..color = parseColor(row[3]),
+        discPaint
+          ..color = colors.putIfAbsent(
+            row[3] as String,
+            () => parseColor(row[3]),
+          ),
       );
     }
     var picture = recorder.endRecording();

@@ -21,7 +21,7 @@ class SporraApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp.router(
     title: 'Sporra',
     debugShowCheckedModeBanner: false,
-    theme: webTheme(),
+    theme: webTheme(menuRadius: menuCornerRadius(context)),
     routerConfig: router,
   );
 }

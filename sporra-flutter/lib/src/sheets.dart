@@ -62,14 +62,7 @@ Future<void> panel(
   final previous = _activePanel;
   _activePanel = null;
   if (previous != null && previous.isActive) navigator.removeRoute(previous);
-  final phoneRadius =
-      math.max(
-            MediaQuery.paddingOf(context).top,
-            MediaQuery.viewPaddingOf(context).top,
-          ) >=
-          44
-      ? 43.0
-      : 24.0;
+  final phoneRadius = menuCornerRadius(context);
   app.setMenuOpen(true);
   try {
     await showModalBottomSheet<void>(
@@ -934,10 +927,14 @@ Future<DateTime?> chooseDay(BuildContext context, AppState app) async {
     SizedBox(
       height: 350,
       child: AsyncList(
-        load: () async => {
-          'days': (await app.api.get('/api/days'))['days'],
-          'trips': (await app.api.get('/api/trips'))['trips'],
-        },
+        load: () => app.api
+            .getMany({'days': '/api/days', 'trips': '/api/trips'})
+            .then(
+              (data) => {
+                'days': data['days']['days'],
+                'trips': data['trips']['trips'],
+              },
+            ),
         builder: (context, data) => VisitCalendar(
           days: data['days'],
           trips: data['trips'],
@@ -963,10 +960,14 @@ Future<void> showTrips(
     context,
     'Trips and days',
     AsyncList(
-      load: () async => {
-        'trips': (await app.api.get('/api/trips'))['trips'],
-        'days': (await app.api.get('/api/days'))['days'],
-      },
+      load: () => app.api
+          .getMany({'trips': '/api/trips', 'days': '/api/days'})
+          .then(
+            (data) => {
+              'trips': data['trips']['trips'],
+              'days': data['days']['days'],
+            },
+          ),
       builder: (context, data) => StatefulBuilder(
         builder: (context, setState) {
           final hidden = List<String>.from(app.prefs['hiddenTrips'] ?? []);
@@ -1169,7 +1170,7 @@ Future<void> showPhotos(
             ),
           ),
           child: FutureBuilder(
-            future: app.native.thumbnail(items[i]['index'], 256),
+            future: app.thumbnail(items[i]['index'], 256),
             builder: (_, s) => s.hasData
                 ? Stack(
                     fit: StackFit.expand,
@@ -1229,7 +1230,7 @@ class _PhotoGalleryState extends State<PhotoGallery> {
       itemCount: widget.photos.length,
       onPageChanged: (i) => setState(() => index = i),
       itemBuilder: (context, i) => FutureBuilder(
-        future: widget.app.native.thumbnail(widget.photos[i]['index'], 2048),
+        future: widget.app.thumbnail(widget.photos[i]['index'], 2048),
         builder: (context, s) => s.hasData
             ? Stack(
                 children: [
@@ -1564,11 +1565,11 @@ Future<void> showConnections(BuildContext context, AppState app) => panel(
   context,
   'Sync connections',
   AsyncList(
-    load: () async => {
-      'strava': await app.api.get('/api/strava'),
-      'ha': await app.api.get('/api/ha'),
-      'device': await app.api.get('/api/device'),
-    },
+    load: () => app.api.getMany({
+      'strava': '/api/strava',
+      'ha': '/api/ha',
+      'device': '/api/device',
+    }),
     builder: (context, data) => ListView(
       shrinkWrap: true,
       children: [

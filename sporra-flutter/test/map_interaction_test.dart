@@ -7,6 +7,24 @@ import 'package:sporra_flutter/src/blob.dart'
     show mercX, mercY, longitude, latitude;
 
 void main() {
+  test('padded viewport reuse respects edges and the date line', () {
+    expect(
+      viewportWithin([-20, -10, 20, 10], [-19, -5, 10, 5], inset: 0.1),
+      isFalse,
+    );
+    expect(
+      viewportWithin([170, -10, -170, 10], [175, -5, -175, 5], inset: 0.1),
+      isTrue,
+    );
+    expect(viewportWithin([-20, -10, 20, 10], [-10, -5, 10, 5]), isTrue);
+    expect(viewportWithin([-20, -10, 20, 10], [-10, -5, 21, 5]), isFalse);
+    expect(viewportWithin([-20, -10, 20, 10], [-10, -11, 10, 5]), isFalse);
+    expect(viewportWithin([170, -10, -170, 10], [175, -5, -175, 5]), isTrue);
+    expect(viewportWithin([170, -10, -170, 10], [-175, -5, -165, 5]), isFalse);
+    expect(viewportWithin([-180, -90, 180, 90], [175, -5, -175, 5]), isTrue);
+    expect(viewportWithin([170, -10, -170, 10], [-180, -5, 180, 5]), isFalse);
+  });
+
   test('local tap names the same cell as the shared web lattice', () {
     final vectors =
         jsonDecode(File('test/hit-vectors.json').readAsStringSync()) as List;

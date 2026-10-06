@@ -9899,3 +9899,58 @@ photo and airport priority. The selected region outline uses cached geometry;
 cells use the web's four-round 0.28 corner smoothing. The white selection line
 and dark casing share the web zoom-width stops. Place dates occupy one Seen row,
 visits are grouped, and ground area/percentage use the web precision rules.
+
+
+### Flutter latency and device caching (0.4.0)
+
+`SporraApi` now serves fresh reads locally: viewport cells, areas, point facts
+and search for 15 seconds; routes, activities, tracks, days, trips, preferences,
+sources and statistics for 60 seconds; styles and reference data for one day.
+These are maximum ages on the next read, not background polling intervals.
+Expired reads revalidate with ETags. `get(refresh: true)` forces revalidation.
+Authentication, administration and connector status always reach the server.
+Independent calendar, trip, connection and track datasets load concurrently;
+days, trips and route summaries warm after login without delaying the map.
+
+The response cache is bounded to 128 entries and 8 MiB of estimated string
+memory, with oldest entries evicted first and fresh reads moving an entry to
+the end. Eligible responses are saved in Application Support after a 500 ms
+quiet period, and flushed when the map becomes inactive or goes into the
+background. Restoration requires a successful `/api/me` check and an exact
+server/account match. A transport failure can reuse an existing response for
+up to one day; HTTP failures, including 401, never fall back to saved data.
+This does not provide offline login. Mutations invalidate before and after the
+write, native sync invalidates after completing, and sign-out clears device
+responses. A generation prevents earlier requests from repopulating the cache.
+Simultaneous GETs share one download but receive separate decoded objects, so
+filtering and decorating native GeoJSON cannot corrupt subsequent reads.
+JSON over 64 KiB and cache-file encoding run in a Dart isolate.
+
+Map refresh starts its viewport request alongside route preparation. Unchanged
+route geometry, trip tracks, overlays and selection outlines skip native
+source/layer updates; route data is reconsidered after 60 seconds. Graph
+scrubbing updates the cursor without resending the colored activity geometry.
+The existing padded visited sheet can survive small pans for 15 seconds when
+its level, filters, appearance, data generation, fine-boundary mode and output
+size match. Reuse requires the viewport to stay inside the sheet with a 10%
+inset for blur, and within 0.35 zoom steps of the painted camera. Larger moves,
+zoom-level changes and edits repaint. Reuse checks directed longitude intervals
+so crossing the date line remains correct. Blob discs reuse Paint objects and
+parsed colors within each render; the shaping pipeline and resolution stay the
+same.
+
+Brush coordinate conversion uses batches of 32 native calls rather than waiting
+for each point separately, retaining point order and the full stroke. Photo
+index reads and thumbnail requests share in-flight work. Encoded thumbnails
+use an LRU memory cache bounded to 64 entries and 24 MiB; sync and sign-out clear
+it, and late thumbnail replies cannot repopulate it. These bounds cover encoded
+bytes; Flutter's separate decoded image cache still owns displayed images.
+
+
+All Flutter menus and themed dialogs resolve their outer corner radius from the
+Flutter view's original safe inset: 43 logical pixels on phones with a top
+inset of at least 44, otherwise 24. Submenu contexts have already passed through
+SafeArea, which removes that inset from MediaQuery and previously shrank nested
+menus to 24. `menuCornerRadius` reads View padding instead, so the main menu and
+every submenu retain the same continuous corner shape. Native Cupertino
+confirmation prompts keep their platform styling.

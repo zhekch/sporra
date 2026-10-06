@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'api.dart';
 import 'native.g.dart';
@@ -29,9 +32,61 @@ class AppState extends ChangeNotifier {
   }
 
   bool photos = false;
+  static const thumbnailBytes = 24 * 1024 * 1024;
+  static const thumbnailLimit = 64;
   List<dynamic>? photoItems;
-  Future<List<dynamic>> readPhotos() async =>
-      photoItems ??= jsonDecode(await native.photos()) as List;
+  Future<List<dynamic>>? _photoRead;
+  final _thumbnails = <(int, int), Uint8List>{};
+  final _thumbnailReads = <(int, int), Future<Uint8List>>{};
+  int _photoGeneration = 0;
+
+  Future<Uint8List> thumbnail(int index, int pixels) async {
+    final key = (index, pixels);
+    final cached = _thumbnails.remove(key);
+    if (cached != null) {
+      _thumbnails[key] = cached;
+      return cached;
+    }
+    final generation = _photoGeneration;
+    final read = _thumbnailReads[key] ??= native.thumbnail(index, pixels);
+    try {
+      final bytes = await read;
+      if (generation == _photoGeneration) {
+        _thumbnails[key] = bytes;
+        var size = _thumbnails.values.fold(0, (n, value) => n + value.length);
+        while (_thumbnails.length > thumbnailLimit || size > thumbnailBytes) {
+          size -= _thumbnails.remove(_thumbnails.keys.first)!.length;
+        }
+      }
+      return bytes;
+    } finally {
+      if (identical(_thumbnailReads[key], read)) _thumbnailReads.remove(key);
+    }
+  }
+
+  void clearPhotos() {
+    _photoGeneration++;
+    photoItems = null;
+    _photoRead = null;
+    _thumbnails.clear();
+    _thumbnailReads.clear();
+  }
+
+  Future<List<dynamic>> readPhotos() async {
+    if (photoItems != null) return photoItems!;
+    final generation = _photoGeneration;
+    final read = _photoRead ??= native.photos().then(
+      (json) async => await SporraApi.decodeJson(json) as List,
+    );
+    try {
+      final items = await read;
+      if (generation == _photoGeneration) photoItems = items;
+      return items;
+    } finally {
+      if (identical(_photoRead, read)) _photoRead = null;
+    }
+  }
+
   List<dynamic> photosInTrack(List<dynamic> items) {
     final from = track?['from'], to = track?['to'];
     if (from == null || to == null) return items;
@@ -118,9 +173,11 @@ class AppState extends ChangeNotifier {
       final query = Uri(
         queryParameters: day != null ? {'day': day} : {'trip': '$trip'},
       ).query;
-      final data = Map<String, dynamic>.from(
-        await api.get('/api/render/track?$query'),
-      );
+      final results = await Future.wait([
+        api.get('/api/render/track?$query'),
+        api.get('/api/days'),
+      ]);
+      final data = Map<String, dynamic>.from(results[0]);
       if (request != trackRequest) return;
       activityRequest++;
       activity = null;
@@ -128,9 +185,7 @@ class AppState extends ChangeNotifier {
       activitySample = null;
       selectedRoute = null;
       recordedDays =
-          ((await api.get('/api/days'))['days'] as Map).keys
-              .map((key) => '$key')
-              .toList()
+          (results[1]['days'] as Map).keys.map((key) => '$key').toList()
             ..sort();
       if (request != trackRequest) return;
       if (trip != null) {
@@ -167,11 +222,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> stepDay(int delta) async {
     if (trackDay == null) return;
-    final days =
-        ((await api.get('/api/days'))['days'] as Map).keys
-            .map((key) => '$key')
-            .toList()
-          ..sort();
+    final days = recordedDays;
     final index = days.indexOf(trackDay!);
     final next = index + delta;
     if (index >= 0 && next >= 0 && next < days.length) {
@@ -192,7 +243,11 @@ class AppState extends ChangeNotifier {
         api.server = server.contains('://') ? server : 'https://$server';
         final me = await api.get('/api/me');
         user = me['username'] == null ? null : Map<String, dynamic>.from(me);
-        if (user != null) await loadPrefs();
+        if (user != null) {
+          await restoreCache();
+          await loadPrefs();
+          warmData();
+        }
       }
     } catch (e) {
       error = '$e';
@@ -231,9 +286,29 @@ class AppState extends ChangeNotifier {
         'password': password,
       });
       user = Map<String, dynamic>.from(result);
+      await restoreCache();
       await loadPrefs();
+      warmData();
       revision++;
     });
+  }
+
+  Future<void> restoreCache() async {
+    try {
+      final directory = await getApplicationSupportDirectory();
+      await api.restore(
+        File('${directory.path}/responses.json'),
+        '${user!['username']}',
+      );
+    } catch (_) {
+      // Memory caching still works when device storage is unavailable.
+    }
+  }
+
+  void warmData() {
+    for (final path in ['/api/days', '/api/trips', '/api/routes']) {
+      unawaited(api.get(path).then<void>((_) {}, onError: (Object _) {}));
+    }
   }
 
   Future<void> loadPrefs() async {
@@ -319,7 +394,9 @@ class AppState extends ChangeNotifier {
   Future<void> sync() => run(() async {
     device = Map<String, dynamic>.from(jsonDecode(await native.sync()));
     if ('${device['error'] ?? ''}'.isNotEmpty) throw Exception(device['error']);
-    photoItems = null;
+    clearPhotos();
+    api.clear();
+    warmData();
     revision++;
   });
   Future<void> signOut() => run(() async {
@@ -336,7 +413,7 @@ class AppState extends ChangeNotifier {
     user = null;
     undo = null;
     hidden.clear();
-    photoItems = null;
+    clearPhotos();
     recordedDays = [];
     activityRequest++;
     activity = null;

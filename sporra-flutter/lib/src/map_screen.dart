@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import 'blob.dart';
+import 'api.dart';
 import 'state.dart';
 import 'sheets.dart';
 import 'activity_graph.dart';
@@ -28,6 +29,10 @@ class LayerPatch implements LayerProperties {
   @override
   Map<String, dynamic> toJson({bool skipNulls = true}) => properties.toJson();
 }
+
+const sheetZoomTolerance = 0.35;
+const sheetReuseInset = 0.1;
+const brushBridgeBatch = 32;
 
 const activityCardMaxHeight = 430.0;
 const activityCardHeightShare = 0.64;
@@ -62,7 +67,8 @@ class MapScreen extends ConsumerStatefulWidget {
   ConsumerState<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends ConsumerState<MapScreen> {
+class _MapScreenState extends ConsumerState<MapScreen>
+    with WidgetsBindingObserver {
   MapLibreMapController? map;
   final painter = BlobPainter();
   Future<void> patchLayer(String id, LayerProperties properties) =>
@@ -99,8 +105,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   List<double>? factsBounds;
   int tapRequest = 0;
   List<Map<String, dynamic>> routeSummaries = [];
-  int routesRevision = -1;
-  int photosRevision = -1;
+  String? routesView;
+  String? renderedView;
+  double? renderedZoom;
+  DateTime? renderedAt;
+  Object? trackView, activityView, activityLinesView, overlaysView, outlineView;
+  DateTime? routesUpdated;
+  Object? photosView;
   String? observedError;
   Timer? fade;
   double activityCardHeight = 330, placeCardHeight = 150;
@@ -127,9 +138,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     if (pixels.isEmpty) return;
     await app.run(() async {
       final points = <List<double>>[];
-      for (final p in pixels) {
-        final coord = await map!.toLatLng(math.Point(p.dx, p.dy));
-        points.add([coord.longitude, coord.latitude]);
+      // Bound the native queue while eliminating one round trip per sample.
+      for (var start = 0; start < pixels.length; start += brushBridgeBatch) {
+        final batch = pixels.skip(start).take(brushBridgeBatch);
+        final coordinates = await Future.wait(
+          batch.map((p) => map!.toLatLng(math.Point(p.dx, p.dy))),
+        );
+        points.addAll(coordinates.map((p) => [p.longitude, p.latitude]));
       }
       final result = await app.api.post('/api/render/brush', {
         'level': 0,
@@ -173,9 +188,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final token = generation;
     final app = ref.read(appProvider);
     try {
-      await updateRoutes(app);
-      await updateActivityFocus(app);
-      await updateTrack(app);
       if (!mounted || token != generation) return;
       final renderRevision = app.revision;
       final viewport = await map!.getVisibleRegion();
@@ -190,6 +202,36 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           ? 7
           : levelForZoom(zoom);
       currentLevel = level;
+      final view = jsonEncode([
+        generation,
+        app.api.revision,
+        app.renderQuery(level),
+        zoom >= regionFineZoom,
+        mapSize.width,
+        mapSize.height,
+      ]);
+      final visible = [
+        viewport.southwest.longitude,
+        viewport.southwest.latitude,
+        viewport.northeast.longitude,
+        viewport.northeast.latitude,
+      ];
+      if (renderedView == view &&
+          factsBounds != null &&
+          renderedZoom != null &&
+          renderedAt != null &&
+          DateTime.now().difference(renderedAt!) <
+              SporraApi.viewportFreshness &&
+          (zoom - renderedZoom!).abs() <= sheetZoomTolerance &&
+          viewportWithin(factsBounds!, visible, inset: sheetReuseInset)) {
+        await updateRoutes(app);
+        await updateActivityFocus(app);
+        await updateTrack(app);
+        await updateOverlays(app);
+        await updatePlaceOutline();
+        if (mounted) setState(() => mapError = null);
+        return;
+      }
       var west = viewport.southwest.longitude,
           east = viewport.northeast.longitude;
       var span = east - west;
@@ -215,15 +257,20 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       final bounds = <double>[west, south, east, north];
       final query =
           '${app.renderQuery(level, bbox: bounds.join(','))}&info=1&fine=${zoom >= regionFineZoom ? 1 : 0}';
-      final data = Map<String, dynamic>.from(
-        await app.api.get(
-          '/api/render/${level < 6 ? 'cells' : 'regions'}?$query',
-        ),
-      );
+      final results = await Future.wait([
+        app.api.get('/api/render/${level < 6 ? 'cells' : 'regions'}?$query'),
+        () async {
+          await updateRoutes(app);
+          await updateActivityFocus(app);
+          await updateTrack(app);
+        }(),
+      ]);
+      final data = Map<String, dynamic>.from(results[0]);
       if (!mounted || token != generation || renderRevision != app.revision) {
         pending = true;
         return;
       }
+      renderedView = null;
       factsBounds = bounds;
       final alpha = app.accent.length == 9
           ? int.parse(app.accent.substring(7), radix: 16) / 255
@@ -257,7 +304,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           h,
           app.mode != 'flat',
         );
-        if (!mounted || token != generation) return;
+        if (!mounted || token != generation || renderRevision != app.revision) {
+          pending = true;
+          return;
+        }
         final nextSlot = 1 - sheetSlot, id = 'blob-$nextSlot';
         if (sources.contains(id)) {
           await map!.updateImageSource(id, sheet.bytes, sheet.coordinates);
@@ -370,6 +420,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           }
         }
       }
+      renderedView = view;
+      renderedZoom = zoom;
+      renderedAt = DateTime.now();
       await updateOverlays(app);
       await updatePlaceOutline();
       if (mounted) setState(() => mapError = null);
@@ -393,19 +446,30 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 
   Future<void> updateRoutes(AppState app) async {
-    if (routesRevision != app.revision) {
-      routeSummaries = List<Map<String, dynamic>>.from(
-        (await app.api.get('/api/routes'))['routes'],
-      );
-      routesRevision = app.revision;
+    final view = jsonEncode([
+      generation,
+      app.api.revision,
+      app.routes,
+      app.style,
+      app.stackIds,
+      app.selectedRoute,
+      app.activity?['route']['id'],
+      app.activityMetric,
+    ]);
+    if (routesView == view &&
+        routesUpdated != null &&
+        DateTime.now().difference(routesUpdated!) < SporraApi.dataFreshness) {
+      return;
     }
-    final data = app.routes
-        ? Map<String, dynamic>.from(
-            await app.api.get(
-              '/api/render/routes${app.stackIds.isEmpty ? '' : '?${Uri(queryParameters: {'stack': app.stackIds.map((id) => '$id').toList()}).query}'}',
-            ),
+    final summaries = app.api.get('/api/routes');
+    final geometry = app.routes
+        ? app.api.get(
+            '/api/render/routes${app.stackIds.isEmpty ? '' : '?${Uri(queryParameters: {'stack': app.stackIds.map((id) => '$id').toList()}).query}'}',
           )
-        : Map<String, dynamic>.from(empty);
+        : Future<dynamic>.value(empty);
+    final results = await Future.wait([summaries, geometry]);
+    routeSummaries = List<Map<String, dynamic>>.from(results[0]['routes']);
+    final data = Map<String, dynamic>.from(results[1]);
     if (app.selectedRoute != null) {
       data['features'] = (data['features'] as List)
           .where((f) => f['properties']['id'] == app.selectedRoute)
@@ -494,9 +558,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       await map!.addLineLayer('activities', 'activities-line', core);
       layers.add('activities-line');
     }
+    routesView = view;
+    routesUpdated = DateTime.now();
   }
 
   Future<void> updateTrack(AppState app) async {
+    final view = (generation, app.track);
+    if (trackView == view) return;
     await geoSource(
       'trip',
       app.track == null
@@ -569,41 +637,53 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       );
       layers.addAll(['trip-glow', 'trip-link', 'trip-dot']);
     }
+    trackView = view;
   }
 
   Future<void> updateActivityFocus(AppState app) async {
-    final data = app.activity;
-    await geoSource(
-      'activity-metric',
-      data != null && app.activityMetric != null
-          ? Map<String, dynamic>.from(data['lines'][app.activityMetric])
-          : Map<String, dynamic>.from(empty),
+    final view = (
+      generation,
+      app.activity,
+      app.activityMetric,
+      app.activitySample,
     );
-    if (!layers.contains('activity-metric-line')) {
-      await map!.addLineLayer(
+    if (activityView == view) return;
+    final data = app.activity;
+    final lineView = (generation, data, app.activityMetric);
+    if (activityLinesView != lineView) {
+      await geoSource(
         'activity-metric',
-        'activity-metric-casing',
-        LineLayerProperties(
-          lineCap: 'round',
-          lineJoin: 'round',
-          lineColor: 'rgba(20,16,12,0.85)',
-          lineWidth: metricWidth(scale: 1.45),
-          lineOpacity: 1,
-        ),
+        data != null && app.activityMetric != null
+            ? Map<String, dynamic>.from(data['lines'][app.activityMetric])
+            : Map<String, dynamic>.from(empty),
       );
-      layers.add('activity-metric-casing');
-      await map!.addLineLayer(
-        'activity-metric',
-        'activity-metric-line',
-        LineLayerProperties(
-          lineColor: ['get', 'color'],
-          lineCap: 'round',
-          lineJoin: 'round',
-          lineWidth: metricWidth(),
-          lineOpacity: 1,
-        ),
-      );
-      layers.add('activity-metric-line');
+      if (!layers.contains('activity-metric-line')) {
+        await map!.addLineLayer(
+          'activity-metric',
+          'activity-metric-casing',
+          LineLayerProperties(
+            lineCap: 'round',
+            lineJoin: 'round',
+            lineColor: 'rgba(20,16,12,0.85)',
+            lineWidth: metricWidth(scale: 1.45),
+            lineOpacity: 1,
+          ),
+        );
+        layers.add('activity-metric-casing');
+        await map!.addLineLayer(
+          'activity-metric',
+          'activity-metric-line',
+          LineLayerProperties(
+            lineColor: ['get', 'color'],
+            lineCap: 'round',
+            lineJoin: 'round',
+            lineWidth: metricWidth(),
+            lineOpacity: 1,
+          ),
+        );
+        layers.add('activity-metric-line');
+      }
+      activityLinesView = lineView;
     }
     final sample = data != null && app.activitySample != null
         ? data['samples'][app.activitySample]
@@ -635,9 +715,22 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       );
       layers.add('activity-cursor-dot');
     }
+    activityView = view;
   }
 
   Future<void> updateOverlays(AppState app) async {
+    final view = (
+      generation,
+      app.airports,
+      app.rail,
+      app.trails,
+      app.trailTheme,
+      app.trailStrength,
+      app.photos,
+      app.track,
+      app.photoItems,
+    );
+    if (overlaysView == view) return;
     if (app.airports && !sources.contains('airports')) {
       await geoSource(
         'airports',
@@ -747,9 +840,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       );
     }
     if (app.photos &&
-        (!sources.contains('photos') || photosRevision != app.revision)) {
+        (!sources.contains('photos') ||
+            photosView != (generation, app.photoItems, app.track))) {
       final photos = app.photosInTrack(await app.readPhotos());
-      photosRevision = app.revision;
+
       await geoSource('photos', {
         'type': 'FeatureCollection',
         'features': photos
@@ -778,6 +872,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         );
       }
       layers.add('photos-pins');
+      photosView = (generation, app.photoItems, app.track);
     }
     if (layers.contains('photos-pins')) {
       await patchLayer(
@@ -788,6 +883,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         ),
       );
     }
+    overlaysView = view;
   }
 
   void showCachedPlace(LatLng point, AppState app) {
@@ -840,6 +936,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 
   Future<void> updatePlaceOutline() async {
+    final view = (generation, placeInfo);
+    if (outlineView == view) return;
     final geometry = placeInfo?['geometry'];
     await geoSource('place-selection', {
       'type': 'FeatureCollection',
@@ -890,6 +988,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       );
       layers.add('place-selection-outline');
     }
+    outlineView = view;
   }
 
   Future<void> tap(LatLng point, {math.Point<double>? pixel}) async {
@@ -1064,7 +1163,24 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      unawaited(ref.read(appProvider).api.flushCache());
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(refresh());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     generation++;
     tapRequest++;
     dismissToast();

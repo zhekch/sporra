@@ -1,7 +1,14 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
-ThemeData webTheme() {
+// SafeArea removes padding from submenu contexts; the view keeps the phone's
+// original inset so every menu uses the same corner shape.
+double menuCornerRadius(BuildContext context) {
+  final view = View.of(context);
+  return view.viewPadding.top / view.devicePixelRatio >= 44 ? 43 : 24;
+}
+
+ThemeData webTheme({double menuRadius = 24}) {
   const surface = Color(0xff262626);
   const accent = Color(0xff60acff);
   return ThemeData(
@@ -55,7 +62,9 @@ ThemeData webTheme() {
     ),
     dialogTheme: DialogThemeData(
       backgroundColor: surface,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      shape: RoundedSuperellipseBorder(
+        borderRadius: BorderRadius.circular(menuRadius),
+      ),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
