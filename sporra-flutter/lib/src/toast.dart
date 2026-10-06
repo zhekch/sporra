@@ -24,7 +24,7 @@ void showToast(
       right: 16,
       child: Dismissible(
         key: UniqueKey(),
-        direction: DismissDirection.horizontal,
+        direction: DismissDirection.vertical,
         onDismissed: (_) => dismissToast(),
         child: TweenAnimationBuilder<double>(
           tween: Tween(begin: 0, end: 1),
@@ -47,7 +47,10 @@ void showToast(
                 child: Material(
                   color: const Color(0xe6262626),
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 6, 4, 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -73,16 +76,6 @@ void showToast(
                               style: const TextStyle(fontSize: 14),
                             ),
                           ),
-                        CupertinoButton(
-                          padding: const EdgeInsets.all(10),
-                          minimumSize: Size.zero,
-                          onPressed: dismissToast,
-                          child: const Icon(
-                            CupertinoIcons.xmark,
-                            size: 16,
-                            color: Colors.white70,
-                          ),
-                        ),
                       ],
                     ),
                   ),

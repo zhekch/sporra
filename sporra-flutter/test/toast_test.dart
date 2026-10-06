@@ -27,6 +27,9 @@ void main() {
     expect(find.text('First'), findsNothing);
     await tester.drag(find.byType(Dismissible), const Offset(700, 0));
     await tester.pumpAndSettle();
+    expect(find.text('Second'), findsOneWidget);
+    await tester.drag(find.byType(Dismissible), const Offset(0, -700));
+    await tester.pumpAndSettle();
     expect(find.text('Second'), findsNothing);
     dismissToast();
   });

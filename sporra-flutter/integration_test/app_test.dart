@@ -136,6 +136,29 @@ void main() {
         isNull,
         reason: '$detail must load on MapLibre Native',
       );
+      if (detail == 'country') {
+        final details = screen.tap(const LatLng(46.95, 8.28));
+        expect(screen.placeInfo?['visited'], isTrue);
+        expect(
+          screen.placeInfo?['covered'],
+          greaterThan(0),
+          reason: 'coverage is immediate from viewport facts',
+        );
+        expect(screen.placeInfo?['geometry'], isNotNull);
+        await tester.runAsync(() => details);
+        await tester.pumpAndSettle();
+        await tester.runAsync(() => screen.updatePlaceOutline());
+        expect(
+          await controller.querySourceFeatures('place-selection', null, null),
+          isNotEmpty,
+        );
+        expect(find.textContaining('Ground covered'), findsOneWidget);
+        await IntegrationTestWidgetsFlutterBinding.instance.takeScreenshot(
+          'parity-place-country',
+        );
+        await tester.tap(find.byTooltip('Close place'));
+        await tester.pumpAndSettle();
+      }
       if (detail != 'auto') {
         final point = await controller.toScreenLocation(
           const LatLng(46.95, 8.28),
@@ -282,7 +305,13 @@ void main() {
       const Offset(0, -200),
     );
     await tester.pumpAndSettle();
-    expect(state.track, isNull, reason: 'day banner can be swiped away');
+    expect(
+      state.track,
+      isNull,
+      reason: 'vertical swipe dismisses the selection',
+    );
+    state.clearTrack();
+    await tester.pumpAndSettle();
     final existing =
         ((await state.api.get('/api/routes?geom=1'))['routes'] as List).first;
     await state.api.post('/api/routes', {
@@ -350,6 +379,12 @@ void main() {
     });
     await tester.pumpAndSettle();
     expect(state.activity?['route']['name'], 'Overlapping ride');
+    expect(state.selectedRoute, state.activity!['route']['id']);
+    expect(find.text('Zoom to activity'), findsOneWidget);
+    await tester.tap(find.text('Show all'));
+    await tester.pumpAndSettle();
+    expect(state.selectedRoute, isNull);
+    expect(state.activity, isNotNull);
     final selectedWorkout = state.activity!['route']['id'];
     for (final direction in ['Previous workout', 'Next workout']) {
       await tester.tap(find.byTooltip(direction));
@@ -372,11 +407,20 @@ void main() {
       const Offset(500, 0),
     );
     await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      for (var i = 0; i < 100 && state.busy; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    });
+    await tester.pumpAndSettle();
+    expect(state.activity, isNotNull);
     expect(
-      state.activity,
-      isNull,
-      reason: 'named workout banner can be swiped away',
+      state.activity!['route']['id'],
+      isNot(selectedWorkout),
+      reason: 'swipe goes to the previous workout',
     );
+    expect(find.byTooltip('Close workout'), findsNothing);
+    state.closeActivity();
     await tester.pumpAndSettle();
 
     await state.run(
@@ -421,6 +465,24 @@ void main() {
     expect(state.activityMetric, 'elev');
     state.closeActivity();
     await tester.pumpAndSettle();
+    state.rail = true;
+    state.changed();
+    await tester.pump();
+    await tester.runAsync(() async {
+      await screen.refresh();
+      for (var i = 0; i < 400 && (screen.refreshing || screen.pending); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    });
+    await tester.pumpAndSettle();
+    expect(
+      screen.mapError,
+      isNull,
+      reason: 'train track numeric properties load natively',
+    );
+    expect(screen.sources.contains('rail-ready'), isTrue);
+    state.rail = false;
+    state.changed();
     await tester.tap(find.byTooltip('Menu'));
     await tester.pumpAndSettle(
       const Duration(milliseconds: 100),
@@ -438,6 +500,21 @@ void main() {
       find.byTooltip('Search'),
       findsNothing,
       reason: 'map controls are hidden while menu is open',
+    );
+    showSettings(screen.context, state);
+    await tester.pumpAndSettle();
+    expect(find.text('Appearance'.toUpperCase()), findsNothing);
+    expect(find.byType(ChoiceChip), findsNWidgets(6));
+    await IntegrationTestWidgetsFlutterBinding.instance.takeScreenshot(
+      'parity-settings-personal',
+    );
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Map layers'));
+    await tester.pumpAndSettle();
+    expect(find.text('Mapbox public token'), findsOneWidget);
+    expect(find.byTooltip('Search'), findsNothing);
+    expect(find.byTooltip('Menu'), findsNothing);
+    await IntegrationTestWidgetsFlutterBinding.instance.takeScreenshot(
+      'parity-settings-map',
     );
     Navigator.of(screen.context).pop();
     await tester.pumpAndSettle();

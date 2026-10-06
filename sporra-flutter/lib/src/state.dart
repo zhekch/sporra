@@ -72,7 +72,7 @@ class AppState extends ChangeNotifier {
           : null;
       activity = data;
       activitySample = null;
-      if (selectedRoute != null) selectedRoute = id;
+      selectedRoute = id;
       changed();
     });
   }
@@ -147,6 +147,22 @@ class AppState extends ChangeNotifier {
     track = null;
     trackDay = null;
     changed();
+  }
+
+  Future<void> stepTrack(int delta) async {
+    if (trackDay != null) return stepDay(delta);
+    if (track == null) return;
+    final trips = List<Map<String, dynamic>>.from(
+      (await api.get('/api/trips'))['trips'],
+    );
+    final hiddenTrips = List<String>.from(prefs['hiddenTrips'] ?? []);
+    trips.removeWhere((trip) => hiddenTrips.contains('${trip['id']}'));
+    trips.sort((a, b) => (a['start'] as num).compareTo(b['start'] as num));
+    final index = trips.indexWhere((trip) => trip['id'] == track!['id']);
+    final next = index + delta;
+    if (index >= 0 && next >= 0 && next < trips.length) {
+      await selectTrack(trip: trips[next]['id']);
+    }
   }
 
   Future<void> stepDay(int delta) async {

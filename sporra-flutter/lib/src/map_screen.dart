@@ -1,3 +1,5 @@
+import 'rail_style.dart';
+
 import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
@@ -67,6 +69,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       map!.setLayerProperties(id, LayerPatch(properties));
   bool loaded = false, refreshing = false;
   bool pending = false;
+  double selectionHorizontalDrag = 0, selectionVerticalDrag = 0;
   int generation = 0;
   int observed = -1;
   int? observedSample;
@@ -86,7 +89,11 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   Map<String, dynamic>? placeInfo;
   Map<String, dynamic>? observedTrack;
   final cellFacts = <String, Map<String, dynamic>>{};
-  final areaFacts = <({Path shape, Map<String, dynamic> info})>[];
+  final areaFacts =
+      <
+        ({Path shape, Map<String, dynamic> info, Map<String, dynamic> geometry})
+      >[];
+  Map<String, dynamic>? observedPlace;
   int factsLevel = -1;
   String? factsQuery;
   List<double>? factsBounds;
@@ -326,6 +333,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           }
           areaFacts.add((
             shape: shape,
+            geometry: Map<String, dynamic>.from(geometry),
             info: Map<String, dynamic>.from(feature['properties']),
           ));
         }
@@ -363,6 +371,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         }
       }
       await updateOverlays(app);
+      await updatePlaceOutline();
       if (mounted) setState(() => mapError = null);
     } catch (e) {
       if (mounted) setState(() => mapError = '$e');
@@ -665,14 +674,16 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           entry.key,
           VectorSourceProperties(
             tiles: List<String>.from(source['tiles']),
-            minzoom: source['minzoom'],
-            maxzoom: source['maxzoom'],
+            minzoom: (source['minzoom'] as num?)?.toDouble(),
+            maxzoom: (source['maxzoom'] as num?)?.toDouble(),
           ),
         );
         sources.add(entry.key);
       }
       final anchor = await below();
-      for (final l in data['layers']) {
+      for (final l in (data['layers'] as List).expand(
+        (layer) => nativeRailLayers(Map<String, dynamic>.from(layer)),
+      )) {
         await map!.addLineLayer(
           l['source'],
           l['id'],
@@ -779,6 +790,108 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
   }
 
+  void showCachedPlace(LatLng point, AppState app) {
+    if (!app.cellInfo || app.activity != null) return;
+    final b = factsBounds;
+    final inBounds =
+        b != null &&
+        point.latitude >= b[1] &&
+        point.latitude <= b[3] &&
+        (b[0] <= b[2]
+            ? point.longitude >= b[0] && point.longitude <= b[2]
+            : point.longitude >= b[0] || point.longitude <= b[2]);
+    final factsReady =
+        inBounds &&
+        factsLevel == currentLevel &&
+        factsQuery == app.renderQuery(currentLevel);
+    final local = factsReady
+        ? currentLevel < 6
+              ? cellFacts[cellKey(
+                  currentLevel,
+                  point.longitude,
+                  point.latitude,
+                )]
+              : areaFacts
+                    .where(
+                      (a) => a.shape.contains(
+                        Offset(point.longitude, point.latitude),
+                      ),
+                    )
+                    .firstOrNull
+                    ?.info
+        : null;
+    final geometry = currentLevel < 6
+        ? cellOutline(currentLevel, point.longitude, point.latitude)
+        : areaFacts
+              .where(
+                (a) =>
+                    a.shape.contains(Offset(point.longitude, point.latitude)),
+              )
+              .firstOrNull
+              ?.geometry;
+    setState(
+      () => placeInfo = {
+        'name': 'This place',
+        'geometry': geometry,
+        if (factsReady) 'visited': local != null,
+        ...?local,
+      },
+    );
+  }
+
+  Future<void> updatePlaceOutline() async {
+    final geometry = placeInfo?['geometry'];
+    await geoSource('place-selection', {
+      'type': 'FeatureCollection',
+      'features': geometry == null
+          ? []
+          : [
+              {'type': 'Feature', 'properties': {}, 'geometry': geometry},
+            ],
+    });
+    if (!layers.contains('place-selection-halo')) {
+      await map!.addLineLayer(
+        'place-selection',
+        'place-selection-halo',
+        const LineLayerProperties(
+          lineColor: 'rgba(8, 10, 16, 0.85)',
+          lineWidth: [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            2,
+            3.6,
+            17,
+            5.4,
+          ],
+          lineJoin: 'round',
+          lineCap: 'round',
+        ),
+      );
+      layers.add('place-selection-halo');
+    }
+    if (!layers.contains('place-selection-outline')) {
+      await map!.addLineLayer(
+        'place-selection',
+        'place-selection-outline',
+        const LineLayerProperties(
+          lineColor: '#ffffff',
+          lineWidth: [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            2,
+            1.7,
+            17,
+            2.7,
+          ],
+          lineJoin: 'round',
+        ),
+      );
+      layers.add('place-selection-outline');
+    }
+  }
+
   Future<void> tap(LatLng point, {math.Point<double>? pixel}) async {
     final app = ref.read(appProvider);
     if (app.editing) {
@@ -804,6 +917,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       return;
     }
     final request = ++tapRequest;
+    showCachedPlace(point, app);
     try {
       if (pixel != null) {
         final rect = Rect.fromCenter(
@@ -834,6 +948,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           return;
         }
         if (results[1].isNotEmpty) {
+          setState(() => placeInfo = null);
           await showPhotos(
             context,
             app,
@@ -844,6 +959,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           return;
         }
         if (results[2].isNotEmpty) {
+          setState(() => placeInfo = null);
           final hit = results[2].first;
           final coord = hit['geometry']['coordinates'];
           final data = await app.api.get(
@@ -932,46 +1048,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         }
       }
       if (!app.cellInfo || app.activity != null) return;
-      final b = factsBounds;
-      final inBounds =
-          b != null &&
-          point.latitude >= b[1] &&
-          point.latitude <= b[3] &&
-          (b[0] <= b[2]
-              ? point.longitude >= b[0] && point.longitude <= b[2]
-              : point.longitude >= b[0] || point.longitude <= b[2]);
-      final factsReady =
-          inBounds &&
-          factsLevel == currentLevel &&
-          factsQuery == app.renderQuery(currentLevel);
-      final local = factsReady
-          ? currentLevel < 6
-                ? cellFacts[cellKey(
-                    currentLevel,
-                    point.longitude,
-                    point.latitude,
-                  )]
-                : areaFacts
-                      .where(
-                        (a) => a.shape.contains(
-                          Offset(point.longitude, point.latitude),
-                        ),
-                      )
-                      .firstOrNull
-                      ?.info
-          : null;
-      setState(
-        () => placeInfo = {
-          'name': 'This place',
-          if (factsReady) 'visited': local != null,
-          ...?local,
-        },
-      );
       final info = await app.api.get(
         '/api/render/at?lng=${point.longitude}&lat=${point.latitude}&${app.renderQuery(currentLevel)}',
       );
       if (mounted && request == tapRequest && placeInfo != null) {
-        setState(() => placeInfo = Map<String, dynamic>.from(info));
+        setState(
+          () => placeInfo = {...?placeInfo, ...Map<String, dynamic>.from(info)},
+        );
       }
     } catch (e) {
       if (mounted && request == tapRequest) {
@@ -1022,6 +1105,12 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       observed = app.revision;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(refresh());
+      });
+    }
+    if (!identical(observedPlace, placeInfo)) {
+      observedPlace = placeInfo;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (loaded) unawaited(updatePlaceOutline());
       });
     }
     if (observedSample != app.activitySample) {
@@ -1369,7 +1458,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                           },
                           child: Dismissible(
                             key: const ValueKey('place-card'),
-                            direction: DismissDirection.horizontal,
+                            direction: DismissDirection.vertical,
                             onDismissed: (_) => setState(() {
                               tapRequest++;
                               placeInfo = null;
@@ -1417,23 +1506,40 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                                           ? 'You have been here'
                                           : 'No visits recorded',
                                     ),
+                                    if (placeInfo!['inside'] != null)
+                                      Text(
+                                        '${placeInfo!['inside']['label']} · ${groupedNumber(placeInfo!['inside']['n'] as num)} of ${groupedNumber(placeInfo!['inside']['of'] as num)}',
+                                      ),
+                                    if (placeInfo!['covered'] != null)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 8),
+                                        child: Text(
+                                          'Ground covered · ${(placeInfo!['covered'] as num) <= 0 ? 'None yet' : '${formatGround(placeInfo!['covered'] as num)}${(placeInfo!['coveredPct'] as num) > 0 ? ' · ${formatPercent(placeInfo!['coveredPct'] as num)}' : ''}'}',
+                                        ),
+                                      ),
                                     if (placeInfo!['visited'] == true) ...[
                                       const SizedBox(height: 8),
                                       Text(
                                         placeInfo!['hits'] == 0
                                             ? 'Marked by hand'
-                                            : '${placeInfo!['hits']} visits',
+                                            : '${groupedNumber(placeInfo!['hits'] as num)} visits',
                                         style: const TextStyle(
                                           color: Colors.white70,
                                         ),
                                       ),
-                                      Text(
-                                        'First seen ${date(placeInfo!['firstAt'])} · Last seen ${date(placeInfo!['lastAt'])}',
-                                        style: const TextStyle(
-                                          color: Colors.white60,
-                                          fontSize: 12,
+                                      if ((placeInfo!['firstAt'] as num? ?? 0) >
+                                              0 ||
+                                          (placeInfo!['lastAt'] as num? ?? 0) >
+                                              0)
+                                        Text(
+                                          'Seen ${date(placeInfo!['firstAt'])}${date(placeInfo!['firstAt']) == date(placeInfo!['lastAt']) ? '' : ' – ${date(placeInfo!['lastAt'])}'}',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: Colors.white60,
+                                            fontSize: 12,
+                                          ),
                                         ),
-                                      ),
                                     ],
                                   ],
                                 ),
@@ -1475,9 +1581,18 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                             key: ValueKey(
                               'activity-${app.activity!['route']['id']}',
                             ),
-                            direction: DismissDirection.horizontal,
+                            direction: DismissDirection.vertical,
                             onDismissed: (_) => app.closeActivity(),
-                            child: Glass(child: ActivityCard(app: app)),
+                            child: Glass(
+                              child: ActivityCard(
+                                app: app,
+                                onZoom: () => goTo(
+                                  map!,
+                                  app.activity!['route'],
+                                  bottom: activityCardHeight + 60,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -1490,24 +1605,34 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     alignment: Alignment.topCenter,
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                      child: Dismissible(
+                      child: GestureDetector(
                         key: ValueKey(
                           'track-${app.trackDay ?? app.track!['id']}',
                         ),
-                        direction: app.trackDay == null
-                            ? DismissDirection.horizontal
-                            : DismissDirection.up,
-                        onDismissed: (_) => app.clearTrack(),
+                        onVerticalDragStart: (_) => selectionVerticalDrag = 0,
+                        onVerticalDragUpdate: (d) =>
+                            selectionVerticalDrag += d.primaryDelta ?? 0,
+                        onVerticalDragEnd: (d) {
+                          if (selectionVerticalDrag.abs() > 60 ||
+                              (d.primaryVelocity ?? 0).abs() > 150) {
+                            app.clearTrack();
+                          }
+                        },
                         child: GestureDetector(
-                          onHorizontalDragEnd: app.trackDay == null
-                              ? null
-                              : (d) {
-                                  if ((d.primaryVelocity ?? 0).abs() >= 150) {
-                                    app.stepDay(
-                                      d.primaryVelocity! < 0 ? 1 : -1,
-                                    );
-                                  }
-                                },
+                          onHorizontalDragStart: (_) =>
+                              selectionHorizontalDrag = 0,
+                          onHorizontalDragUpdate: (d) =>
+                              selectionHorizontalDrag += d.primaryDelta ?? 0,
+                          onHorizontalDragEnd: (d) {
+                            if (selectionHorizontalDrag.abs() > 60 ||
+                                (d.primaryVelocity ?? 0).abs() >= 150) {
+                              app.run(
+                                () => app.stepTrack(
+                                  selectionHorizontalDrag < 0 ? 1 : -1,
+                                ),
+                              );
+                            }
+                          },
                           child: Glass(
                             radius: 24,
                             child: Row(
@@ -1594,14 +1719,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                                       size: 16,
                                     ),
                                   ),
-                                IconButton(
-                                  tooltip: 'Clear trip',
-                                  onPressed: app.clearTrack,
-                                  icon: const Icon(
-                                    CupertinoIcons.xmark,
-                                    size: 16,
-                                  ),
-                                ),
                               ],
                             ),
                           ),
@@ -1616,12 +1733,34 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     alignment: Alignment.topCenter,
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                      child: Dismissible(
+                      child: GestureDetector(
                         key: ValueKey(
                           'workout-${app.activity!['route']['id']}',
                         ),
-                        direction: DismissDirection.horizontal,
-                        onDismissed: (_) => app.closeActivity(),
+                        onVerticalDragStart: (_) => selectionVerticalDrag = 0,
+                        onVerticalDragUpdate: (d) =>
+                            selectionVerticalDrag += d.primaryDelta ?? 0,
+                        onVerticalDragEnd: (d) {
+                          if (selectionVerticalDrag.abs() > 60 ||
+                              (d.primaryVelocity ?? 0).abs() > 150) {
+                            app.closeActivity();
+                          }
+                        },
+                        onHorizontalDragStart: (_) =>
+                            selectionHorizontalDrag = 0,
+                        onHorizontalDragUpdate: (d) =>
+                            selectionHorizontalDrag += d.primaryDelta ?? 0,
+                        onHorizontalDragEnd: (d) {
+                          if ((selectionHorizontalDrag.abs() > 60 ||
+                                  (d.primaryVelocity ?? 0).abs() > 150) &&
+                              !app.busy) {
+                            app.run(
+                              () => app.stepActivity(
+                                selectionHorizontalDrag < 0 ? 1 : -1,
+                              ),
+                            );
+                          }
+                        },
                         child: Glass(
                           radius: 24,
                           child: Padding(
@@ -1633,7 +1772,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                                   tooltip: 'Previous workout',
                                   onPressed: app.busy
                                       ? null
-                                      : () => app.run(() => app.stepActivity(-1)),
+                                      : () =>
+                                            app.run(() => app.stepActivity(-1)),
                                   icon: const Icon(
                                     CupertinoIcons.chevron_left,
                                     size: 16,
@@ -1677,17 +1817,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                                   tooltip: 'Next workout',
                                   onPressed: app.busy
                                       ? null
-                                      : () => app.run(() => app.stepActivity(1)),
+                                      : () =>
+                                            app.run(() => app.stepActivity(1)),
                                   icon: const Icon(
                                     CupertinoIcons.chevron_right,
-                                    size: 16,
-                                  ),
-                                ),
-                                IconButton(
-                                  tooltip: 'Close workout',
-                                  onPressed: app.closeActivity,
-                                  icon: const Icon(
-                                    CupertinoIcons.xmark,
                                     size: 16,
                                   ),
                                 ),
@@ -1723,14 +1856,14 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     ),
                   ),
                 ),
-              if (refreshing || app.busy)
+              if ((refreshing || app.busy) && !app.menuOpen)
                 const SafeArea(
                   child: Align(
                     alignment: Alignment.topCenter,
                     child: LinearProgressIndicator(minHeight: 2),
                   ),
                 ),
-              if (mapError != null)
+              if (mapError != null && !app.menuOpen)
                 SafeArea(
                   child: Align(
                     alignment: Alignment.topCenter,
@@ -1743,7 +1876,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                       ),
                       child: Dismissible(
                         key: ValueKey('map-error-$mapError'),
-                        direction: DismissDirection.horizontal,
+                        direction: DismissDirection.vertical,
                         onDismissed: (_) => setState(() => mapError = null),
                         child: Glass(
                           child: Padding(

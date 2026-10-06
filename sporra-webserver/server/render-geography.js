@@ -1,16 +1,16 @@
 import { readFileSync } from 'node:fs';
-import { loadCountries, countryNear, searchCountries, countryIso, countryGeometry } from '../src/countries.js';
-import { loadRegions, regionNear, regionsInCountry, searchRegions, countriesInView, regionById, addFineRegions, addFineOutline, seamedRegion, fineRegionsVersion } from '../src/regions.js';
+import { loadCountries, countryNear, searchCountries, countryIso, countryGeometry, countryAreaKm2 } from '../src/countries.js';
+import { loadRegions, regionNear, regionsInCountry, searchRegions, countriesInView, regionById, addFineRegions, addFineOutline, seamedRegion, fineRegionsVersion, regionGeometry, geometryAreaM2 } from '../src/regions.js';
 import { loadPlaces, searchPlaces, nearestTown } from '../src/places.js';
-import { areaOfCell, WHOLE_COUNTRY } from '../src/stats.js';
-import { continentOf } from '../src/continents.js';
+import { areaOfCell, WHOLE_COUNTRY, cellAreaKm2 } from '../src/stats.js';
+import { continentOf, continentAreaKm2 } from '../src/continents.js';
 import { tallyAreas, areaFeatures, areaGeometry } from '../src/area-render.js';
 import { cellStats, heatMetric, areaColorOf } from '../src/coloring.js';
 import { rollUp, finishRollUpSteps, storedUnder } from '../src/rollup.js';
 import { summarizeCells } from '../src/cell-info-data.js';
 import { tripRelevance, parseDateQuery, tripInPeriod } from '../src/search-data.js';
 import { fold } from '../src/fold.js';
-import { mercX, mercY, pointToCell, colsOf, normCol, brushRadius, cellsWithin, cellsOnPolyline } from '../src/hexgrid.js';
+import { mercX, mercY, pointToCell, colsOf, normCol, brushRadius, cellsWithin, cellsOnPolyline, parseCellId, cellCenter, project } from '../src/hexgrid.js';
 
 const accounts = new Map();
 const prepared = new WeakMap();
@@ -114,7 +114,7 @@ export async function regions(input, options, supplyFine) {
       const geometry = areaGeometry(kind, id, fine);
       if (!geometry) return [];
       const name = kind === 'region' ? regionById(id)?.name ?? id.replace(WHOLE_COUNTRY, '') : id;
-      return [{ type: 'Feature', geometry, properties: { name, visited: true, area: { kind, id, name }, ...summarizeCells(cells, input.cellMeta) } }];
+      return [{ type: 'Feature', geometry, properties: { name, visited: true, area: { kind, id, name }, ...coverageFacts({ kind, id, name }, cells), ...summarizeCells(cells, input.cellMeta) } }];
     });
   }
   const color = areaColorOf(options.mode, options.accent);
@@ -127,6 +127,21 @@ export function coordinate(lng, lat) {
   if (lng === null || lat === null || String(lng).trim() === '' || String(lat).trim() === '' || !Number.isFinite(+lng) || !Number.isFinite(+lat) || Math.abs(+lng) > 180 || Math.abs(+lat) > 85.051129) throw new Error('invalid coordinates');
   return [+lng, +lat];
 }
+function coverageFacts(area, ids) {
+  let covered = 0;
+  for (const id of ids) {
+    const [level, col, row] = parseCellId(id);
+    if (Number.isFinite(level)) covered += cellAreaKm2(level, project(cellCenter(level, col, row))[1]);
+  }
+  const country = area.id?.startsWith(WHOLE_COUNTRY) ? area.id.slice(WHOLE_COUNTRY.length) : area.id;
+  const geometry = area.kind === 'region' && !area.id?.startsWith(WHOLE_COUNTRY) ? regionGeometry(area.id) : null;
+  const whole = area.kind === 'continent' ? continentAreaKm2(area.id) : area.kind === 'region' && !area.id?.startsWith(WHOLE_COUNTRY) ? (geometry ? geometryAreaM2(geometry) / 1e6 : 0) : countryAreaKm2(country);
+  const iso = area.kind === 'country' ? countryIso(country) : null;
+  const of = iso ? regionsInCountry(iso) : 0;
+  const regions = new Set(ids.map(id => geography('region', id)).filter(id => id && !id.startsWith(WHOLE_COUNTRY)));
+  return { covered, coveredPct: whole ? covered / whole * 100 : 0, coveredOf: area.name, areaKm2: whole, ...(of ? { inside: { label: 'Regions visited', n: regions.size, of } } : {}) };
+}
+
 export async function at(input, lng, lat, level, hidden = []) {
   await prime();
   const rolled = prepare(input, hidden);
@@ -146,7 +161,7 @@ export async function at(input, lng, lat, level, hidden = []) {
     name = area.name;
     ids = [...visible].filter((cell) => geography(kind, cell) === id);
   }
-  return { visited: ids.length > 0, name, area, level, lng, lat, ...summarizeCells(ids, input.cellMeta) };
+  return { visited: ids.length > 0, name, area, level, lng, lat, ...summarizeCells(ids, input.cellMeta), ...(area ? { ...coverageFacts(area, ids), geometry: areaGeometry(area.kind, area.id, true) } : {}) };
 }
 export async function search(query, routes = [], trips = []) {
   await prime();

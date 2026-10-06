@@ -155,6 +155,9 @@ try {
     check(r.status===200 && r.body.features.some(f=>f.properties.k===1), 'region level '+level+' has fills');
     const prefetched = await api('GET', '/api/render/regions?info=1&level='+level);
     check(prefetched.body.infoFeatures?.some(f => f.properties.visited && f.properties.firstAt), 'region level '+level+' prefetches visit facts');
+    const live = await api('GET', '/api/render/at?lng=8.54&lat=47.37&level='+level);
+    const cached = prefetched.body.infoFeatures?.find(f => f.properties.area.id === live.body.area?.id)?.properties;
+    check(live.body.geometry && cached?.covered > 0 && cached.covered === live.body.covered && cached.coveredPct === live.body.coveredPct, 'region level '+level+' caches matching coverage and selection geometry');
     const repeat = await api('GET', '/api/render/regions?level='+level, undefined, {'If-None-Match':r.etag});
     check(repeat.status===304, 'region level '+level+' revalidates');
   }

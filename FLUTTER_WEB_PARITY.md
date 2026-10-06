@@ -1,7 +1,7 @@
 # Flutter / mobile web feature comparison
 
 Audit date: 6 October 2026. Reference: the checked-in mobile web implementation,
-not the older preview checklist. Target: Flutter 0.3.0+3 with server 0.133.0.
+not the older preview checklist. Target: Flutter 0.3.1+4 with server 0.134.0.
 
 **Full parity has not been achieved.** A shared API proves identical data rules;
 it does not prove identical screen layout, gestures, transitions or rendering.
@@ -20,7 +20,7 @@ The verification section separates simulator evidence from source inspection.
 | Mapbox Standard 3D | Missing: MapLibre cannot render Standard style imports |
 | Automatic sun / dawn / dusk lighting | Missing with the 3D engine |
 | Snow modes and particles | Missing |
-| Basemap token settings and validation | Missing |
+| Basemap token settings and validation | Shared account token editor under Settings → Map layers; validation and native Standard 3D remain missing |
 | Camera pan, zoom, pitch, bearing | Present; native gesture physics differ |
 | Three primary mobile buttons: search, menu, locate | Corrected: three vertical buttons |
 | Compass only when rotated or tilted | Corrected: conditional compass |
@@ -48,8 +48,8 @@ The verification section separates simulator evidence from source inspection.
 | Ground facts, counts, first/last visit, hidden-source filter | Present: shared summary rules |
 | Geographic place-name enrichment | Present: asynchronous shared server lookup |
 | Tap while data is unavailable | Partial: immediate loading card, then server result; cannot promise cached facts before loading |
-| Cell/region selection highlight | Missing |
-| Swipe place card away | Corrected: horizontal dismissal |
+| Cell/region selection highlight | Added: rounded cell ring or cached area geometry; white line and dark casing use web zoom widths |
+| Swipe place card away | Vertical dismissal; horizontal gestures never dismiss |
 | Drag/reposition popups | Partial: Flutter sheets and cards use native dismissal; web drag behavior differs |
 
 ## Activities
@@ -76,7 +76,7 @@ The verification section separates simulator evidence from source inspection.
 | Graph drag selects map cursor | Present; simulator verified |
 | Metric-line tap selects graph sample | Present; simulator verified |
 | Previous/next activity, retain chosen metric | Present |
-| Explicit solo / show all | Present; named workout banner can be swiped away, with previous/next arrows and no distance/date line; exact web solo-chip presentation differs |
+| Explicit solo / show all | Present; opening an activity isolates it; Zoom to activity and Show all are available; named workout banner swipes between activities, with previous/next arrows and no distance/date line; exact web solo-chip presentation differs |
 | Zoom to activity | Present |
 | Edit name, type, place, source | Present; source editing added in this change |
 | Undo metadata edits | Missing |
@@ -108,7 +108,7 @@ The verification section separates simulator evidence from source inspection.
 | Trip list and geographic framing | Present |
 | Yellow trip/day points and connecting lines | Corrected: shared trackFC and web yellow style |
 | Break links for duplicate/missing timestamps and long gaps | Present: shared trackFC, tested |
-| Trip/day chip label and clear | Named banner with trip context and refined typography; trip swipes horizontally to clear, day swipes upward to clear and horizontally to step |
+| Trip/day chip label and clear | Named banner with trip context and refined typography; trip/day swipes horizontally to step; selection banners have no close icon; vertical swipes dismiss |
 | Previous/next recorded day and swipe stepping | Added |
 | Trip chip drill down to days | Added |
 | Trip naming and reset derived name | Added: shared account preference keys |
@@ -199,7 +199,7 @@ The verification section separates simulator evidence from source inspection.
 | Administrator create/delete/rename/reset-password | Missing |
 | Administrator impersonation / leave | Missing |
 | Intro deck / replay intro / finish flow | Missing |
-| Swipeable top notification and replacement | Corrected: overlay above sheets, swipe/close/timer; trip/day and workout banners identify the selection |
+| Swipeable top notification and replacement | Corrected: overlay above sheets, vertical swipe/timer; trip/day and workout banners identify the selection |
 | Reduced-motion handling | Added for toast, sheet and control lift; not all map animations |
 | Offline retry banner | Added at top; complete web recovery state differs |
 | Persistent offline recovery | Missing; reads have conditional in-memory cache |
@@ -209,11 +209,11 @@ The verification section separates simulator evidence from source inspection.
 
 ## Evidence and limits
 
-Verification for this change: `flutter analyze` passed, 15 Flutter tests passed,
-the render API suite passed 97 checks, the full `npm test` suite passed, and the
+Verification for this change: `flutter analyze` passed, 18 Flutter tests passed,
+the render API suite passed 100 checks, the full `npm test` suite passed, and the
 repeatable iPhone 17 Pro simulator integration flow passed. The simulator also
 verifies distinct overlap palette dots, hidden controls, calendar selection,
-upward day-banner dismissal and horizontal named-workout dismissal. Screenshots
+trip/day selection retention and horizontal named-workout navigation. Screenshots
 were inspected for the menu, overlap chooser, day track and metric routes.
 
 Source inventory: `sporra-webserver/index.html` and the UI modules for search,
@@ -235,3 +235,21 @@ Screenshots of Flutter alone cannot establish visual identity. Real device
 background tracking, large photo libraries, third-party connector credentials
 and full 3D/export behavior require their own verification. Remaining rows
 above are explicit work items, not accepted deviations from the parity target.
+
+### Menu and gesture corrections (Flutter 0.3.1)
+
+Only one sheet is presented at a time, including calendar submenus. Every sheet
+uses the same phone corner treatment and safe-area boundary, is dismissed by an
+outside tap or downward drag, and hides map banners/controls. Settings uses
+horizontal chips to separate Personal, Map layers, Sources, Import, App settings
+and Account. The shared Mapbox account token can be edited in Map layers; native
+Standard 3D and token validation remain gaps. Horizontal selection gestures
+navigate; vertical gestures dismiss. Native rail source zoom limits are converted
+from JSON numbers to doubles; feature-dependent dash expressions become
+equivalent filtered layers because MapLibre iOS rejects them.
+
+Place cards now appear from local viewport facts before native hit queries or
+HTTP name enrichment. Cached region facts include ground coverage and its share;
+the at-point response includes outline geometry. Seen dates occupy one line,
+visit counts use separators, and coverage follows web precision. Unloaded ground
+still requires a lookup; no cached answer is invented for it.

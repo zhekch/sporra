@@ -9875,3 +9875,27 @@ own string for the imagery.
 - Waymarked routes: [Waymarked Trails](https://waymarkedtrails.org/) raster tiles
   and `by_area` lookup (ODbL via OpenStreetMap, credited on the source so the
   line comes and goes with the overlay) — cached in `server/trail-tiles.js`
+
+Flutter 0.3.1 replaces the previous modal sheet when opening a submenu; a
+generation guard prevents the outgoing sheet from restoring map controls under
+the replacement. Calendar uses that same presenter. Sheets share safe-area and
+continuous phone corners, outside-tap dismissal, and downward dismissal from
+the header or overscrolling the list at its top. Settings separates categories
+with horizontal chips and edits the shared `mapboxToken` preference. Selection
+banners navigate horizontally and dismiss vertically; notifications and map
+cards dismiss vertically. Map errors are hidden under open menus. Rail vector
+source zoom limits explicitly convert JSON `num` to `double` for MapLibre.
+
+`rail_style.dart` expands feature-dependent web `line-dasharray` match expressions
+into separate native layers, retaining the original filter and an exclusive
+fallback. iOS rejects data expressions for this property with an uncaught native
+exception. Opening an activity isolates its route; Zoom to activity fits its
+bounds and Show all clears isolation while retaining the details and metric.
+
+Server 0.134.0 adds web-equivalent ground coverage to region viewport facts and
+at-point replies, including selected area geometry in the latter. Flutter renders
+cached facts before native hit testing, then reconciles the result with route,
+photo and airport priority. The selected region outline uses cached geometry;
+cells use the web's four-round 0.28 corner smoothing. The white selection line
+and dark casing share the web zoom-width stops. Place dates occupy one Seen row,
+visits are grouped, and ground area/percentage use the web precision rules.

@@ -52,7 +52,31 @@ void main() {
       expect(glass.radius, 43);
       expect(tester.getSize(find.byType(Glass)).height, lessThan(280));
       expect(tester.getBottomLeft(find.byType(Glass)).dy, 832);
+      panel(context, 'Settings', const Text('Only the new panel'));
+      await tester.pumpAndSettle();
+      expect(find.text('Choose an activity'), findsNothing);
+      expect(find.text('Only the new panel'), findsOneWidget);
+      expect(app.menuOpen, isTrue);
+      await tester.tapAt(const Offset(5, 100));
+      await tester.pumpAndSettle();
+      expect(find.text('Only the new panel'), findsNothing);
+      showSettings(context, app);
+      await tester.pumpAndSettle();
+      expect(find.byType(ChoiceChip), findsNWidgets(6));
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Map layers'));
+      await tester.pumpAndSettle();
+      expect(find.text('Mapbox public token'), findsOneWidget);
+      expect(find.text('Home'), findsNothing);
+      showDialog<void>(
+        context: context,
+        builder: (_) => const AlertDialog(content: Text('One dialog')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Mapbox public token'), findsNothing);
       Navigator.of(context).pop();
+      await tester.pumpAndSettle();
+      expect(find.text('Mapbox public token'), findsOneWidget);
+      await tester.drag(find.text('Settings'), const Offset(0, 500));
       await tester.pumpAndSettle();
       expect(app.menuOpen, isFalse);
       expect(tester.takeException(), isNull);

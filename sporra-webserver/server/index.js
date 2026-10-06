@@ -110,7 +110,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.133.0';
+export const SERVER_VERSION = '0.134.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -2882,7 +2882,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       mergeBakedImport(user);
       const { signature, supply } = derivedFor(user);
       const searchPrefs = pathname === '/api/search' ? JSON.parse(q.prefs.get(user.id)?.prefs ?? '{}') : null;
-      const tag = 'render:' + createHash('sha1').update(JSON.stringify([signature, pathname, [...query], searchPrefs?.tripNames, searchPrefs?.hiddenTrips])).digest('base64url');
+      const tag = 'render:' + createHash('sha1').update(JSON.stringify([SERVER_VERSION, signature, pathname, [...query], searchPrefs?.tripNames, searchPrefs?.hiddenTrips])).digest('base64url');
       if (pathname === '/api/locale/en') {
         const head = conditional(req, res, 'locale:' + SERVER_VERSION);
         if (!head) return;

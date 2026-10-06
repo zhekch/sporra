@@ -94,7 +94,7 @@ void main() {
           body: SizedBox(
             width: 390,
             height: 430,
-            child: ActivityCard(app: app),
+            child: ActivityCard(app: app, onZoom: () {}),
           ),
         ),
       ),

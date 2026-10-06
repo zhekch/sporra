@@ -62,3 +62,55 @@ List<dynamic> metricWidth({double scale = 1}) => [
   16,
   3.4 * 1.7 * scale,
 ];
+
+Map<String, dynamic> cellOutline(int level, double lng, double lat) {
+  final columns = (625482 / math.pow(3, level)).round();
+  final radius = world / columns / 1.5;
+  final key = cellKey(level, lng, lat).split('/');
+  var col = int.parse(key[0]);
+  col += ((mercX(lng) / world) - col / columns).round() * columns;
+  final row = int.parse(key[1]);
+  final x = 1.5 * radius * col;
+  final y = math.sqrt(3) * radius * (row + (col & 1) / 2);
+  var points = [
+    for (var i = 0; i < 6; i++)
+      [
+        x + radius * math.cos(i * math.pi / 3),
+        y + radius * math.sin(i * math.pi / 3),
+      ],
+  ];
+  for (var round = 0; round < 4; round++) {
+    final next = <List<double>>[];
+    for (var i = 0; i < points.length; i++) {
+      final a = points[i], b = points[(i + 1) % points.length];
+      for (final cut in [0.28, 0.72]) {
+        next.add([a[0] + (b[0] - a[0]) * cut, a[1] + (b[1] - a[1]) * cut]);
+      }
+    }
+    points = next;
+  }
+  final ring = [
+    ...points,
+    points.first,
+  ].map((p) => [longitude(p[0]), latitude(p[1])]).toList();
+  return {'type': 'LineString', 'coordinates': ring};
+}
+
+String groupedNumber(num value) => value.round().toString().replaceAllMapped(
+  RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
+  (match) => '${match[1]},',
+);
+
+String formatGround(num value) =>
+    '${value >= 1000
+        ? groupedNumber(value)
+        : value >= 10
+        ? value.toStringAsFixed(0)
+        : value.toStringAsFixed(1)} km²';
+String formatPercent(num value) => value >= 1
+    ? '${value.toStringAsFixed(0)}%'
+    : value >= 0.1
+    ? '${value.toStringAsFixed(1)}%'
+    : value >= 0.005
+    ? '${value.toStringAsFixed(2)}%'
+    : '<0.01%';

@@ -9,8 +9,9 @@ import 'blob.dart' show parseColor;
 import 'sheets.dart' show date, showActivityDetails;
 
 class ActivityCard extends StatelessWidget {
-  const ActivityCard({super.key, required this.app});
+  const ActivityCard({super.key, required this.app, required this.onZoom});
   final AppState app;
+  final VoidCallback onZoom;
   @override
   Widget build(BuildContext context) {
     final data = app.activity!;
@@ -25,6 +26,24 @@ class ActivityCard extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            TextButton.icon(
+              onPressed: onZoom,
+              icon: const Icon(CupertinoIcons.zoom_in, size: 16),
+              label: const Text('Zoom to activity'),
+            ),
+            if (app.selectedRoute != null)
+              TextButton(
+                onPressed: () {
+                  app.selectedRoute = null;
+                  app.changed();
+                },
+                child: const Text('Show all'),
+              ),
+          ],
+        ),
         Padding(
           padding: const EdgeInsets.fromLTRB(18, 6, 4, 0),
           child: Row(

@@ -44,6 +44,9 @@ class Glass extends StatelessWidget {
   );
 }
 
+ModalRoute<dynamic>? _activePanel;
+int _panelGeneration = 0;
+
 Future<void> panel(
   BuildContext context,
   String title,
@@ -54,7 +57,11 @@ Future<void> panel(
     context,
     listen: false,
   ).read(appProvider);
-  final previouslyOpen = app.menuOpen;
+  final generation = ++_panelGeneration;
+  final navigator = Navigator.of(context);
+  final previous = _activePanel;
+  _activePanel = null;
+  if (previous != null && previous.isActive) navigator.removeRoute(previous);
   final phoneRadius =
       math.max(
             MediaQuery.paddingOf(context).top,
@@ -66,7 +73,10 @@ Future<void> panel(
   app.setMenuOpen(true);
   try {
     await showModalBottomSheet<void>(
-      context: context,
+      context: navigator.context,
+      isDismissible: true,
+      enableDrag: true,
+      useSafeArea: true,
       isScrollControlled: true,
       showDragHandle: false,
       backgroundColor: Colors.transparent,
@@ -77,72 +87,95 @@ Future<void> panel(
               duration: Duration(milliseconds: 320),
               reverseDuration: Duration(milliseconds: 240),
             ),
-      builder: (context) => SafeArea(
-        bottom: false,
-        child: Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.viewInsetsOf(context).bottom,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-            child: Glass(
-              radius: phoneRadius,
+      builder: (context) {
+        _activePanel = ModalRoute.of(context);
+        return Offstage(
+          offstage: !(ModalRoute.of(context)?.isCurrent ?? true),
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.viewInsetsOf(context).bottom,
+              ),
               child: Padding(
-                padding: EdgeInsets.only(
-                  bottom: math.max(
-                    0,
-                    MediaQuery.paddingOf(context).bottom - 12,
-                  ),
-                ),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxWidth: 380,
-                    maxHeight: math.min(
-                      MediaQuery.sizeOf(context).height * height,
-                      MediaQuery.sizeOf(context).height -
-                          MediaQuery.viewInsetsOf(context).bottom -
-                          MediaQuery.paddingOf(context).vertical -
-                          24,
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                child: Glass(
+                  radius: phoneRadius,
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      bottom: math.max(
+                        0,
+                        MediaQuery.paddingOf(context).bottom - 12,
+                      ),
                     ),
-                  ),
-                  child: SizedBox(
-                    width: 380,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(20, 12, 8, 6),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  title,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .headlineSmall,
-                                ),
-                              ),
-                              IconButton(
-                                onPressed: () => Navigator.pop(context),
-                                icon: const Icon(CupertinoIcons.xmark),
-                              ),
-                            ],
-                          ),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: 380,
+                        maxHeight: math.min(
+                          MediaQuery.sizeOf(context).height * height,
+                          MediaQuery.sizeOf(context).height -
+                              MediaQuery.viewInsetsOf(context).bottom -
+                              MediaQuery.paddingOf(context).vertical -
+                              24,
                         ),
-                        const Divider(height: 1),
-                        Flexible(child: child),
-                      ],
+                      ),
+                      child: SizedBox(
+                        width: 380,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(20, 12, 8, 6),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      title,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .headlineSmall,
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: () => Navigator.pop(context),
+                                    icon: const Icon(CupertinoIcons.xmark),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Divider(height: 1),
+                            Flexible(
+                              child:
+                                  NotificationListener<
+                                    ScrollUpdateNotification
+                                  >(
+                                    onNotification: (notification) {
+                                      if (notification.dragDetails != null &&
+                                          notification.metrics.pixels < -70) {
+                                        Navigator.of(context).pop();
+                                      }
+                                      return false;
+                                    },
+                                    child: child,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   } finally {
-    app.setMenuOpen(previouslyOpen);
+    if (generation == _panelGeneration) {
+      _activePanel = null;
+      app.setMenuOpen(false);
+    }
   }
 }
 
@@ -210,294 +243,289 @@ Future<void> showMenuSheet(
   VoidCallback refresh,
   MapLibreMapController? map,
 ) async {
-  app.setMenuOpen(true);
-  try {
-    await panel(
-      context,
-      'Your map',
-      Consumer(
-        builder: (context, ref, _) {
-          final a = ref.watch(appProvider);
-          return ListView(
-            shrinkWrap: true,
-            children: [
-              section('Appearance'),
+  await panel(
+    context,
+    'Your map',
+    Consumer(
+      builder: (context, ref, _) {
+        final a = ref.watch(appProvider);
+        return ListView(
+          shrinkWrap: true,
+          children: [
+            section('Appearance'),
+            ChoiceRow(
+              label: 'Basemap',
+              value: a.style == 'satellite' ? 'satellite' : 'flat',
+              choices: const {'flat': '2D', 'satellite': 'Satellite'},
+              onChanged: (v) => a.setStyle(v == 'flat' ? 'dark' : v),
+            ),
+            if (a.style != 'satellite')
               ChoiceRow(
-                label: 'Basemap',
-                value: a.style == 'satellite' ? 'satellite' : 'flat',
-                choices: const {'flat': '2D', 'satellite': 'Satellite'},
-                onChanged: (v) => a.setStyle(v == 'flat' ? 'dark' : v),
-              ),
-              if (a.style != 'satellite')
-                ChoiceRow(
-                  label: 'Theme',
-                  value: a.style,
-                  choices: const {
-                    'dark': 'Dark',
-                    'terrain': 'Terrain',
-                    'voyager': 'Light',
-                  },
-                  onChanged: a.setStyle,
-                ),
-              ChoiceRow(
-                label: 'Detail',
-                value: a.detail,
+                label: 'Theme',
+                value: a.style,
                 choices: const {
-                  'tiny': 'Tiniest',
-                  'auto': 'Auto',
-                  'region': 'Region',
-                  'country': 'Country',
+                  'dark': 'Dark',
+                  'terrain': 'Terrain',
+                  'voyager': 'Light',
                 },
-                onChanged: (v) {
-                  a.detail = v;
-                  a.changed();
-                },
+                onChanged: a.setStyle,
               ),
-              ChoiceRow(
-                label: 'Colouring',
-                value: a.mode,
-                choices: const {
-                  'flat': 'Single',
-                  'visits': 'Visits',
-                  'oldest': 'First seen',
-                  'type': 'Type',
-                },
-                onChanged: (v) {
-                  a.mode = v;
-                  a.changed();
-                  a.run(a.saveAppearance);
-                },
-              ),
-              if (a.mode == 'flat')
-                ListTile(
-                  title: const Text('Map colour'),
-                  trailing: ColorDot(a.accent),
-                  onTap: () async {
-                    final color = await chooseColor(context, a.accent);
-                    if (color != null) {
-                      a.accent = color;
-                      a.changed();
-                      await a.run(a.saveAppearance);
-                    }
-                  },
-                ),
-              if (a.mode == 'visits' || a.mode == 'oldest')
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 8,
-                  ),
-                  child: Column(
-                    children: [
-                      Container(
-                        height: 12,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(6),
-                          gradient: LinearGradient(
-                            colors: a.mode == 'visits'
-                                ? const [
-                                    Color(0xff2b3a6b),
-                                    Color(0xff39a0a0),
-                                    Color(0xfff2d049),
-                                    Color(0xffe4562f),
-                                  ]
-                                : const [
-                                    Color(0xff5c2a3f),
-                                    Color(0xffcf8560),
-                                    Color(0xff79c39b),
-                                  ],
-                          ),
-                        ),
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(a.mode == 'visits' ? 'Rare' : 'Long ago'),
-                          Text(a.mode == 'visits' ? 'Often' : 'Lately'),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              section('Your map'),
-              GlassSwitch(
-                title: const Text('Places answer a tap'),
-                value: a.cellInfo,
-                onChanged: (v) {
-                  a.cellInfo = v;
-                  a.changed();
-                },
-              ),
-
-              GlassSwitch(
-                title: const Text('Activities'),
-                value: a.routes,
-                onChanged: (v) {
-                  a.routes = v;
-                  a.changed();
-                },
-              ),
+            ChoiceRow(
+              label: 'Detail',
+              value: a.detail,
+              choices: const {
+                'tiny': 'Tiniest',
+                'auto': 'Auto',
+                'region': 'Region',
+                'country': 'Country',
+              },
+              onChanged: (v) {
+                a.detail = v;
+                a.changed();
+              },
+            ),
+            ChoiceRow(
+              label: 'Colouring',
+              value: a.mode,
+              choices: const {
+                'flat': 'Single',
+                'visits': 'Visits',
+                'oldest': 'First seen',
+                'type': 'Type',
+              },
+              onChanged: (v) {
+                a.mode = v;
+                a.changed();
+                a.run(a.saveAppearance);
+              },
+            ),
+            if (a.mode == 'flat')
               ListTile(
-                title: const Text('Activity colours and visibility'),
-                leading: const Icon(Icons.palette_outlined),
-                trailing: const Icon(CupertinoIcons.chevron_right, size: 18),
-                onTap: () => showActivityStyle(context, a),
-              ),
-              GlassSwitch(
-                title: const Text('Photo pins'),
-                subtitle: const Text('Pictures stay on your phone'),
-                value: a.photos,
-                onChanged: (v) {
-                  a.photos = v;
-                  a.changed();
-                },
-              ),
-              ListTile(
-                title: const Text('Browse activities'),
-                leading: const Icon(Icons.route_outlined),
-                onTap: () => showActivities(context, a, map),
-              ),
-              ListTile(
-                title: const Text('Photos'),
-                leading: const Icon(Icons.photo_library_outlined),
-                onTap: () => showPhotos(context, a),
-              ),
-              section('Reference overlays'),
-              GlassSwitch(
-                title: const Text('Train tracks'),
-                value: a.rail,
-                onChanged: (v) {
-                  a.rail = v;
-                  a.changed();
-                },
-              ),
-              GlassSwitch(
-                title: const Text('Airports'),
-                value: a.airports,
-                onChanged: (v) {
-                  a.airports = v;
-                  a.changed();
-                },
-              ),
-              GlassSwitch(
-                title: const Text('Waymarked trails'),
-                value: a.trails,
-                onChanged: (v) {
-                  a.trails = v;
-                  a.changed();
-                },
-              ),
-              if (a.trails) ...[
-                ChoiceRow(
-                  label: 'Trail theme',
-                  value: a.trailTheme,
-                  choices: const {
-                    'hiking': 'Hiking',
-                    'cycling': 'Cycling',
-                    'mtb': 'MTB',
-                    'slopes': 'Slopes',
-                  },
-                  onChanged: (value) {
-                    a.trailTheme = value;
+                title: const Text('Map colour'),
+                trailing: ColorDot(a.accent),
+                onTap: () async {
+                  final color = await chooseColor(context, a.accent);
+                  if (color != null) {
+                    a.accent = color;
                     a.changed();
-                  },
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Row(
-                    children: [
-                      const Text('Strength'),
-                      Expanded(
-                        child: CupertinoSlider(
-                          value: a.trailStrength,
-                          min: 0.2,
-                          max: 1,
-                          onChanged: (value) {
-                            a.trailStrength = value;
-                            a.changed();
-                          },
-                        ),
-                      ),
-                      Text('${(a.trailStrength * 100).round()}%'),
-                    ],
-                  ),
-                ),
-              ],
-              section('Explore and manage'),
-              ListTile(
-                leading: const Icon(CupertinoIcons.calendar),
-                title: const Text('Trips and calendar'),
-                onTap: map == null ? null : () => showTrips(context, a, map),
-              ),
-              ListTile(
-                leading: const Icon(Icons.bar_chart),
-                title: const Text('Statistics'),
-                onTap: () => showStats(context, a),
-              ),
-              ListTile(
-                leading: const Icon(Icons.edit_outlined),
-                title: const Text('Edit your map'),
-                onTap: () {
-                  a.editing = true;
-                  a.changed();
-                  Navigator.pop(context);
+                    await a.run(a.saveAppearance);
+                  }
                 },
               ),
-              ListTile(
-                leading: const Icon(Icons.layers_outlined),
-                title: const Text('Sources'),
-                onTap: () => showSources(context, a),
-              ),
-              ListTile(
-                leading: const Icon(Icons.file_upload_outlined),
-                title: const Text('Import a location file'),
-                subtitle: const Text('GPX, FIT, Timeline or a Strava archive'),
-                onTap: () => importFile(context, a),
-              ),
-              ListTile(
-                leading: const Icon(Icons.sync),
-                title: const Text('Sync connections'),
-                onTap: () => showConnections(context, a),
-              ),
-              ListTile(
-                leading: const Icon(Icons.photo_camera_outlined),
-                title: const Text('Save map picture'),
-                onTap: map == null
-                    ? null
-                    : () => a.run(() async {
-                        final png = await map.takeSnapshot();
-                        await a.native.saveImage(png);
-                        if (context.mounted) {
-                          showToast(context, 'Saved to Photos.');
-                        }
-                      }),
-              ),
-              ListTile(
-                leading: const Icon(Icons.settings_outlined),
-                title: const Text('Settings'),
-                onTap: () => showSettings(context, a),
-              ),
-              if (a.user?['admin'] == true || a.user?['isAdmin'] == true)
-                ListTile(
-                  title: const Text('Administration'),
-                  leading: const Icon(Icons.admin_panel_settings_outlined),
-                  onTap: () => showAdmin(context, a),
+            if (a.mode == 'visits' || a.mode == 'oldest')
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 8,
                 ),
-              const Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                  'Sporra Preview · 0.3.0',
-                  style: TextStyle(color: Colors.white38),
+                child: Column(
+                  children: [
+                    Container(
+                      height: 12,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(6),
+                        gradient: LinearGradient(
+                          colors: a.mode == 'visits'
+                              ? const [
+                                  Color(0xff2b3a6b),
+                                  Color(0xff39a0a0),
+                                  Color(0xfff2d049),
+                                  Color(0xffe4562f),
+                                ]
+                              : const [
+                                  Color(0xff5c2a3f),
+                                  Color(0xffcf8560),
+                                  Color(0xff79c39b),
+                                ],
+                        ),
+                      ),
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(a.mode == 'visits' ? 'Rare' : 'Long ago'),
+                        Text(a.mode == 'visits' ? 'Often' : 'Lately'),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            section('Your map'),
+            GlassSwitch(
+              title: const Text('Places answer a tap'),
+              value: a.cellInfo,
+              onChanged: (v) {
+                a.cellInfo = v;
+                a.changed();
+              },
+            ),
+
+            GlassSwitch(
+              title: const Text('Activities'),
+              value: a.routes,
+              onChanged: (v) {
+                a.routes = v;
+                a.changed();
+              },
+            ),
+            ListTile(
+              title: const Text('Activity colours and visibility'),
+              leading: const Icon(Icons.palette_outlined),
+              trailing: const Icon(CupertinoIcons.chevron_right, size: 18),
+              onTap: () => showActivityStyle(context, a),
+            ),
+            GlassSwitch(
+              title: const Text('Photo pins'),
+              subtitle: const Text('Pictures stay on your phone'),
+              value: a.photos,
+              onChanged: (v) {
+                a.photos = v;
+                a.changed();
+              },
+            ),
+            ListTile(
+              title: const Text('Browse activities'),
+              leading: const Icon(Icons.route_outlined),
+              onTap: () => showActivities(context, a, map),
+            ),
+            ListTile(
+              title: const Text('Photos'),
+              leading: const Icon(Icons.photo_library_outlined),
+              onTap: () => showPhotos(context, a),
+            ),
+            section('Reference overlays'),
+            GlassSwitch(
+              title: const Text('Train tracks'),
+              value: a.rail,
+              onChanged: (v) {
+                a.rail = v;
+                a.changed();
+              },
+            ),
+            GlassSwitch(
+              title: const Text('Airports'),
+              value: a.airports,
+              onChanged: (v) {
+                a.airports = v;
+                a.changed();
+              },
+            ),
+            GlassSwitch(
+              title: const Text('Waymarked trails'),
+              value: a.trails,
+              onChanged: (v) {
+                a.trails = v;
+                a.changed();
+              },
+            ),
+            if (a.trails) ...[
+              ChoiceRow(
+                label: 'Trail theme',
+                value: a.trailTheme,
+                choices: const {
+                  'hiking': 'Hiking',
+                  'cycling': 'Cycling',
+                  'mtb': 'MTB',
+                  'slopes': 'Slopes',
+                },
+                onChanged: (value) {
+                  a.trailTheme = value;
+                  a.changed();
+                },
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  children: [
+                    const Text('Strength'),
+                    Expanded(
+                      child: CupertinoSlider(
+                        value: a.trailStrength,
+                        min: 0.2,
+                        max: 1,
+                        onChanged: (value) {
+                          a.trailStrength = value;
+                          a.changed();
+                        },
+                      ),
+                    ),
+                    Text('${(a.trailStrength * 100).round()}%'),
+                  ],
                 ),
               ),
             ],
-          );
-        },
-      ),
-    );
-  } finally {
-    app.setMenuOpen(false);
-  }
+            section('Explore and manage'),
+            ListTile(
+              leading: const Icon(CupertinoIcons.calendar),
+              title: const Text('Trips and calendar'),
+              onTap: map == null ? null : () => showTrips(context, a, map),
+            ),
+            ListTile(
+              leading: const Icon(Icons.bar_chart),
+              title: const Text('Statistics'),
+              onTap: () => showStats(context, a),
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Edit your map'),
+              onTap: () {
+                a.editing = true;
+                a.changed();
+                Navigator.pop(context);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.layers_outlined),
+              title: const Text('Sources'),
+              onTap: () => showSources(context, a),
+            ),
+            ListTile(
+              leading: const Icon(Icons.file_upload_outlined),
+              title: const Text('Import a location file'),
+              subtitle: const Text('GPX, FIT, Timeline or a Strava archive'),
+              onTap: () => importFile(context, a),
+            ),
+            ListTile(
+              leading: const Icon(Icons.sync),
+              title: const Text('Sync connections'),
+              onTap: () => showConnections(context, a),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Save map picture'),
+              onTap: map == null
+                  ? null
+                  : () => a.run(() async {
+                      final png = await map.takeSnapshot();
+                      await a.native.saveImage(png);
+                      if (context.mounted) {
+                        showToast(context, 'Saved to Photos.');
+                      }
+                    }),
+            ),
+            ListTile(
+              leading: const Icon(Icons.settings_outlined),
+              title: const Text('Settings'),
+              onTap: () => showSettings(context, a),
+            ),
+            if (a.user?['admin'] == true || a.user?['isAdmin'] == true)
+              ListTile(
+                title: const Text('Administration'),
+                leading: const Icon(Icons.admin_panel_settings_outlined),
+                onTap: () => showAdmin(context, a),
+              ),
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Sporra Preview · 0.3.1',
+                style: TextStyle(color: Colors.white38),
+              ),
+            ),
+          ],
+        );
+      },
+    ),
+  );
 }
 
 class AsyncList extends StatefulWidget {
@@ -803,9 +831,17 @@ class _SearchState extends State<_Search> {
             suffixIcon: IconButton(
               icon: const Icon(CupertinoIcons.calendar),
               onPressed: () async {
-                final date = await chooseDay(context, widget.app);
-                if (date != null && context.mounted) {
-                  await showDay(context, widget.app, dayKey(date), widget.map);
+                final destination = Navigator.of(context).context;
+                final selectedApp = widget.app;
+                final selectedMap = widget.map;
+                final date = await chooseDay(context, selectedApp);
+                if (date != null && destination.mounted) {
+                  await showDay(
+                    destination,
+                    selectedApp,
+                    dayKey(date),
+                    selectedMap,
+                  );
                 }
               },
             ),
@@ -890,37 +926,32 @@ void goTo(MapLibreMapController map, Map r, {double bottom = 150}) {
   }
 }
 
-Future<DateTime?> chooseDay(BuildContext context, AppState app) =>
-    showModalBottomSheet<DateTime>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Glass(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: SizedBox(
-                height: 350,
-                child: AsyncList(
-                  load: () async => {
-                    'days': (await app.api.get('/api/days'))['days'],
-                    'trips': (await app.api.get('/api/trips'))['trips'],
-                  },
-                  builder: (context, data) => VisitCalendar(
-                    days: data['days'],
-                    trips: data['trips'],
-                    selected: app.trackDay,
-                    onPick: (date) => Navigator.pop(context, date),
-                  ),
-                ),
-              ),
-            ),
-          ),
+Future<DateTime?> chooseDay(BuildContext context, AppState app) async {
+  DateTime? selected;
+  await panel(
+    context,
+    'Choose a day',
+    SizedBox(
+      height: 350,
+      child: AsyncList(
+        load: () async => {
+          'days': (await app.api.get('/api/days'))['days'],
+          'trips': (await app.api.get('/api/trips'))['trips'],
+        },
+        builder: (context, data) => VisitCalendar(
+          days: data['days'],
+          trips: data['trips'],
+          selected: app.trackDay,
+          onPick: (date) {
+            selected = date;
+            Navigator.pop(context);
+          },
         ),
       ),
-    );
+    ),
+  );
+  return selected;
+}
 
 Future<void> showTrips(
   BuildContext context,
@@ -947,10 +978,11 @@ Future<void> showTrips(
                 leading: const Icon(Icons.calendar_month),
                 title: const Text('Choose a day'),
                 onTap: () async {
+                  final destination = Navigator.of(context).context;
                   final d = await chooseDay(context, app);
-                  if (d != null && context.mounted) {
+                  if (d != null && destination.mounted) {
                     await showDay(
-                      context,
+                      destination,
                       app,
                       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}',
                       map,
@@ -1229,163 +1261,248 @@ class _PhotoGalleryState extends State<PhotoGallery> {
 Future<void> showSettings(BuildContext context, AppState app) => panel(
   context,
   'Settings',
-  Consumer(
-    builder: (context, ref, _) {
-      ref.watch(appProvider);
-      final d = app.device;
-      return ListView(
-        shrinkWrap: true,
-        children: [
-          section('Your phone'),
-          ListTile(
-            title: const Text('Background location'),
-            trailing: DropdownButton<int>(
-              value: d['cadence'] ?? -1,
-              items: const [
-                DropdownMenuItem(value: -1, child: Text('Off')),
-                DropdownMenuItem(value: 0, child: Text('Significant changes')),
-                DropdownMenuItem(value: 60, child: Text('Every hour')),
-                DropdownMenuItem(value: 30, child: Text('Every 30 minutes')),
-                DropdownMenuItem(value: 15, child: Text('Every 15 minutes')),
-                DropdownMenuItem(value: 5, child: Text('Every 5 minutes')),
-                DropdownMenuItem(value: 1, child: Text('Every minute')),
-              ],
-              onChanged: (v) => configure(app, {'cadence': v}),
-            ),
-          ),
-          ListTile(
-            title: const Text('Location precision'),
-            trailing: DropdownButton<int>(
-              value: d['precision'] ?? 80,
-              items: [30, 80, 200, 0]
-                  .map(
-                    (n) => DropdownMenuItem(
-                      value: n,
-                      child: Text(n == 0 ? 'Every fix' : 'Within $n m'),
+  SettingsTabs(
+    app: app,
+    childBuilder: (tab) => Consumer(
+      builder: (context, ref, _) {
+        ref.watch(appProvider);
+        final d = app.device;
+        return ListView(
+          shrinkWrap: true,
+          children: [
+            if (tab == 'App settings') ...[
+              section('Your phone'),
+              ListTile(
+                title: const Text('Background location'),
+                trailing: DropdownButton<int>(
+                  value: d['cadence'] ?? -1,
+                  items: const [
+                    DropdownMenuItem(value: -1, child: Text('Off')),
+                    DropdownMenuItem(
+                      value: 0,
+                      child: Text('Significant changes'),
                     ),
-                  )
-                  .toList(),
-              onChanged: (v) => configure(app, {'precision': v}),
+                    DropdownMenuItem(value: 60, child: Text('Every hour')),
+                    DropdownMenuItem(
+                      value: 30,
+                      child: Text('Every 30 minutes'),
+                    ),
+                    DropdownMenuItem(
+                      value: 15,
+                      child: Text('Every 15 minutes'),
+                    ),
+                    DropdownMenuItem(value: 5, child: Text('Every 5 minutes')),
+                    DropdownMenuItem(value: 1, child: Text('Every minute')),
+                  ],
+                  onChanged: (v) => configure(app, {'cadence': v}),
+                ),
+              ),
+              ListTile(
+                title: const Text('Location precision'),
+                trailing: DropdownButton<int>(
+                  value: d['precision'] ?? 80,
+                  items: [30, 80, 200, 0]
+                      .map(
+                        (n) => DropdownMenuItem(
+                          value: n,
+                          child: Text(n == 0 ? 'Every fix' : 'Within $n m'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) => configure(app, {'precision': v}),
+                ),
+              ),
+              GlassSwitch(
+                title: const Text('Apple Health workouts'),
+                value: d['health'] == true,
+                onChanged: (v) => configure(app, {'health': v}),
+              ),
+              GlassSwitch(
+                title: const Text('Photo locations'),
+                value: d['photos'] == true,
+                onChanged: (v) => configure(app, {'photos': v}),
+              ),
+              fact('Queued locations', d['pending'] ?? 0),
+              ListTile(
+                title: const Text('Sync now'),
+                leading: const Icon(Icons.sync),
+                onTap: app.busy ? null : app.sync,
+              ),
+              if ('${d['error'] ?? ''}'.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text('${d['error']}'),
+                ),
+            ],
+            if (tab == 'Personal') ...[
+              section('Personal'),
+              ListTile(
+                title: const Text('Home'),
+                subtitle: Text(
+                  '${app.prefs['home']?['name'] ?? 'Guess from your visits'}',
+                ),
+                leading: const Icon(Icons.home_outlined),
+                onTap: () => chooseHome(context, app),
+              ),
+              ListTile(
+                title: const Text('Device name'),
+                subtitle: Text('${d['deviceName'] ?? 'iPhone'}'),
+                onTap: () async {
+                  final name = await askText(
+                    context,
+                    'Device name',
+                    '${d['deviceName'] ?? 'iPhone'}',
+                  );
+                  if (name != null) await configure(app, {'deviceName': name});
+                },
+              ),
+              fact('Server', app.api.server),
+              ListTile(
+                title: const Text('Clock'),
+                trailing: DropdownButton<String>(
+                  value: '${app.prefs['clock'] ?? 'auto'}',
+                  items: const [
+                    DropdownMenuItem(value: 'auto', child: Text('Automatic')),
+                    DropdownMenuItem(value: '12', child: Text('12-hour')),
+                    DropdownMenuItem(value: '24', child: Text('24-hour')),
+                  ],
+                  onChanged: (v) => app.run(() async {
+                    app.prefs['clock'] = v;
+                    await app.api.post('/api/prefs', {'prefs': app.prefs});
+                  }),
+                ),
+              ),
+            ],
+            if (tab == 'Account') ...[
+              if (app.user?['admin'] == true)
+                ListTile(
+                  title: const Text('Backups'),
+                  leading: const Icon(Icons.backup_outlined),
+                  onTap: () => showBackup(context, app),
+                ),
+              ListTile(
+                title: const Text(
+                  'Delete account',
+                  style: TextStyle(color: CupertinoColors.systemRed),
+                ),
+                leading: const Icon(CupertinoIcons.trash),
+                onTap: app.busy
+                    ? null
+                    : () async {
+                        if (!await confirmRemoval(
+                          context,
+                          'Delete your account?',
+                          'All your visited ground, activities, connections and sessions will be permanently removed. Existing server backups are retained.',
+                        )) {
+                          return;
+                        }
+                        if (!context.mounted) return;
+                        final password = await askText(
+                          context,
+                          'Confirm your password',
+                          '',
+                          obscure: true,
+                        );
+                        if (password == null || password.isEmpty) return;
+                        await app.run(() async {
+                          await app.api.post('/api/account/delete', {
+                            'password': password,
+                          });
+                          await app.native.signOut();
+                          app.api.clear();
+                          app.user = null;
+                          app.prefs = {};
+                          app.changed();
+                          if (context.mounted) {
+                            Navigator.of(context).popUntil((r) => r.isFirst);
+                          }
+                        });
+                      },
+              ),
+              ListTile(
+                title: const Text('Sign out'),
+                leading: const Icon(Icons.logout),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await app.signOut();
+                },
+              ),
+            ],
+            if (tab == 'Map layers') ...[
+              ChoiceRow(
+                label: 'Basemap',
+                value: app.style,
+                choices: const {
+                  'dark': 'Dark',
+                  'voyager': 'Light',
+                  'terrain': 'Terrain',
+                  'satellite': 'Satellite',
+                },
+                onChanged: app.setStyle,
+              ),
+              ListTile(
+                title: const Text('Mapbox public token'),
+                subtitle: const Text(
+                  'Saved to your account. 3D maps are available on web.',
+                ),
+                onTap: () async {
+                  final token = await askText(
+                    context,
+                    'Mapbox public token',
+                    '${app.prefs['mapboxToken'] ?? ''}',
+                    obscure: true,
+                  );
+                  if (token == null) return;
+                  await app.run(() async {
+                    app.prefs['mapboxToken'] = token.trim();
+                    await app.api.post('/api/prefs', {'prefs': app.prefs});
+                    app.changed();
+                  });
+                },
+              ),
+              GlassSwitch(
+                title: const Text('Train tracks'),
+                value: app.rail,
+                onChanged: (v) {
+                  app.rail = v;
+                  app.changed();
+                },
+              ),
+              GlassSwitch(
+                title: const Text('Waymarked trails'),
+                value: app.trails,
+                onChanged: (v) {
+                  app.trails = v;
+                  app.changed();
+                },
+              ),
+              GlassSwitch(
+                title: const Text('Airfields'),
+                value: app.airports,
+                onChanged: (v) {
+                  app.airports = v;
+                  app.changed();
+                },
+              ),
+            ],
+            if (tab == 'Sources')
+              ListTile(
+                title: const Text('Manage sources'),
+                onTap: () => showSources(context, app),
+              ),
+            if (tab == 'Import')
+              ListTile(
+                title: const Text('Import activities'),
+                onTap: () => importFile(context, app),
+              ),
+            const ListTile(
+              title: Text('Sporra Preview'),
+              subtitle: Text('0.3.1 · Native map for iOS'),
             ),
-          ),
-          GlassSwitch(
-            title: const Text('Apple Health workouts'),
-            value: d['health'] == true,
-            onChanged: (v) => configure(app, {'health': v}),
-          ),
-          GlassSwitch(
-            title: const Text('Photo locations'),
-            value: d['photos'] == true,
-            onChanged: (v) => configure(app, {'photos': v}),
-          ),
-          fact('Queued locations', d['pending'] ?? 0),
-          ListTile(
-            title: const Text('Sync now'),
-            leading: const Icon(Icons.sync),
-            onTap: app.busy ? null : app.sync,
-          ),
-          if ('${d['error'] ?? ''}'.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.all(24),
-              child: Text('${d['error']}'),
-            ),
-          section('Personal'),
-          ListTile(
-            title: const Text('Home'),
-            subtitle: Text(
-              '${app.prefs['home']?['name'] ?? 'Guess from your visits'}',
-            ),
-            leading: const Icon(Icons.home_outlined),
-            onTap: () => chooseHome(context, app),
-          ),
-          ListTile(
-            title: const Text('Device name'),
-            subtitle: Text('${d['deviceName'] ?? 'iPhone'}'),
-            onTap: () async {
-              final name = await askText(
-                context,
-                'Device name',
-                '${d['deviceName'] ?? 'iPhone'}',
-              );
-              if (name != null) await configure(app, {'deviceName': name});
-            },
-          ),
-          fact('Server', app.api.server),
-          ListTile(
-            title: const Text('Clock'),
-            trailing: DropdownButton<String>(
-              value: '${app.prefs['clock'] ?? 'auto'}',
-              items: const [
-                DropdownMenuItem(value: 'auto', child: Text('Automatic')),
-                DropdownMenuItem(value: '12', child: Text('12-hour')),
-                DropdownMenuItem(value: '24', child: Text('24-hour')),
-              ],
-              onChanged: (v) => app.run(() async {
-                app.prefs['clock'] = v;
-                await app.api.post('/api/prefs', {'prefs': app.prefs});
-              }),
-            ),
-          ),
-          if (app.user?['admin'] == true)
-            ListTile(
-              title: const Text('Backups'),
-              leading: const Icon(Icons.backup_outlined),
-              onTap: () => showBackup(context, app),
-            ),
-          ListTile(
-            title: const Text(
-              'Delete account',
-              style: TextStyle(color: CupertinoColors.systemRed),
-            ),
-            leading: const Icon(CupertinoIcons.trash),
-            onTap: app.busy
-                ? null
-                : () async {
-                    if (!await confirmRemoval(
-                      context,
-                      'Delete your account?',
-                      'All your visited ground, activities, connections and sessions will be permanently removed. Existing server backups are retained.',
-                    )) {
-                      return;
-                    }
-                    if (!context.mounted) return;
-                    final password = await askText(
-                      context,
-                      'Confirm your password',
-                      '',
-                      obscure: true,
-                    );
-                    if (password == null || password.isEmpty) return;
-                    await app.run(() async {
-                      await app.api.post('/api/account/delete', {
-                        'password': password,
-                      });
-                      await app.native.signOut();
-                      app.api.clear();
-                      app.user = null;
-                      app.prefs = {};
-                      app.changed();
-                      if (context.mounted) {
-                        Navigator.of(context).popUntil((r) => r.isFirst);
-                      }
-                    });
-                  },
-          ),
-          ListTile(
-            title: const Text('Sign out'),
-            leading: const Icon(Icons.logout),
-            onTap: () async {
-              Navigator.pop(context);
-              await app.signOut();
-            },
-          ),
-          const ListTile(
-            title: Text('Sporra Preview'),
-            subtitle: Text('0.3.0 · Native map for iOS'),
-          ),
-        ],
-      );
-    },
+          ],
+        );
+      },
+    ),
   ),
 );
 Future<void> configure(AppState app, Map<String, dynamic> patch) =>
@@ -2174,4 +2291,62 @@ Future<void> showRoute(
 ) async {
   Navigator.of(context).popUntil((r) => r.isFirst);
   await app.openActivity(route['id']);
+}
+
+class SettingsTabs extends StatefulWidget {
+  const SettingsTabs({
+    super.key,
+    required this.app,
+    required this.childBuilder,
+  });
+  final AppState app;
+  final Widget Function(String) childBuilder;
+  @override
+  State<SettingsTabs> createState() => _SettingsTabsState();
+}
+
+class _SettingsTabsState extends State<SettingsTabs> {
+  String tab = 'Personal';
+  @override
+  Widget build(BuildContext context) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'Signed in as ${widget.app.user?['username'] ?? ''}',
+            style: const TextStyle(color: Colors.white60),
+          ),
+        ),
+      ),
+      SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Row(
+          children: [
+            for (final name in [
+              'Personal',
+              'Map layers',
+              'Sources',
+              'Import',
+              'App settings',
+              'Account',
+            ])
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: ChoiceChip(
+                  label: Text(name),
+                  selected: tab == name,
+                  onSelected: (_) => setState(() => tab = name),
+                ),
+              ),
+          ],
+        ),
+      ),
+      const Divider(height: 1),
+      Flexible(child: widget.childBuilder(tab)),
+    ],
+  );
 }
