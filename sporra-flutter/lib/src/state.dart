@@ -142,6 +142,7 @@ class AppState extends ChangeNotifier {
   }
 
   void scrubActivity(int index) {
+    if (activitySample == index) return;
     activitySample = index;
     notifyListeners();
   }

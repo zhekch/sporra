@@ -2,11 +2,12 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/gestures.dart';
 
 import 'state.dart';
 import 'appearance.dart';
 import 'blob.dart' show parseColor;
-import 'sheets.dart' show date, showActivityDetails;
+import 'sheets.dart' show Glass, date, showActivityDetails;
 
 class ActivityCard extends StatelessWidget {
   const ActivityCard({super.key, required this.app, required this.onZoom});
@@ -26,42 +27,45 @@ class ActivityCard extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            TextButton.icon(
-              onPressed: onZoom,
-              icon: const Icon(CupertinoIcons.zoom_in, size: 16),
-              label: const Text('Zoom to activity'),
-            ),
-            if (app.selectedRoute != null)
-              TextButton(
-                onPressed: () {
-                  app.selectedRoute = null;
-                  app.changed();
-                },
-                child: const Text('Show all'),
-              ),
-          ],
-        ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(18, 6, 4, 0),
+          padding: const EdgeInsets.fromLTRB(18, 12, 10, 0),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Text(
-                  '${route['name']}',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${route['name']}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${route['sport']} · ${date(route['firstAt'])}',
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontSize: 12,
+                        height: 1.2,
+                      ),
+                    ),
+                  ],
                 ),
               ),
               IconButton(
                 tooltip: 'Close activity',
                 onPressed: app.closeActivity,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(
+                  width: 32,
+                  height: 32,
+                ),
                 icon: const Icon(CupertinoIcons.xmark, size: 18),
               ),
             ],
@@ -72,13 +76,6 @@ class ActivityCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 18),
-                  child: Text(
-                    '${route['sport']} · ${date(route['firstAt'])}',
-                    style: const TextStyle(color: Colors.white60, fontSize: 12),
-                  ),
-                ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(18, 14, 18, 4),
                   child: Wrap(
@@ -95,9 +92,8 @@ class ActivityCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (choices.isNotEmpty)
+                if (choices.length > 1)
                   ChoiceRow(
-                    label: 'Along the activity',
                     value: app.activityMetric!,
                     choices: choices,
                     onChanged: (metric) {
@@ -105,6 +101,17 @@ class ActivityCard extends StatelessWidget {
                       app.activitySample = null;
                       app.changed();
                     },
+                  ),
+                if (choices.length == 1)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 8, 18, 6),
+                    child: Text(
+                      choices.values.single,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.white70,
+                      ),
+                    ),
                   ),
                 if (graph != null)
                   Padding(
@@ -128,32 +135,57 @@ class ActivityCard extends StatelessWidget {
           ),
         ),
         const Divider(height: 1),
-        Row(
-          children: [
-            IconButton(
-              tooltip: 'Previous activity',
-              onPressed: app.busy
-                  ? null
-                  : () => app.run(() => app.stepActivity(-1)),
-              icon: const Icon(Icons.chevron_left),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+          child: SizedBox(
+            height: 40,
+            child: Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    style: _actionStyle(context),
+                    onPressed: onZoom,
+                    icon: const Icon(CupertinoIcons.zoom_in, size: 16),
+                    label: const Text('Focus'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton(
+                    style: _actionStyle(context),
+                    onPressed: app.selectedRoute == null
+                        ? null
+                        : () {
+                            app.selectedRoute = null;
+                            app.changed();
+                          },
+                    child: const Text('Show all'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton(
+                    style: _actionStyle(context),
+                    onPressed: () => showActivityDetails(context, app, route),
+                    child: const Text('More info'),
+                  ),
+                ),
+              ],
             ),
-            IconButton(
-              tooltip: 'Next activity',
-              onPressed: app.busy
-                  ? null
-                  : () => app.run(() => app.stepActivity(1)),
-              icon: const Icon(Icons.chevron_right),
-            ),
-            const Spacer(),
-            TextButton(
-              onPressed: () => showActivityDetails(context, app, route),
-              child: const Text('More info'),
-            ),
-          ],
+          ),
         ),
       ],
     );
   }
+
+  ButtonStyle _actionStyle(BuildContext context) => FilledButton.styleFrom(
+    backgroundColor: Colors.white.withValues(alpha: 0.08),
+    foregroundColor: Colors.white,
+    padding: const EdgeInsets.symmetric(horizontal: 6),
+    textStyle: Theme.of(context).textTheme.labelLarge
+        ?.copyWith(fontSize: 12, fontWeight: FontWeight.w600),
+    shape: RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(14)),
+  );
 
   Widget _reading(String title, String value) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -164,6 +196,62 @@ class ActivityCard extends StatelessWidget {
         style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
       ),
     ],
+  );
+}
+
+// One pan recognizer owns both axes so diagonal swipes cannot be stolen by
+// competing horizontal/vertical recognizers or the map behind the banner.
+class ActivityBanner extends StatefulWidget {
+  const ActivityBanner({
+    super.key,
+    required this.name,
+    required this.onStep,
+    required this.onDismiss,
+    this.busy = false,
+  });
+  final String name;
+  final ValueChanged<int> onStep;
+  final VoidCallback onDismiss;
+  final bool busy;
+  @override
+  State<ActivityBanner> createState() => _ActivityBannerState();
+}
+
+class _ActivityBannerState extends State<ActivityBanner> {
+  Offset travel = Offset.zero;
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    dragStartBehavior: DragStartBehavior.down,
+    onPanStart: (_) => travel = Offset.zero,
+    onPanUpdate: (event) => travel += event.delta,
+    onPanEnd: (event) {
+      final velocity = event.velocity.pixelsPerSecond;
+      if (travel.dx.abs() > travel.dy.abs()) {
+        if (!widget.busy &&
+            (travel.dx.abs() >= 32 || velocity.dx.abs() >= 150)) {
+          widget.onStep(travel.dx < 0 ? 1 : -1);
+        }
+      } else if (travel.dy.abs() >= 60 || velocity.dy.abs() >= 150) {
+        widget.onDismiss();
+      }
+    },
+    child: Glass(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        child: Text(
+          widget.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            height: 1.2,
+          ),
+        ),
+      ),
+    ),
   );
 }
 
@@ -216,9 +304,11 @@ class ActivityGraph extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 4),
-            Listener(
-              onPointerDown: (e) => scrub(e.localPosition),
-              onPointerMove: (e) => scrub(e.localPosition),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              dragStartBehavior: DragStartBehavior.down,
+              onPanDown: (e) => scrub(e.localPosition),
+              onPanUpdate: (e) => scrub(e.localPosition),
               child: SizedBox(
                 height: 72,
                 width: width,

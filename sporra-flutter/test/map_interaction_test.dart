@@ -2,11 +2,38 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/widgets.dart';
 import 'package:sporra_flutter/src/map_interaction.dart';
 import 'package:sporra_flutter/src/blob.dart'
     show mercX, mercY, longitude, latitude;
 
 void main() {
+  test(
+    'activity camera fit excludes the measured card and phone safe area',
+    () {
+      final padding = activityMapPadding(
+        const Size(390, 844),
+        const Size(370, 300),
+        const EdgeInsets.fromLTRB(0, 59, 0, 34),
+      );
+      expect(padding.bottom, 368);
+      expect(padding.top, 139);
+      final larger = activityMapPadding(
+        const Size(390, 844),
+        const Size(370, 430),
+        const EdgeInsets.fromLTRB(0, 59, 0, 34),
+      );
+      expect(larger.bottom - padding.bottom, 130);
+      final wide = activityMapPadding(
+        const Size(1024, 768),
+        const Size(440, 300),
+        EdgeInsets.zero,
+      );
+      expect(wide.left, 474);
+      expect(wide.bottom, 24);
+    },
+  );
+
   test('padded viewport reuse respects edges and the date line', () {
     expect(
       viewportWithin([-20, -10, 20, 10], [-19, -5, 10, 5], inset: 0.1),

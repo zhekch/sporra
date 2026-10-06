@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sporra_flutter/src/sheets.dart';
@@ -58,19 +59,34 @@ void main() {
       await tester.tap(find.text('Open'));
       await tester.pumpAndSettle();
       expect(app.menuOpen, isTrue);
-      final glass = tester.widget<Glass>(find.byType(Glass));
-      expect(glass.radius, 43);
+      final corners = tester
+          .widget<ClipRSuperellipse>(
+            find.descendant(
+              of: find.byType(Glass),
+              matching: find.byType(ClipRSuperellipse),
+            ),
+          )
+          .borderRadius;
+      expect(corners, BorderRadius.circular(43));
       expect(tester.getSize(find.byType(Glass)).height, lessThan(280));
       expect(tester.getBottomLeft(find.byType(Glass)).dy, 832);
       await tester.tap(find.text('Walk'));
       await tester.pumpAndSettle();
-      expect(tester.widget<Glass>(find.byType(Glass)).radius, glass.radius);
+      expect(
+        tester
+            .widget<ClipRSuperellipse>(
+              find.descendant(
+                of: find.byType(Glass),
+                matching: find.byType(ClipRSuperellipse),
+              ),
+            )
+            .borderRadius,
+        corners,
+      );
       expect(find.text('Submenu content'), findsOneWidget);
       expect(
         webTheme(menuRadius: menuCornerRadius(context)).dialogTheme.shape,
-        RoundedSuperellipseBorder(
-          borderRadius: BorderRadius.circular(glass.radius),
-        ),
+        RoundedSuperellipseBorder(borderRadius: corners),
       );
       panel(context, 'Settings', const Text('Only the new panel'));
       await tester.pumpAndSettle();
@@ -99,6 +115,30 @@ void main() {
       await tester.drag(find.text('Settings'), const Offset(0, 500));
       await tester.pumpAndSettle();
       expect(app.menuOpen, isFalse);
+      final removal = confirmRemoval(
+        context,
+        'Remove trip',
+        'Delete this trip?',
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<AlertDialog>(find.byType(AlertDialog)).shape,
+        menuShape(context),
+      );
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(await removal, isFalse);
+      final name = askText(context, 'Trip name', 'Old name');
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<AlertDialog>(find.byType(AlertDialog)).shape,
+        menuShape(context),
+      );
+      await tester.enterText(find.byType(CupertinoTextField), 'New name');
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(await name, 'New name');
       expect(tester.takeException(), isNull);
     },
   );

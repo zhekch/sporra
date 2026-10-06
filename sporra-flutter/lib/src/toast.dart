@@ -4,6 +4,8 @@ import 'dart:ui';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
+import 'appearance.dart';
+
 // Toasts live above sheets too, and a replacement never leaves an old timer
 // able to dismiss the new message.
 OverlayEntry? _entry;
@@ -40,8 +42,8 @@ void showToast(
             ),
           ),
           child: Center(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(20),
+            child: ClipRSuperellipse(
+              borderRadius: BorderRadius.circular(menuCornerRadius(context)),
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
                 child: Material(

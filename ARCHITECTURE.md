@@ -9952,5 +9952,26 @@ Flutter view's original safe inset: 43 logical pixels on phones with a top
 inset of at least 44, otherwise 24. Submenu contexts have already passed through
 SafeArea, which removes that inset from MediaQuery and previously shrank nested
 menus to 24. `menuCornerRadius` reads View padding instead, so the main menu and
-every submenu retain the same continuous corner shape. Native Cupertino
-confirmation prompts keep their platform styling.
+every submenu retain the same continuous corner shape. Flutter 0.5.0 removes radius overrides from `Glass` itself. Every floating
+surface, including activity/place cards, trip/activity banners, edit controls
+and map errors, resolves the same device radius for its clip and border. Trip
+action menus and app-owned text/confirmation dialogs use the same continuous
+shape rather than Cupertino's separate fixed corners; notifications match too.
+System permission prompts remain owned by iOS.
+
+
+The activity card has three equal footer buttons: Focus (with the zoom icon),
+Show all, and More info. The title and sport/date share a compact header; metric
+selection has no extra heading. A single pan recognizer on the name-only
+activity banner owns horizontal navigation and vertical dismissal, including
+diagonal swipes. The graph claims its own pan gesture so scrubbing cannot
+scroll or dismiss the surrounding card. The search/menu/location cluster is
+hidden while an activity is open and returns when it closes.
+
+Automatic activity focus waits for the card's first measured layout instead of
+using the preceding card's height. Focus and automatic fitting share padding:
+on narrow maps, the actual card height plus safe bottom inset, 10 px placement
+and 24 px clearance; on wide maps, the actual card width plus its left inset and
+clearance. The top padding includes the safe inset plus 80 px for the activity
+banner and breathing room. The initial unpadded fit from the activities list is
+removed so the route is never first fitted behind the card.

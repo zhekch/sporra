@@ -22,19 +22,18 @@ import 'blob.dart' show parseColor;
 import 'year_chart.dart';
 
 class Glass extends StatelessWidget {
-  const Glass({super.key, required this.child, this.radius = 20});
+  const Glass({super.key, required this.child});
   final Widget child;
-  final double radius;
   @override
   Widget build(BuildContext context) => ClipRSuperellipse(
-    borderRadius: BorderRadius.circular(radius),
+    borderRadius: BorderRadius.circular(menuCornerRadius(context)),
     child: BackdropFilter(
       filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
       child: DecoratedBox(
         decoration: ShapeDecoration(
           color: const Color(0x8a262626),
           shape: RoundedSuperellipseBorder(
-            borderRadius: BorderRadius.circular(radius),
+            borderRadius: BorderRadius.circular(menuCornerRadius(context)),
             side: const BorderSide(color: Colors.white12),
           ),
         ),
@@ -62,7 +61,6 @@ Future<void> panel(
   final previous = _activePanel;
   _activePanel = null;
   if (previous != null && previous.isActive) navigator.removeRoute(previous);
-  final phoneRadius = menuCornerRadius(context);
   app.setMenuOpen(true);
   try {
     await showModalBottomSheet<void>(
@@ -93,7 +91,6 @@ Future<void> panel(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
                 child: Glass(
-                  radius: phoneRadius,
                   child: Padding(
                     padding: EdgeInsets.only(
                       bottom: math.max(
@@ -878,7 +875,12 @@ class _SearchState extends State<_Search> {
   );
 }
 
-void goTo(MapLibreMapController map, Map r, {double bottom = 150}) {
+void goTo(
+  MapLibreMapController map,
+  Map r, {
+  double bottom = 150,
+  EdgeInsets? padding,
+}) {
   final bounds = r['bbox'] ?? r['bounds'];
   if (bounds is List && bounds.length == 4) {
     map.animateCamera(
@@ -893,10 +895,10 @@ void goTo(MapLibreMapController map, Map r, {double bottom = 150}) {
             (bounds[2] as num).toDouble(),
           ),
         ),
-        left: 50,
-        right: 50,
-        top: 100,
-        bottom: bottom,
+        left: padding?.left ?? 50,
+        right: padding?.right ?? 50,
+        top: padding?.top ?? 100,
+        bottom: padding?.bottom ?? bottom,
       ),
     );
   } else if (r['lng'] != null && r['lat'] != null) {
@@ -1010,22 +1012,23 @@ Future<void> showTrips(
                       minimumSize: Size.zero,
                       child: const Icon(CupertinoIcons.ellipsis, size: 20),
                       onPressed: () async {
-                        final action = await showCupertinoModalPopup<String>(
+                        final action = await showDialog<String>(
                           context: context,
-                          builder: (context) => CupertinoActionSheet(
+                          builder: (context) => SimpleDialog(
+                            shape: menuShape(context),
                             title: Text('${names[t['id']] ?? t['name']}'),
-                            actions: [
-                              CupertinoActionSheetAction(
+                            children: [
+                              SimpleDialogOption(
                                 onPressed: () =>
                                     Navigator.pop(context, 'rename'),
                                 child: const Text('Rename'),
                               ),
-                              CupertinoActionSheetAction(
+                              SimpleDialogOption(
                                 onPressed: () =>
                                     Navigator.pop(context, 'reset'),
                                 child: const Text('Use derived name'),
                               ),
-                              CupertinoActionSheetAction(
+                              SimpleDialogOption(
                                 onPressed: () => Navigator.pop(context, 'hide'),
                                 child: Text(
                                   hidden.contains(t['id'])
@@ -1033,11 +1036,11 @@ Future<void> showTrips(
                                       : 'Hide trip',
                                 ),
                               ),
+                              SimpleDialogOption(
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text('Cancel'),
+                              ),
                             ],
-                            cancelButton: CupertinoActionSheetAction(
-                              onPressed: () => Navigator.pop(context),
-                              child: const Text('Cancel'),
-                            ),
                           ),
                         );
                         if (action == null || !context.mounted) return;
@@ -1850,7 +1853,6 @@ Future<void> showActivities(
                       size: 18,
                     ),
                     onTap: () {
-                      if (map != null) goTo(map, route);
                       showRoute(context, app, Map<String, dynamic>.from(route));
                     },
                   ),
@@ -1887,18 +1889,22 @@ Future<bool> confirmRemoval(
   String title,
   String message,
 ) async =>
-    await showCupertinoDialog<bool>(
+    await showDialog<bool>(
       context: context,
-      builder: (context) => CupertinoAlertDialog(
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: menuShape(context),
         title: Text(title),
         content: Text(message),
         actions: [
-          CupertinoDialogAction(
+          TextButton(
             onPressed: () => Navigator.pop(context, false),
             child: const Text('Cancel'),
           ),
-          CupertinoDialogAction(
-            isDestructiveAction: true,
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: CupertinoColors.destructiveRed,
+            ),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Delete'),
           ),
@@ -1914,9 +1920,11 @@ Future<String?> askText(
   bool obscure = false,
 }) async {
   final controller = TextEditingController(text: initial);
-  final result = await showCupertinoDialog<String>(
+  final result = await showDialog<String>(
     context: context,
-    builder: (context) => CupertinoAlertDialog(
+    barrierDismissible: false,
+    builder: (context) => AlertDialog(
+      shape: menuShape(context),
       title: Text(title),
       content: Padding(
         padding: const EdgeInsets.only(top: 12),
@@ -1927,12 +1935,11 @@ Future<String?> askText(
         ),
       ),
       actions: [
-        CupertinoDialogAction(
+        TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
-        CupertinoDialogAction(
-          isDefaultAction: true,
+        TextButton(
           onPressed: () => Navigator.pop(context, controller.text.trim()),
           child: const Text('Save'),
         ),
@@ -1997,6 +2004,7 @@ Future<void> setupHomeAssistant(BuildContext context, AppState app) async {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
+          shape: menuShape(context),
           title: const Text('Follow these devices'),
           content: SizedBox(
             width: 360,
@@ -2058,6 +2066,7 @@ Future<void> chooseHome(BuildContext context, AppState app) async {
     final picked = await showDialog<Map>(
       context: context,
       builder: (context) => SimpleDialog(
+        shape: menuShape(context),
         title: const Text('Set home'),
         children: [
           for (final p in places)
@@ -2106,6 +2115,7 @@ Future<String?> chooseColor(BuildContext context, String initial) async {
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, set) => AlertDialog(
+        shape: menuShape(context),
         title: const Text('Colour'),
         content: SizedBox(
           width: 280,

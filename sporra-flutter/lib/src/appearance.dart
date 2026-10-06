@@ -8,6 +8,11 @@ double menuCornerRadius(BuildContext context) {
   return view.viewPadding.top / view.devicePixelRatio >= 44 ? 43 : 24;
 }
 
+RoundedSuperellipseBorder menuShape(BuildContext context) =>
+    RoundedSuperellipseBorder(
+      borderRadius: BorderRadius.circular(menuCornerRadius(context)),
+    );
+
 ThemeData webTheme({double menuRadius = 24}) {
   const surface = Color(0xff262626);
   const accent = Color(0xff60acff);
@@ -116,12 +121,13 @@ class GlassSwitch extends StatelessWidget {
 class ChoiceRow extends StatelessWidget {
   const ChoiceRow({
     super.key,
-    required this.label,
+    this.label,
     required this.value,
     required this.choices,
     required this.onChanged,
   });
-  final String label, value;
+  final String? label;
+  final String value;
   final Map<String, String> choices;
   final ValueChanged<String> onChanged;
   @override
@@ -130,11 +136,13 @@ class ChoiceRow extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          label,
-          style: const TextStyle(fontSize: 13, color: Colors.white70),
-        ),
-        const SizedBox(height: 8),
+        if (label != null) ...[
+          Text(
+            label!,
+            style: const TextStyle(fontSize: 13, color: Colors.white70),
+          ),
+          const SizedBox(height: 8),
+        ],
         CupertinoSlidingSegmentedControl<String>(
           groupValue: choices.containsKey(value) ? value : null,
           backgroundColor: Colors.white.withValues(alpha: 0.05),

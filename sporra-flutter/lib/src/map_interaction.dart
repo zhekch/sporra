@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'package:flutter/widgets.dart';
+
 import 'blob.dart';
 
 final regionFineZoom = 13.6 - 6 * math.log(3) / math.ln2;
@@ -131,4 +133,21 @@ bool viewportWithin(
   final lngMargin = available * inset;
   return available == 360 ||
       (offset >= lngMargin && offset + span(inner) <= available - lngMargin);
+}
+
+EdgeInsets activityMapPadding(Size viewport, Size card, EdgeInsets safeArea) {
+  const gap = 24.0;
+  return viewport.width < 600
+      ? EdgeInsets.fromLTRB(
+          safeArea.left + gap,
+          safeArea.top + 80,
+          safeArea.right + gap,
+          safeArea.bottom + 10 + card.height + gap,
+        )
+      : EdgeInsets.fromLTRB(
+          safeArea.left + 10 + card.width + gap,
+          safeArea.top + 80,
+          safeArea.right + gap,
+          safeArea.bottom + gap,
+        );
 }

@@ -80,6 +80,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
   int observed = -1;
   int? observedSample;
   dynamic observedActivity;
+  dynamic pendingActivityFit;
+  Size activityCardSize = const Size(440, 330);
   int sheetSlot = 0;
   int currentLevel = 0;
   final sources = <String>{};
@@ -1162,6 +1164,19 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
   }
 
+  void focusActivity(AppState app) {
+    if (!mounted || map == null || app.activity == null) return;
+    goTo(
+      map!,
+      app.activity!['route'],
+      padding: activityMapPadding(
+        mapSize,
+        activityCardSize,
+        MediaQuery.paddingOf(context),
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1237,15 +1252,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
     if (observedActivity != app.activity?['route']['id']) {
       observedActivity = app.activity?['route']['id'];
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (map != null && app.activity != null) {
-          goTo(
-            map!,
-            app.activity!['route'],
-            bottom: mapSize.width < 600 ? activityCardHeight + 60 : 150,
-          );
-        }
-      });
+      // The first layout supplies the real card height before fitting the route.
+      pendingActivityFit = observedActivity;
     }
     return Scaffold(
       body: LayoutBuilder(
@@ -1351,7 +1359,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     ),
                   ),
                 ),
-              if (!app.menuOpen && !app.editing)
+              if (!app.menuOpen && !app.editing && app.activity == null)
                 SafeArea(
                   child: Align(
                     alignment: constraints.maxWidth < 600
@@ -1688,9 +1696,22 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           ),
                         ),
                         child: Measured(
+                          key: ValueKey((
+                            'activity-size',
+                            app.activity!['route']['id'],
+                          )),
                           onSize: (size) {
-                            if (mounted && size.height != activityCardHeight) {
-                              setState(() => activityCardHeight = size.height);
+                            if (!mounted) return;
+                            if (size != activityCardSize) {
+                              setState(() {
+                                activityCardSize = size;
+                                activityCardHeight = size.height;
+                              });
+                            }
+                            if (pendingActivityFit ==
+                                app.activity?['route']['id']) {
+                              pendingActivityFit = null;
+                              focusActivity(app);
                             }
                           },
                           child: Dismissible(
@@ -1702,11 +1723,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             child: Glass(
                               child: ActivityCard(
                                 app: app,
-                                onZoom: () => goTo(
-                                  map!,
-                                  app.activity!['route'],
-                                  bottom: activityCardHeight + 60,
-                                ),
+                                onZoom: () => focusActivity(app),
                               ),
                             ),
                           ),
@@ -1750,7 +1767,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             }
                           },
                           child: Glass(
-                            radius: 24,
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
@@ -1849,101 +1865,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     alignment: Alignment.topCenter,
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                      child: GestureDetector(
+                      child: ActivityBanner(
                         key: ValueKey(
                           'workout-${app.activity!['route']['id']}',
                         ),
-                        onVerticalDragStart: (_) => selectionVerticalDrag = 0,
-                        onVerticalDragUpdate: (d) =>
-                            selectionVerticalDrag += d.primaryDelta ?? 0,
-                        onVerticalDragEnd: (d) {
-                          if (selectionVerticalDrag.abs() > 60 ||
-                              (d.primaryVelocity ?? 0).abs() > 150) {
-                            app.closeActivity();
-                          }
-                        },
-                        onHorizontalDragStart: (_) =>
-                            selectionHorizontalDrag = 0,
-                        onHorizontalDragUpdate: (d) =>
-                            selectionHorizontalDrag += d.primaryDelta ?? 0,
-                        onHorizontalDragEnd: (d) {
-                          if ((selectionHorizontalDrag.abs() > 60 ||
-                                  (d.primaryVelocity ?? 0).abs() > 150) &&
-                              !app.busy) {
-                            app.run(
-                              () => app.stepActivity(
-                                selectionHorizontalDrag < 0 ? 1 : -1,
-                              ),
-                            );
-                          }
-                        },
-                        child: Glass(
-                          radius: 24,
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(4, 10, 4, 10),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  tooltip: 'Previous workout',
-                                  onPressed: app.busy
-                                      ? null
-                                      : () =>
-                                            app.run(() => app.stepActivity(-1)),
-                                  icon: const Icon(
-                                    CupertinoIcons.chevron_left,
-                                    size: 16,
-                                  ),
-                                ),
-                                Flexible(
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        '${app.activity!['route']['sport'] ?? 'Workout'}'
-                                                .isEmpty
-                                            ? 'WORKOUT'
-                                            : '${app.activity!['route']['sport']}'
-                                                  .toUpperCase(),
-                                        style: const TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w600,
-                                          letterSpacing: 1.2,
-                                          color: Colors.white54,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 3),
-                                      Text(
-                                        '${app.activity!['route']['name']}',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          fontSize: 15,
-                                          fontWeight: FontWeight.w600,
-                                          letterSpacing: -0.2,
-                                          height: 1.2,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                IconButton(
-                                  tooltip: 'Next workout',
-                                  onPressed: app.busy
-                                      ? null
-                                      : () =>
-                                            app.run(() => app.stepActivity(1)),
-                                  icon: const Icon(
-                                    CupertinoIcons.chevron_right,
-                                    size: 16,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
+                        name: '${app.activity!['route']['name']}',
+                        busy: app.busy,
+                        onStep: (delta) =>
+                            app.run(() => app.stepActivity(delta)),
+                        onDismiss: app.closeActivity,
                       ),
                     ),
                   ),
