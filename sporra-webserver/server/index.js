@@ -1,3 +1,4 @@
+import { trackData } from '../src/track-data.js';
 // Tiny auth + per-user cell-storage API for Sporra.
 //
 // Built entirely on Node's standard library — no npm dependencies:
@@ -109,7 +110,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.132.0';
+export const SERVER_VERSION = '0.133.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -2880,7 +2881,8 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       if (!user) return send(res, 401, { error: 'not authenticated' });
       mergeBakedImport(user);
       const { signature, supply } = derivedFor(user);
-      const tag = 'render:' + createHash('sha1').update(JSON.stringify([signature, pathname, [...query]])).digest('base64url');
+      const searchPrefs = pathname === '/api/search' ? JSON.parse(q.prefs.get(user.id)?.prefs ?? '{}') : null;
+      const tag = 'render:' + createHash('sha1').update(JSON.stringify([signature, pathname, [...query], searchPrefs?.tripNames, searchPrefs?.hiddenTrips])).digest('base64url');
       if (pathname === '/api/locale/en') {
         const head = conditional(req, res, 'locale:' + SERVER_VERSION);
         if (!head) return;
@@ -2892,7 +2894,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
           level = Number(query.get('level') ?? 6);
           if (!Number.isInteger(level) || level < 6 || level > 8) throw new Error('region level must be 6–8');
           const plain = new URLSearchParams(query); plain.set('level', '0');
-          options = { ...render.cellsOptions(plain), level };
+          options = { ...render.cellsOptions(plain), level, fine: query.get('fine') === '1' };
         }
         if (pathname === '/api/render/at') {
           point = renderGeo.coordinate(query.get('lng'), query.get('lat'));
@@ -2904,10 +2906,12 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       } catch (e) { return send(res, 400, { error: e.message }); }
       const head = conditional(req, res, tag);
       if (!head) return;
-      if (pathname === '/api/render/regions') return send(res, 200, await renderGeo.regions(renderGeo.inputFor(user.id, signature, supply), options), head);
+      if (pathname === '/api/render/regions') return send(res, 200, await renderGeo.regions(renderGeo.inputFor(user.id, signature, supply), options, iso => fineRegions.get(iso)), head);
       if (pathname === '/api/render/at') return send(res, 200, await renderGeo.at(renderGeo.inputFor(user.id, signature, supply), ...point, level, query.getAll('hidden')), head);
       const trips = await derive.trips(user.id, signature, supply);
-      return send(res, 200, { results: await renderGeo.search(query.get('q'), supply().routes, trips.trips) }, head);
+      const hiddenTrips = new Set(searchPrefs?.hiddenTrips ?? []);
+      const namedTrips = trips.trips.filter(t => !hiddenTrips.has(t.id)).map(t => ({ ...t, name: searchPrefs?.tripNames?.[t.id] || t.name }));
+      return send(res, 200, { results: await renderGeo.search(query.get('q'), supply().routes, namedTrips) }, head);
     }
 
     if (req.method === 'POST' && ['/api/render/brush', '/api/render/region-clear'].includes(pathname)) {
@@ -3159,9 +3163,11 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       const user = currentUser(req);
       if (!user) return send(res, 401, { error: 'not authenticated' });
       const prefs = JSON.parse(q.prefs.get(user.id)?.prefs ?? '{}');
-      const head = conditional(req, res, routesSignature(user, true) + ':' + JSON.stringify(prefs.routeView ?? {}));
+      const stackIds = [...new Set(query.getAll('stack').map(Number))];
+      if (stackIds.length > 256 || stackIds.some(id => !Number.isSafeInteger(id) || id < 1)) return send(res, 400, { error: 'invalid route stack' });
+      const head = conditional(req, res, routesSignature(user, true) + ':' + JSON.stringify([prefs.routeView ?? {}, stackIds]));
       if (!head) return;
-      return send(res, 200, routeFeatures(q.routesGeom.all(user.id).map(routeOut), prefs.routeView), head);
+      return send(res, 200, routeFeatures(q.routesGeom.all(user.id).map(routeOut), prefs.routeView, stackIds), head);
     }
 
     if (req.method === 'GET' && pathname === '/api/routes') {
@@ -3184,6 +3190,20 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
     // on the first request after something changes and never again. The first
     // of them also parses 8.1 MB of geography, which is why an untouched map
     // answers in a millisecond and the first one after an import does not.
+
+    if (req.method === 'GET' && pathname === '/api/render/track') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      const { signature, supply } = derivedFor(user);
+      const tripId = query.get('trip'), day = query.get('day');
+      if ((!tripId && !day) || (tripId && day) || (day && !/^\d{4}-\d{2}-\d{2}$/.test(day))) return send(res, 400, { error: 'choose one trip or calendar day' });
+      const head = conditional(req, res, `track:${signature}:${tripId ?? day}`);
+      if (!head) return;
+      const item = day ? await derive.day(user.id, signature, supply, day)
+        : (await derive.trips(user.id, signature, supply)).trips.find(t => String(t.id) === tripId);
+      if (!item) return send(res, 404, { error: 'trip not found' });
+      return send(res, 200, trackData(item, day), head);
+    }
 
     if (req.method === 'GET' && pathname === '/api/trips') {
       const user = currentUser(req);

@@ -8753,7 +8753,7 @@ Native maps, menus, edits, import, photos and account flows are implemented;
 advanced exports and complete UI parity are still pending. See its README for
 simulator installation and verification.
 
-### Flutter visual and feature parity (0.2.0)
+### Flutter visual and feature parity (0.3.0)
 
 The native appearance uses the web's neutral glass recipe: RGB 38 at 54%
 opacity, a 26 px backdrop blur, a fine white edge and 20 px corners. Sheets
@@ -8802,6 +8802,65 @@ activities contribute to distance totals but not a dated bar; duration uses
 statistics already supply `years`, including gap years, and Flutter renders
 those as a second interactive yearly chart.
 
+The 0.3.0 interaction fixes follow the phone web implementation rather than
+native SDK defaults. Native feature taps must also invoke the map click handler:
+`featureTapsTriggersMapClick: true` prevents MapLibre iOS from consuming a route
+hit before the app can resolve it. The hit test uses an 8 logical pixel box and
+queries metric, photo, airport and ordinary route categories separately; native
+feature results do not contain the browser SDK's `feature.layer` field. Route
+IDs are deduplicated across geometry segments before the compact overlap picker
+is opened. Inspection highlights a route; only the explicit Solo action hides
+its neighbours. Metric sources use zero simplification, round caps and joins,
+and the same 1.45-width dark casing as web. Ordinary routes use four composited
+phone glow rings without blur, the browser zoom widths, 1.7 selection scale and
+per-theme core contrast.
+
+`/api/render/cells?info=1` adds an optional sixth row column from the shared
+visit summarizer; the original five-column contract is retained. Region reads
+with `info=1` carry per-area fact geometries separately from dissolved fill
+geometry. Flutter keeps those facts with their level, filters and viewport,
+so a ground tap displays its card immediately and enriches the place name with
+`/api/render/at`. Requests are invalidated on subsequent taps or dismissal.
+An unloaded viewport shows a loading card instead of asserting an unvisited
+place. `fine=1` sharpens visible lit countries once the region LOD threshold is
+crossed, reusing the existing fine-boundary loader. The cache includes the fine
+geometry generation; a repeated country load cannot continually bump it.
+
+`/api/render/track` selects exactly one account-owned trip or local day and
+uses `src/track-data.js`, also consumed by web. Missing/duplicate timestamps and
+36-hour gaps break the connecting thread. Flutter draws the web yellow links,
+glow and dark-cased dots, provides recorded-day stepping and filters local
+photos to the full calendar window with an exclusive end. Cached photo indices
+are reused for pins, thumbnails and gallery selection. The recorded month grid
+shows new-ground versus activity dots, trip spans and selected/today indicators.
+Trip names and hidden IDs use the web preference keys; server search includes
+those preferences in its validator and resolves custom names before ranking.
+
+Sheets fit their contents inside 380 logical pixels of maximum width and a
+62%-height cap, further constrained by the keyboard and safe area. Continuous
+superellipse corners use a 43 px radius on rounded phones and a 12 px outer
+inset; the original view insets are read before the modal removes top padding.
+World is intentionally absent from the explicit detail choices at the user’s
+request; Auto still supports the continent rollup. Route pickers shrink to their
+rows and borrow the web palette in newest-activity-group order, drawing only
+the listed routes until dismissed. The shared route API accepts repeated
+`stack` IDs for that temporary view and validates both the cache key and input.
+Named trip/day and workout banners have deliberate typography and swipe
+dismissal. Days retain horizontal stepping and dismiss upwards; trip and workout
+banners dismiss horizontally. Map controls are hidden behind sheets; cards measure their own height before
+lifting the three primary Search/Menu/Location buttons. Cupertino transitions,
+segmented thumbs and confirmation dialogs replace default Material affordances.
+Top toasts use a root overlay, horizontal dismissal and replacement-safe timers;
+activity deletion restores the complete server-returned route via its Undo
+action. Source rename/delete and account deletion reuse the existing authenticated
+endpoints. Activity list ordering/grouping and expandable country region coverage
+are available; the full feature inventory below still records their differences.
+
+The detailed audit is [FLUTTER_WEB_PARITY.md](FLUTTER_WEB_PARITY.md). It inventories
+the actual web controls and modules, distinguishes source-level presence from
+simulator verification, and records the remaining work. Full parity is not
+claimed by this release.
+
 The audit below compares the web menus, cards and flows against the native
 preview. A partial row means the remaining behaviour still needs a port;
 this release does not claim complete web parity.
@@ -8809,24 +8868,24 @@ this release does not claim complete web parity.
 | Area | Native status | Remaining web behaviour |
 |---|---|---|
 | Basemaps | Dark, Light, Terrain and Satellite using native styles | Mapbox Standard 3D, automatic sun and snow |
-| Visited ground | Blobs; explicit Region/Country/Continent; all colouring modes | Fine boundary geometry, region outlines, continent count labels, matching level crossfades |
+| Visited ground | Blobs; explicit Region/Country/Continent; all colouring modes | Continent count labels and matching vector-level crossfades (web borders are intentionally off) |
 | Appearance | Neutral blurred glass, segmented choices, custom hex colour and opacity, separate dark/light accents | Exact responsive landscape columns and desktop popover placement |
-| Activity appearance | Per-type colours and opacity, visibility, shared per-route palette, reset | Randomize activity colours and per-stack temporary colours |
-| Activity inspection | Speed/elevation graphs, shared ramps, graph/map scrub, totals, previous/next, solo route, metadata editing | Overlapping-route chooser, undoable deletion, thumbnails, source/link editing |
-| Activity statistics | Totals, annual distance chart, browse activities | Full sort/group controls and duplicate-route management |
-| Ground statistics | Summary, country coverage, annual new-ground chart | Full regions/continents breakdown, sorting and grouping |
+| Activity appearance | Per-type colours and opacity, visibility, shared per-route palette, reset | Randomize activity colours and stack-row peek |
+| Activity inspection | Speed/elevation graphs, shared ramps, graph/map scrub, totals, previous/next, solo route, metadata editing | Thumbnails, metadata-edit undo, external link and stack-peek presentation |
+| Activity statistics | Totals, annual distance chart, browse activities | Exact group ordering and duplicate-route management |
+| Ground statistics | Summary, country coverage, annual new-ground chart | Exact region preview expansion and geographic grouping |
 | Search | Places, regions, trips, activities and dates; activity opens graph | Web's integrated calendar presentation and ranked list layout |
-| Trips and days | Trip list, day picker and activity list | Trip/day-only layers, day stepping/swiping, trip naming/hiding and date-filtered photos |
+| Trips and days | Trip list, day picker and activity list | Full day-owned activity navigation and exact trip/calendar presentation |
 | Editing | Paint/erase strokes, sizes, undo, region clearing | Preview/highlight before region clear, track-span paint, car/train route construction |
 | Rail | Native line overlay | Group/technical controls, station cards, tile-health feedback |
 | Airports | Airline airports and information cards | Airfield/helipad/closed groups, category controls and label parity |
-| Trails | Hiking raster overlay | Other trail themes, strength control, nearby-route inspection and export |
-| Photos | Local pins, gallery, zoom, video playback | Clusters, tapped-photo filtering, trip/day association and map-following gallery navigation |
+| Trails | Hiking raster overlay | Nearby-route inspection and export |
+| Photos | Local pins, gallery, zoom, video playback | Clusters and map-following gallery navigation |
 | Native tracking | Swift location, HealthKit, photo indexing and sync settings | Physical-device background-wake validation remains separate from simulator QA |
 | Sync | Strava authorization and Home Assistant setup/manual sync | Komoot; full connector schedule, status and disconnect controls |
-| Sources/import | Provenance visibility and shared file parsers | Source removal/restore and full import options/reporting |
+| Sources/import | Provenance visibility and shared file parsers | Full import options/reporting |
 | Export | Native map snapshot saved to Photos | Captions, crops, layouts, quality/resolution and share composition |
-| Personal/settings | Home selection, clock, device name, sign-out | Home map marker/automatic home, account/password/deletion flows and full language UI |
+| Personal/settings | Home selection, clock, device name, sign-out | Home map marker/automatic home and consistent use of generated English strings |
 | Administration/backups | Account listing; server backup run/download | Account administration/impersonation and backup configuration/restore |
 | Introduction/updates | English strings generated from web catalogue | Intro deck, permission onboarding and What's new UI |
 | Offline/recovery | Conditional in-memory reads and error display | Persistent offline map state, retry banners and full session-recovery experience |

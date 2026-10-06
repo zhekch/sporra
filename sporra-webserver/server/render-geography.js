@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { loadCountries, countryNear, searchCountries } from '../src/countries.js';
-import { loadRegions, regionNear, regionsInCountry, searchRegions } from '../src/regions.js';
+import { loadCountries, countryNear, searchCountries, countryIso, countryGeometry } from '../src/countries.js';
+import { loadRegions, regionNear, regionsInCountry, searchRegions, countriesInView, regionById, addFineRegions, addFineOutline, seamedRegion, fineRegionsVersion } from '../src/regions.js';
 import { loadPlaces, searchPlaces, nearestTown } from '../src/places.js';
 import { areaOfCell, WHOLE_COUNTRY } from '../src/stats.js';
 import { continentOf } from '../src/continents.js';
-import { tallyAreas, areaFeatures } from '../src/area-render.js';
+import { tallyAreas, areaFeatures, areaGeometry } from '../src/area-render.js';
 import { cellStats, heatMetric, areaColorOf } from '../src/coloring.js';
 import { rollUp, finishRollUpSteps, storedUnder } from '../src/rollup.js';
 import { summarizeCells } from '../src/cell-info-data.js';
@@ -15,6 +15,7 @@ import { mercX, mercY, pointToCell, colsOf, normCol, brushRadius, cellsWithin, c
 const accounts = new Map();
 const prepared = new WeakMap();
 const areaAnswers = new WeakMap();
+const sharpened = new Map();
 export function forget(userId) {
   if (userId === undefined) accounts.clear(); else accounts.delete(userId);
 }
@@ -50,19 +51,72 @@ function prepare(input, hidden = []) {
   if (variants.size > 4) variants.delete(variants.keys().next().value);
   return rolled;
 }
-export async function regions(input, options) {
+export async function regions(input, options, supplyFine) {
   await prime();
   let answers = areaAnswers.get(input);
   if (!answers) areaAnswers.set(input, answers = new Map());
-  const key = JSON.stringify([options.level, options.mode, options.accent, options.hidden]);
-  if (answers.has(key)) return answers.get(key);
+
   const kind = ['region', 'country', 'continent'][options.level - 6];
   const rolled = prepare(input, options.hidden);
   const { litIds, perArea } = tallyAreas(kind, options.mode === 'type', {
     sourceOrder: rolled.sourceOrder, visibleCells: rolled.shown ?? input.cellIds,
     areaOfCellMemo: geography, cellStatsOf: (id, type) => cellStats(input.cellMeta.get(id), type),
   });
-  const fc = areaFeatures(kind, options.mode, false, litIds, perArea, [], heatMetric(options.mode));
+  const fine = options.level < 8 && options.fine;
+  if (fine && supplyFine) {
+    const views = options.bbox[0] > options.bbox[2]
+      ? [[options.bbox[0], options.bbox[1], 180, options.bbox[3]], [-180, options.bbox[1], options.bbox[2], options.bbox[3]]]
+      : [options.bbox];
+    const regionIds = kind === 'region' ? litIds : new Set([...rolled.shown ?? input.cellIds].map(id => geography('region', id)));
+    const isos = new Set(views.flatMap(view => countriesInView(regionIds, view).map(c => c.iso)));
+    // Countries with no ADM1 records still have a detailed country outline.
+    for (const id of litIds) {
+      const country = kind === 'country' ? id : id.startsWith(WHOLE_COUNTRY) ? id.slice(WHOLE_COUNTRY.length) : null;
+      if (!country) continue;
+      const geometry = countryGeometry(country);
+      const polygons = geometry?.type === 'Polygon' ? [geometry.coordinates] : geometry?.coordinates ?? [];
+      if (polygons.some(poly => {
+        let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+        for (const [lng, lat] of poly[0]) {
+          west = Math.min(west, lng); east = Math.max(east, lng);
+          south = Math.min(south, lat); north = Math.max(north, lat);
+        }
+        return views.some(([w,s,e,n]) => east >= w && west <= e && north >= s && south <= n);
+      })) isos.add(countryIso(country));
+    }
+    await Promise.all([...isos].filter(Boolean).map(async iso => {
+      let task = sharpened.get(iso);
+      if (!task) {
+        task = (async () => {
+          const body = await supplyFine(iso);
+          if (!body) return;
+          addFineOutline(iso, body.outline);
+          if (!seamedRegion(iso, body.regions)) addFineRegions(body.regions);
+        })();
+        sharpened.set(iso, task);
+        task.catch(() => sharpened.delete(iso));
+      }
+      await task;
+    }));
+  }
+  const key = JSON.stringify([options.level, options.mode, options.accent, options.hidden, options.info, fine, fine ? fineRegionsVersion() : 0]);
+  if (answers.has(key)) return answers.get(key);
+  const fc = areaFeatures(kind, options.mode, fine, litIds, perArea, [], heatMetric(options.mode));
+  if (options.info) {
+    const idsByArea = new Map();
+    for (const id of rolled.shown ?? input.cellIds) {
+      const area = geography(kind, id);
+      if (!area) continue;
+      if (!idsByArea.has(area)) idsByArea.set(area, []);
+      idsByArea.get(area).push(id);
+    }
+    fc.infoFeatures = [...idsByArea].flatMap(([id, cells]) => {
+      const geometry = areaGeometry(kind, id, fine);
+      if (!geometry) return [];
+      const name = kind === 'region' ? regionById(id)?.name ?? id.replace(WHOLE_COUNTRY, '') : id;
+      return [{ type: 'Feature', geometry, properties: { name, visited: true, area: { kind, id, name }, ...summarizeCells(cells, input.cellMeta) } }];
+    });
+  }
   const color = areaColorOf(options.mode, options.accent);
   for (const feature of fc.features) feature.properties.color = color(feature.properties.v);
   answers.set(key, fc);

@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 
 import 'state.dart';
 import 'appearance.dart';
@@ -42,7 +43,7 @@ class ActivityCard extends StatelessWidget {
               IconButton(
                 tooltip: 'Close activity',
                 onPressed: app.closeActivity,
-                icon: const Icon(Icons.close, size: 18),
+                icon: const Icon(CupertinoIcons.xmark, size: 18),
               ),
             ],
           ),

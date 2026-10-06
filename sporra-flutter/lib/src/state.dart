@@ -22,37 +22,63 @@ class AppState extends ChangeNotifier {
   String detail = 'auto';
   String accent = '#60acff';
   bool routes = true;
+  bool menuOpen = false;
+  void setMenuOpen(bool value) {
+    menuOpen = value;
+    notifyListeners();
+  }
+
   bool photos = false;
+  List<dynamic>? photoItems;
+  Future<List<dynamic>> readPhotos() async =>
+      photoItems ??= jsonDecode(await native.photos()) as List;
+  List<dynamic> photosInTrack(List<dynamic> items) {
+    final from = track?['from'], to = track?['to'];
+    if (from == null || to == null) return items;
+    return items
+        .where((p) => p['time'] is num && p['time'] >= from && p['time'] < to)
+        .toList();
+  }
+
   bool rail = false;
   bool trails = false;
+  String trailTheme = 'hiking';
+  double trailStrength = 0.75;
   bool airports = false;
   final hidden = <String>{};
   int revision = 0;
   bool cellInfo = true;
   bool clearingRegion = false;
   dynamic selectedRoute;
+  List<dynamic> stackIds = [];
   Map<String, dynamic>? activity;
   String? activityMetric;
   int? activitySample;
-  Future<void> openActivity(dynamic id, {bool keepMetric = false}) =>
-      run(() async {
-        final data = Map<String, dynamic>.from(
-          await api.get('/api/render/activity?id=$id'),
-        );
-        final graphs = data['graphs'] as Map;
-        activityMetric = keepMetric && graphs[activityMetric] != null
-            ? activityMetric
-            : graphs['speed'] != null
-            ? 'speed'
-            : graphs['elev'] != null
-            ? 'elev'
-            : null;
-        activity = data;
-        activitySample = null;
-        selectedRoute = id;
-        changed();
-      });
+  int activityRequest = 0;
+  Future<void> openActivity(dynamic id, {bool keepMetric = false}) {
+    final request = ++activityRequest;
+    return run(() async {
+      final data = Map<String, dynamic>.from(
+        await api.get('/api/render/activity?id=$id'),
+      );
+      if (request != activityRequest) return;
+      final graphs = data['graphs'] as Map;
+      activityMetric = keepMetric && graphs[activityMetric] != null
+          ? activityMetric
+          : graphs['speed'] != null
+          ? 'speed'
+          : graphs['elev'] != null
+          ? 'elev'
+          : null;
+      activity = data;
+      activitySample = null;
+      if (selectedRoute != null) selectedRoute = id;
+      changed();
+    });
+  }
+
   void closeActivity() {
+    activityRequest++;
     activity = null;
     activitySample = null;
     activityMetric = null;
@@ -74,6 +100,66 @@ class AppState extends ChangeNotifier {
     final next = index + delta;
     if (index >= 0 && next >= 0 && next < routes.length) {
       await openActivity(routes[next]['id'], keepMetric: true);
+    }
+  }
+
+  Map<String, dynamic>? track;
+  String? trackDay;
+  int trackRequest = 0;
+  List<String> recordedDays = [];
+  bool canStepDay(int delta) {
+    final i = recordedDays.indexOf(trackDay ?? '');
+    return i >= 0 && i + delta >= 0 && i + delta < recordedDays.length;
+  }
+
+  Future<void> selectTrack({dynamic trip, String? day}) async {
+    final request = ++trackRequest;
+    await run(() async {
+      final query = Uri(
+        queryParameters: day != null ? {'day': day} : {'trip': '$trip'},
+      ).query;
+      final data = Map<String, dynamic>.from(
+        await api.get('/api/render/track?$query'),
+      );
+      if (request != trackRequest) return;
+      activityRequest++;
+      activity = null;
+      activityMetric = null;
+      activitySample = null;
+      selectedRoute = null;
+      recordedDays =
+          ((await api.get('/api/days'))['days'] as Map).keys
+              .map((key) => '$key')
+              .toList()
+            ..sort();
+      if (request != trackRequest) return;
+      if (trip != null) {
+        data['label'] = (prefs['tripNames'] as Map?)?['$trip'] ?? data['label'];
+      }
+      track = data;
+      trackDay = day;
+      changed();
+    });
+  }
+
+  void clearTrack() {
+    trackRequest++;
+    track = null;
+    trackDay = null;
+    changed();
+  }
+
+  Future<void> stepDay(int delta) async {
+    if (trackDay == null) return;
+    final days =
+        ((await api.get('/api/days'))['days'] as Map).keys
+            .map((key) => '$key')
+            .toList()
+          ..sort();
+    final index = days.indexOf(trackDay!);
+    final next = index + delta;
+    if (index >= 0 && next >= 0 && next < days.length) {
+      await selectTrack(day: days[next]);
     }
   }
 
@@ -217,25 +303,37 @@ class AppState extends ChangeNotifier {
   Future<void> sync() => run(() async {
     device = Map<String, dynamic>.from(jsonDecode(await native.sync()));
     if ('${device['error'] ?? ''}'.isNotEmpty) throw Exception(device['error']);
+    photoItems = null;
     revision++;
   });
   Future<void> signOut() => run(() async {
     try {
       await api.post('/api/logout', {});
     } finally {
-      await native.signOut();
-      api.clear();
-      prefs = {};
-      user = null;
-      undo = null;
-      hidden.clear();
-      activity = null;
-      activityMetric = null;
-      activitySample = null;
-      selectedRoute = null;
-      editing = false;
-      clearingRegion = false;
-      revision++;
+      await clearSession();
     }
   });
+  Future<void> clearSession() async {
+    await native.signOut();
+    api.clear();
+    prefs = {};
+    user = null;
+    undo = null;
+    hidden.clear();
+    photoItems = null;
+    recordedDays = [];
+    activityRequest++;
+    activity = null;
+    activityMetric = null;
+    activitySample = null;
+    selectedRoute = null;
+    stackIds = [];
+    trackRequest++;
+    track = null;
+    trackDay = null;
+    editing = false;
+    clearingRegion = false;
+    revision++;
+    notifyListeners();
+  }
 }

@@ -1,7 +1,7 @@
 # Sporra Preview
 
 The Flutter iOS preview lives here. It installs alongside the original Sporra
-app and connects to your Sporra server. Use server version **0.132.0 or newer**.
+app and connects to your Sporra server. Use server version **0.133.0 or newer**.
 Open `ios/Runner.xcworkspace` for the native project; Flutter development starts
 at `lib/main.dart`.
 
@@ -22,19 +22,20 @@ Mac, use `http://127.0.0.1:PORT`. Map tiles require internet access.
 
 The preview includes account sign-in/registration, native maps and visited
 blobs, region/country/continent fills, activity colours and visibility,
-speed/elevation graphs with map scrubbing, annual charts, routes, search, trips,
-statistics, paint/erase and region clearing with undo,
-file imports, local photo browsing, tracking and sync settings, Strava and
+continuous speed/elevation routes with map scrubbing, annual charts, route selection,
+yellow trip/day tracks, recorded-day calendar, search, trips,
+statistics with regional breakdown and activity sorting, paint/erase and region clearing with undo,
+source management, undoable activity deletion, file imports, local photo browsing, tracking and sync settings, Strava and
 Home Assistant setup, snapshots, and backup sharing for administrators.
 The Swift bridge owns location, HealthKit, photo indexing, cookies and uploads.
 Photo thumbnails remain on the device.
 
 Menus and cards use the web app’s neutral glass surfaces and backdrop blur.
-The full feature-by-feature audit is in the root ARCHITECTURE.md under
-“Flutter visual and feature parity”.
+The detailed feature-by-feature comparison is in
+[FLUTTER_WEB_PARITY.md](../FLUTTER_WEB_PARITY.md).
 
-This is an early port. Advanced export layouts, Komoot setup, account deletion,
-full administration, fine boundary geometry and complete visual/localization
+This is an early port. Advanced export layouts, Komoot tour import, Mapbox Standard 3D,
+full administration and complete visual/localization
 parity still need work. Simulator location, HealthKit and photo availability
 are limited by the simulator's configured data.
 

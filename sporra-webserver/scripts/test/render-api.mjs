@@ -116,12 +116,79 @@ try {
   await api('POST', '/api/prefs', { prefs: {} });
   const info = await api('GET', '/api/render/at?lng=8.54&lat=47.37&level=0');
   check(info.status===200 && info.body.visited && info.body.hits>0, 'tap resolves imported visit facts');
+  const { pointToCell, normCol, colsOf, mercX, mercY } = await import('../../src/hexgrid.js');
+  for (let level = 0; level < 6; level++) {
+    const [col, row] = pointToCell(level, mercX(8.54), mercY(47.37));
+    const key = `${normCol(col, colsOf(level))}/${row}`;
+    const prefetched = await api('GET', `/api/render/cells?level=${level}&info=1`);
+    const live = await api('GET', `/api/render/at?lng=8.54&lat=47.37&level=${level}`);
+    const facts = prefetched.body.rows.find(r => r[0] === key)?.[5];
+    check(facts && ['hits','addedAt','firstAt','lastAt'].every(k => facts[k] === live.body[k]), `prefetched level ${level} visit facts match live tap`);
+  }
+  const { trackFC } = await import('../../src/track-data.js');
+  const points = [{lng:0,lat:0,at:1},{lng:1,lat:1,at:2},{lng:2,lat:2,at:2},{lng:3,lat:3,at:200000},{lng:4,lat:4,at:200001}];
+  const track = trackFC(points);
+  check(track.features.filter(f => f.geometry.type === 'Point').length === 5 && track.features.filter(f => f.geometry.type === 'LineString').length === 2, 'shared trip geometry retains dots and recording gaps');
+  const dayTrack = await api('GET', '/api/render/track?day=2024-08-10');
+  check(dayTrack.status === 200 && dayTrack.body.track.features.length > 0, 'day track has drawable geometry');
+  const trips = (await api('GET','/api/trips')).body.trips;
+  check(trips.length > 0, 'fixture derives a trip');
+  if (trips.length) {
+    const tripTrack = await api('GET','/api/render/track?trip='+trips[0].id);
+    check(tripTrack.status === 200 && tripTrack.body.track.features.filter(f => f.geometry.type === 'Point').length === trips[0].spots.length, 'trip spots become yellow markers');
+    await api('POST', '/api/prefs', { prefs: { tripNames: { [trips[0].id]: 'Parity journey' } } });
+    const named = await api('GET', '/api/search?q=Parity%20journey');
+    check(named.body.results.some(r => r.kind === 'trip' && r.name === 'Parity journey'), 'search uses account trip names');
+    await api('POST', '/api/prefs', { prefs: { tripNames: { [trips[0].id]: 'Parity journey' }, hiddenTrips: [trips[0].id] } });
+    const hiddenTrip = await api('GET', '/api/search?q=Parity%20journey', undefined, { 'If-None-Match': named.etag });
+    check(hiddenTrip.status === 200 && !hiddenTrip.body.results.some(r => r.id === trips[0].id && r.kind === 'trip'), 'hidden trip invalidates search validator and disappears');
+    await api('POST', '/api/prefs', { prefs: {} });
+
+  }
+
+  check((await api('GET','/api/render/track?trip=missing')).status === 404, 'missing trip refused');
+  check((await api('GET','/api/render/track?day=bad')).status === 400, 'invalid day refused');
+  check((await api('GET','/api/render/track?day=2024-08-10&trip=anything')).status === 400, 'ambiguous track refused');
+
   for (const level of [6,7,8]) {
     const r = await api('GET', '/api/render/regions?level='+level);
     check(r.status===200 && r.body.features.some(f=>f.properties.k===1), 'region level '+level+' has fills');
+    const prefetched = await api('GET', '/api/render/regions?info=1&level='+level);
+    check(prefetched.body.infoFeatures?.some(f => f.properties.visited && f.properties.firstAt), 'region level '+level+' prefetches visit facts');
     const repeat = await api('GET', '/api/render/regions?level='+level, undefined, {'If-None-Match':r.etag});
     check(repeat.status===304, 'region level '+level+' revalidates');
   }
+  // Exercise the LOD path without spending a test's network on the public
+  // boundary provider. Detailed fixtures add a midpoint to each coarse edge.
+  const geo = await import('../../server/render-geography.js');
+  const regionData = await import('../../src/regions.js');
+  await geo.prime();
+  const fresh = (await api('GET','/api/cells')).body;
+  const meta = new Map();
+  for (const [id, source, addedAt, firstAt, lastAt, hits, fixes] of fresh.rows) {
+    const rows = meta.get(id) ?? [];
+    rows.push({source:fresh.sources[source], addedAt, firstAt, lastAt, hits, fixes});
+    meta.set(id,rows);
+  }
+  const fineInput = {cellIds:[...meta.keys()], cellMeta:meta};
+  const fineOptions = {...cellsOptions(new URLSearchParams('info=1&bbox=8,47,9,48')),level:6,fine:true};
+  let fineReads = 0;
+  const detail = geometry => {
+    const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+    return {type:'MultiPolygon',coordinates:polygons.map(poly=>poly.map(ring=>ring.flatMap((p,i)=>i+1<ring.length?[p,[(p[0]+ring[i+1][0])/2,(p[1]+ring[i+1][1])/2]]:[p])))};
+  };
+  const supplyFine = async iso => {
+    fineReads++;
+    return {regions:Object.fromEntries(regionData.regionsOf(iso).map(r=>[r.id,detail(r.geometry)]))};
+  };
+  const coarse = await geo.regions(fineInput,{...fineOptions,fine:false});
+  const sharp = await geo.regions(fineInput,fineOptions,supplyFine);
+  check(fineReads>0 && JSON.stringify(sharp.infoFeatures[0].geometry)!==JSON.stringify(coarse.infoFeatures[0].geometry), 'visible regions request detailed LOD and replace coarse geometry');
+  const readsAfterFine = fineReads;
+  await geo.regions(fineInput,fineOptions,supplyFine);
+  check(fineReads===readsAfterFine, 'detailed boundary requests are reused');
+  await geo.regions(fineInput,{...fineOptions,bbox:[-170,-20,-160,-10]},supplyFine);
+  check(fineReads===readsAfterFine, 'offscreen regions do not fetch boundary detail');
   const place = await api('GET','/api/search?q=Z%C3%BCrich');
   check(place.status===200 && place.body.results.length>0, 'search answers gazetteer results');
   check((await api('GET','/api/locale/en')).status===200,'English locale is available');
@@ -148,6 +215,15 @@ try {
   check(cells(2,'a',()=>dateInput,crossing).rows.length===1,'crossing viewport includes date-line cell');
   check(cells(3,'a',()=>({cellIds:[],cellMeta:new Map()}),opts).rows.length===0,'account caches are isolated');
   check(cells(1,'b',supply,{...opts,bbox:[40,40,41,41]}).rows.length===0,'empty viewport');
+  const saved = (await api('GET', '/api/routes?geom=1')).body.routes[0];
+  await api('POST', '/api/routes', { routes: [{...saved, key:'render-stack-second', name:'Second overlap'}] });
+  const stackedRoutes = (await api('GET', '/api/routes')).body.routes;
+  const stackIds = stackedRoutes.map(r => r.id);
+  const stack = await api('GET', '/api/render/routes?' + stackIds.map(id => 'stack='+id).join('&'));
+  check(new Set(stack.body.features.map(f => f.properties.color)).size === 2, 'overlap stack uses distinct shared web colours');
+  const isolatedStack = await api('GET', '/api/render/routes?stack='+activityId);
+  check(isolatedStack.body.features.every(f => f.properties.id === activityId), 'stack draws only chosen activities');
+  check((await api('GET','/api/render/routes?stack=bad')).status === 400, 'invalid stack selection is refused');
   await api('POST', '/api/register', {username:'renderother', password:'a-long-enough-pw'});
   check((await api('GET', '/api/render/activity?id=' + activityId)).status === 404, 'activity detail is isolated to its owner');
   check((await api('GET', '/api/render/routes')).body.features.length === 0, 'native activity geometry is account isolated');

@@ -1,10 +1,13 @@
 // Render data for clients that have a map SDK but no JavaScript lattice.
 import { createHash } from 'node:crypto';
 import { cellStats, cellColorOf, HEAT_MODES } from '../src/coloring.js';
-import { rollUp, finishRollUpSteps } from '../src/rollup.js';
+import { rollUp, finishRollUpSteps, storedUnder } from '../src/rollup.js';
 import { cellCenter, colsOf, radiusOf, lngOf, latOf } from '../src/hexgrid.js';
 import { sparseCell } from '../src/blob-shaping.js';
 
+import { summarizeCells } from '../src/cell-info-data.js';
+
+const facts = new WeakMap();
 const MAX_ACCOUNTS = 8;
 const MAX_VARIANTS = 4;
 const cache = new Map();
@@ -30,7 +33,7 @@ export function cellsOptions(query) {
       Math.abs(bbox[1]) > 85.051129 || Math.abs(bbox[3]) > 85.051129 || bbox[1] > bbox[3]) {
     throw new Error('bbox must be west,south,east,north in geographic coordinates');
   }
-  return { level, mode, accent: accent.toLowerCase(), bbox, hidden };
+  return { level, mode, accent: accent.toLowerCase(), bbox, hidden, info: query.get('info') === '1' };
 }
 
 export function cellsTag(signature, options) {
@@ -49,7 +52,7 @@ export function cells(userId, signature, supply, options) {
   const key = JSON.stringify([mode === 'type', hidden]);
   let rolled = account.variants.get(key);
   if (!rolled) {
-    const { cellIds, cellMeta } = supply();
+    const { cellIds, cellMeta } = account.input ??= supply();
     rolled = rollUp(cellIds, (id, byType) => cellStats(cellMeta.get(id), byType), {
       byType: mode === 'type', hidden: new Set(hidden),
     });
@@ -61,13 +64,22 @@ export function cells(userId, signature, supply, options) {
   const colorOf = cellColorOf(mode, accent, rolled.litRange[level]);
   const [west, south, east, north] = bbox;
   const rows = [];
+  let summaries = facts.get(rolled);
+  if (options.info && !summaries) facts.set(rolled, summaries = new Map());
   for (const e of lit.values()) {
     const [x, y] = cellCenter(level, e.col, e.row);
     // Canonical columns live in [0, WORLD); native maps use [-180, 180).
     const lng = ((lngOf(x) + 180) % 360) - 180;
     const lat = latOf(y);
     if (lat < south || lat > north || !(west <= east ? lng >= west && lng <= east : lng >= west || lng <= east)) continue;
-    rows.push([e.col + '/' + e.row, x, y, colorOf(e), sparseCell(lit, colsOf(level), e.col, e.row)]);
+    const cellKey = e.col + '/' + e.row;
+    const row = [cellKey, x, y, colorOf(e), sparseCell(lit, colsOf(level), e.col, e.row)];
+    if (options.info) {
+      const factKey = level + '/' + cellKey;
+      if (!summaries.has(factKey)) summaries.set(factKey, summarizeCells(storedUnder(rolled.litSets, level, cellKey), account.input.cellMeta));
+      row.push(summaries.get(factKey));
+    }
+    rows.push(row);
   }
-  return { level, radius: radiusOf(level), columns: ['key', 'x', 'y', 'color', 'sparse'], rows };
+  return { level, radius: radiusOf(level), columns: ['key', 'x', 'y', 'color', 'sparse', ...(options.info ? ['info'] : [])], rows };
 }

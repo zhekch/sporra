@@ -5,20 +5,23 @@ import { metricCollection } from '../src/route-metric.js';
 import { paletteFor } from '../src/route-colors.js';
 import { hexOpaque, hexAlpha } from '../src/color-picker.js';
 
-export function routeFeatures(routes, view = {}) {
+export function routeFeatures(routes, view = {}, stackIds = []) {
   view = view && typeof view === 'object' ? view : {};
   const hidden = new Set(Array.isArray(view.hidden) ? view.hidden : []);
   const colors = view.colors ?? {};
   const rainbow = view.rainbow ? paletteFor(routes.map(r => r.id)) : new Map();
+  const stack = new Set(stackIds);
+  const stackColors = !view.rainbow ? paletteFor(stackIds) : new Map();
   const features = [];
   for (const r of routes) {
+    if (stack.size && !stack.has(r.id)) continue;
     const sport = r.sport || '\u0000none';
     if (hidden.has(sport)) continue;
     const chosen = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(colors[sport] ?? '') ? colors[sport] : '#ff9147';
     for (const segment of r.geom ?? []) {
       if (segment.length < 2) continue;
       features.push({ type: 'Feature', id: r.id,
-        properties: { id: r.id, name: r.name, sport: r.sport ?? '', color: rainbow.get(r.id) ?? hexOpaque(chosen), alpha: hexAlpha(chosen) },
+        properties: { id: r.id, name: r.name, sport: r.sport ?? '', color: stackColors.get(r.id) ?? rainbow.get(r.id) ?? hexOpaque(chosen), alpha: hexAlpha(chosen) },
         geometry: { type: 'LineString', coordinates: segment } });
     }
   }

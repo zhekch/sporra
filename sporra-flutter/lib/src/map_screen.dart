@@ -1,4 +1,11 @@
 import 'dart:async';
+
+import 'package:flutter/cupertino.dart';
+
+import 'map_interaction.dart';
+import 'toast.dart';
+import 'measured.dart';
+
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -76,7 +83,20 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     zoom: 7,
   );
   String? mapError;
+  Map<String, dynamic>? placeInfo;
+  Map<String, dynamic>? observedTrack;
+  final cellFacts = <String, Map<String, dynamic>>{};
+  final areaFacts = <({Path shape, Map<String, dynamic> info})>[];
+  int factsLevel = -1;
+  String? factsQuery;
+  List<double>? factsBounds;
+  int tapRequest = 0;
+  List<Map<String, dynamic>> routeSummaries = [];
+  int routesRevision = -1;
+  int photosRevision = -1;
+  String? observedError;
   Timer? fade;
+  double activityCardHeight = 330, placeCardHeight = 150;
   Size mapSize = const Size(390, 844);
   final empty = {'type': 'FeatureCollection', 'features': <dynamic>[]};
 
@@ -125,7 +145,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     if (sources.contains(id)) {
       await map!.setGeoJsonSource(id, data);
     } else {
-      await map!.addGeoJsonSource(id, data);
+      await map!.addSource(
+        id,
+        GeojsonSourceProperties(
+          data: data,
+          tolerance: id == 'activity-metric' || id == 'trip' ? 0 : 0.375,
+        ),
+      );
       sources.add(id);
     }
   }
@@ -140,6 +166,11 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final token = generation;
     final app = ref.read(appProvider);
     try {
+      await updateRoutes(app);
+      await updateActivityFocus(app);
+      await updateTrack(app);
+      if (!mounted || token != generation) return;
+      final renderRevision = app.revision;
       final viewport = await map!.getVisibleRegion();
       final zoom = map!.cameraPosition?.zoom ?? 8;
       final level = app.detail == 'tiny'
@@ -175,18 +206,33 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         east = ((east + pad + 180) % 360) - 180;
       }
       final bounds = <double>[west, south, east, north];
-      final query = app.renderQuery(level, bbox: bounds.join(','));
+      final query =
+          '${app.renderQuery(level, bbox: bounds.join(','))}&info=1&fine=${zoom >= regionFineZoom ? 1 : 0}';
       final data = Map<String, dynamic>.from(
         await app.api.get(
           '/api/render/${level < 6 ? 'cells' : 'regions'}?$query',
         ),
       );
-      if (!mounted || token != generation) return;
+      if (!mounted || token != generation || renderRevision != app.revision) {
+        pending = true;
+        return;
+      }
+      factsBounds = bounds;
       final alpha = app.accent.length == 9
           ? int.parse(app.accent.substring(7), radix: 16) / 255
           : 1.0;
       final opacity = app.mode == 'flat' ? 0.3 * alpha : 0.5;
       if (level < 6) {
+        cellFacts.clear();
+        for (final row in data['rows'] as List) {
+          if (row.length > 5) {
+            cellFacts['${row[0]}'] = Map<String, dynamic>.from(row[5]);
+          }
+        }
+        factsLevel = level;
+        factsQuery = (data['columns'] as List? ?? []).contains('info')
+            ? app.renderQuery(level)
+            : null;
         final width = math.min(
           1536,
           math.max(512, (mapSize.width * 1.7).round()),
@@ -255,7 +301,39 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           );
         }
       } else {
-        final fills = Map<String, dynamic>.from(data);
+        areaFacts.clear();
+        for (final feature in data['infoFeatures'] ?? []) {
+          final geometry = feature['geometry'];
+          final polygons = geometry['type'] == 'Polygon'
+              ? [geometry['coordinates']]
+              : geometry['coordinates'];
+          final shape = Path()..fillType = PathFillType.evenOdd;
+          for (final polygon in polygons) {
+            for (final ring in polygon) {
+              if ((ring as List).isEmpty) continue;
+              shape.moveTo(
+                (ring.first[0] as num).toDouble(),
+                (ring.first[1] as num).toDouble(),
+              );
+              for (final p in ring.skip(1)) {
+                shape.lineTo(
+                  (p[0] as num).toDouble(),
+                  (p[1] as num).toDouble(),
+                );
+              }
+              shape.close();
+            }
+          }
+          areaFacts.add((
+            shape: shape,
+            info: Map<String, dynamic>.from(feature['properties']),
+          ));
+        }
+        factsLevel = level;
+        factsQuery = data.containsKey('infoFeatures')
+            ? app.renderQuery(level)
+            : null;
+        final fills = Map<String, dynamic>.from(data)..remove('infoFeatures');
         fills['features'] = (data['features'] as List)
             .where((f) => f['properties']['k'] == 1)
             .toList();
@@ -284,9 +362,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           }
         }
       }
-      await updateRoutes(app);
       await updateOverlays(app);
-      await updateActivityFocus(app);
       if (mounted) setState(() => mapError = null);
     } catch (e) {
       if (mounted) setState(() => mapError = '$e');
@@ -308,8 +384,18 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 
   Future<void> updateRoutes(AppState app) async {
+    if (routesRevision != app.revision) {
+      routeSummaries = List<Map<String, dynamic>>.from(
+        (await app.api.get('/api/routes'))['routes'],
+      );
+      routesRevision = app.revision;
+    }
     final data = app.routes
-        ? Map<String, dynamic>.from(await app.api.get('/api/render/routes'))
+        ? Map<String, dynamic>.from(
+            await app.api.get(
+              '/api/render/routes${app.stackIds.isEmpty ? '' : '?${Uri(queryParameters: {'stack': app.stackIds.map((id) => '$id').toList()}).query}'}',
+            ),
+          )
         : Map<String, dynamic>.from(empty);
     if (app.selectedRoute != null) {
       data['features'] = (data['features'] as List)
@@ -321,37 +407,158 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           .where((f) => f['properties']['id'] != app.activity!['route']['id'])
           .toList();
     }
+    final light = app.style == 'voyager';
+    for (final f in data['features'] as List) {
+      final props = f['properties'] as Map;
+      final hex = '${props['color']}';
+      final rgb = int.parse(hex.substring(1), radix: 16);
+      int mix(int shift) {
+        final c = (rgb >> shift) & 255;
+        return (light ? c * 0.7 : c + (255 - c) * 0.35).round();
+      }
+
+      props['coreColor'] =
+          '#${((mix(16) << 16) | (mix(8) << 8) | mix(0)).toRadixString(16).padLeft(6, '0')}';
+    }
     await geoSource('activities', data);
-    if (!layers.contains('activities-line')) {
-      await map!.addLineLayer(
-        'activities',
-        'activities-glow',
-        LineLayerProperties(
-          lineColor: ['get', 'color'],
-          lineWidth: 7,
-          lineOpacity: [
-            '*',
-            0.2,
-            ['get', 'alpha'],
+    final selected = app.activity?['route']['id'] ?? app.selectedRoute;
+    final glow = [
+      '*',
+      ['get', 'alpha'],
+      if (selected == null)
+        (light ? 0.26 : 0.35)
+      else
+        [
+          'case',
+          [
+            '==',
+            ['get', 'id'],
+            selected,
           ],
-          lineBlur: 3,
+          light ? 0.5 : 0.6,
+          light ? 0.26 : 0.35,
+        ],
+    ];
+    // The web uses four concentric phone rings. Blur introduces cracks at
+    // bends on the native renderer too, so use the same composited opacity.
+    for (var ring = 1; ring <= 4; ring++) {
+      final id = 'activities-glow-$ring';
+      final props = LineLayerProperties(
+        lineColor: ['get', 'color'],
+        lineCap: 'round',
+        lineJoin: 'round',
+        lineWidth: routeWidth(
+          selectedId: selected,
+          scale: 3.4 * (5 - ring) / 4,
         ),
-      );
-      layers.add('activities-glow');
-      await map!.addLineLayer(
-        'activities',
-        'activities-line',
-        LineLayerProperties(
-          lineColor: ['get', 'color'],
-          lineWidth: 2.5,
-          lineOpacity: [
-            '*',
-            0.9,
-            ['get', 'alpha'],
+        lineOpacity: [
+          '-',
+          1,
+          [
+            '^',
+            ['-', 1, glow],
+            0.25,
           ],
-        ),
+        ],
       );
+      if (layers.contains(id)) {
+        await patchLayer(id, props);
+      } else {
+        await map!.addLineLayer('activities', id, props);
+        layers.add(id);
+      }
+    }
+    final core = LineLayerProperties(
+      lineColor: ['get', 'coreColor'],
+      lineCap: 'round',
+      lineJoin: 'round',
+      lineWidth: routeWidth(selectedId: selected),
+      lineOpacity: [
+        '*',
+        0.95,
+        ['get', 'alpha'],
+      ],
+    );
+    if (layers.contains('activities-line')) {
+      await patchLayer('activities-line', core);
+    } else {
+      await map!.addLineLayer('activities', 'activities-line', core);
       layers.add('activities-line');
+    }
+  }
+
+  Future<void> updateTrack(AppState app) async {
+    await geoSource(
+      'trip',
+      app.track == null
+          ? Map<String, dynamic>.from(empty)
+          : Map<String, dynamic>.from(app.track!['track']),
+    );
+    if (!layers.contains('trip-dot')) {
+      await map!.addLineLayer(
+        'trip',
+        'trip-glow',
+        const LineLayerProperties(
+          lineCap: 'round',
+          lineJoin: 'round',
+          lineColor: trackColor,
+          lineOpacity: 0.4,
+          lineWidth: 9,
+          lineBlur: 7,
+        ),
+      );
+      await map!.addLineLayer(
+        'trip',
+        'trip-link',
+        LineLayerProperties(
+          lineCap: 'round',
+          lineJoin: 'round',
+          lineColor: trackColor,
+          lineOpacity: 0.85,
+          lineWidth: [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            2,
+            1.4,
+            11,
+            2.2,
+            16,
+            3,
+          ],
+        ),
+      );
+      await map!.addCircleLayer(
+        'trip',
+        'trip-dot',
+        CircleLayerProperties(
+          circleColor: trackColor,
+          circleRadius: [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            2,
+            2.4,
+            6,
+            3.6,
+            11,
+            5.5,
+            16,
+            8,
+          ],
+          circleStrokeColor: 'rgba(14,16,22,0.75)',
+          circleStrokeWidth: [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            4,
+            0.8,
+            12,
+            1.6,
+          ],
+        ),
+      );
+      layers.addAll(['trip-glow', 'trip-link', 'trip-dot']);
     }
   }
 
@@ -366,10 +573,24 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     if (!layers.contains('activity-metric-line')) {
       await map!.addLineLayer(
         'activity-metric',
+        'activity-metric-casing',
+        LineLayerProperties(
+          lineCap: 'round',
+          lineJoin: 'round',
+          lineColor: 'rgba(20,16,12,0.85)',
+          lineWidth: metricWidth(scale: 1.45),
+          lineOpacity: 1,
+        ),
+      );
+      layers.add('activity-metric-casing');
+      await map!.addLineLayer(
+        'activity-metric',
         'activity-metric-line',
         LineLayerProperties(
           lineColor: ['get', 'color'],
-          lineWidth: 4,
+          lineCap: 'round',
+          lineJoin: 'round',
+          lineWidth: metricWidth(),
           lineOpacity: 1,
         ),
       );
@@ -404,51 +625,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         ),
       );
       layers.add('activity-cursor-dot');
-    }
-  }
-
-  Future<void> featureTap(
-    math.Point<double> point,
-    LatLng coord,
-    String id,
-    String layer,
-    Annotation? annotation,
-  ) async {
-    final app = ref.read(appProvider);
-    try {
-      final features = await map!.queryRenderedFeatures(point, [layer], null);
-      if (features.isEmpty || !mounted) return;
-      final properties = Map<String, dynamic>.from(
-        features.first['properties'] ?? {},
-      );
-      if (layer == 'activity-metric-line') {
-        app.scrubActivity((properties['i'] as num).toInt());
-      } else if (layer == 'photos-pins') {
-        await showPhotos(context, app);
-      } else if (layer == 'activities-line') {
-        final data = await app.api.get('/api/routes?geom=1');
-        final route = (data['routes'] as List)
-            .where((r) => r['id'] == properties['id'])
-            .firstOrNull;
-        if (mounted && route != null) {
-          await showRoute(context, app, Map<String, dynamic>.from(route));
-        }
-      } else if (layer == 'airport-pins') {
-        final data = await app.api.get(
-          '/api/airport?lng=${coord.longitude}&lat=${coord.latitude}',
-        );
-        if (mounted) {
-          await showAirport(
-            context,
-            Map<String, dynamic>.from(data['airport'] ?? properties),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('$e')));
-      }
     }
   }
 
@@ -519,37 +695,50 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         LineLayerProperties(visibility: app.rail ? 'visible' : 'none'),
       );
     }
-    if (app.trails && !sources.contains('trails')) {
+    final trailSource = 'trails-${app.trailTheme}';
+    final trailLayer = '$trailSource-layer';
+    if (app.trails && !sources.contains(trailSource)) {
       await map!.addSource(
-        'trails',
+        trailSource,
         RasterSourceProperties(
           tiles: [
             app.api
-                .uri('/api/trails/tile/hiking/{z}/{x}/{y}.png')
+                .uri('/api/trails/tile/${app.trailTheme}/{z}/{x}/{y}.png')
                 .toString()
                 .replaceAll('%7B', '{')
                 .replaceAll('%7D', '}'),
           ],
           tileSize: 256,
+          maxzoom: 18,
         ),
       );
-      sources.add('trails');
+      sources.add(trailSource);
       await map!.addRasterLayer(
-        'trails',
-        'trails-layer',
-        const RasterLayerProperties(rasterOpacity: 0.65),
+        trailSource,
+        trailLayer,
+        RasterLayerProperties(
+          rasterOpacity: app.trailStrength,
+          rasterResampling: 'linear',
+          rasterFadeDuration: 0,
+        ),
         belowLayerId: await below(),
       );
-      layers.add('trails-layer');
+      layers.add(trailLayer);
     }
-    if (layers.contains('trails-layer')) {
+    for (final id in layers.where(
+      (id) => id.startsWith('trails-') && id.endsWith('-layer'),
+    )) {
       await patchLayer(
-        'trails-layer',
-        RasterLayerProperties(rasterOpacity: app.trails ? 0.65 : 0),
+        id,
+        RasterLayerProperties(
+          rasterOpacity: app.trails && id == trailLayer ? app.trailStrength : 0,
+        ),
       );
     }
-    if (app.photos && !sources.contains('photos')) {
-      final photos = jsonDecode(await app.native.photos()) as List;
+    if (app.photos &&
+        (!sources.contains('photos') || photosRevision != app.revision)) {
+      final photos = app.photosInTrack(await app.readPhotos());
+      photosRevision = app.revision;
       await geoSource('photos', {
         'type': 'FeatureCollection',
         'features': photos
@@ -565,16 +754,18 @@ class _MapScreenState extends ConsumerState<MapScreen> {
             )
             .toList(),
       });
-      await map!.addCircleLayer(
-        'photos',
-        'photos-pins',
-        const CircleLayerProperties(
-          circleColor: '#ffffff',
-          circleRadius: 5,
-          circleStrokeColor: '#60acff',
-          circleStrokeWidth: 2,
-        ),
-      );
+      if (!layers.contains('photos-pins')) {
+        await map!.addCircleLayer(
+          'photos',
+          'photos-pins',
+          const CircleLayerProperties(
+            circleColor: '#ffffff',
+            circleRadius: 5,
+            circleStrokeColor: '#60acff',
+            circleStrokeWidth: 2,
+          ),
+        );
+      }
       layers.add('photos-pins');
     }
     if (layers.contains('photos-pins')) {
@@ -588,7 +779,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
   }
 
-  Future<void> tap(LatLng point) async {
+  Future<void> tap(LatLng point, {math.Point<double>? pixel}) async {
     final app = ref.read(appProvider);
     if (app.editing) {
       await app.run(() async {
@@ -612,16 +803,179 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       });
       return;
     }
+    final request = ++tapRequest;
     try {
+      if (pixel != null) {
+        final rect = Rect.fromCenter(
+          center: Offset(pixel.x, pixel.y),
+          width: routeTapPadding * 2,
+          height: routeTapPadding * 2,
+        );
+        Future<List> query(List<String> ids) {
+          final available = ids.where(layers.contains).toList();
+          return available.isEmpty
+              ? Future.value([])
+              : map!.queryRenderedFeaturesInRect(rect, available, null);
+        }
+
+        // Native GeoJSON replies carry no layer id. Query categories separately
+        // instead of trying to recover the JS SDK's feature.layer property.
+        final results = await Future.wait([
+          query(['activity-metric-line']),
+          query(['photos-pins']),
+          query(['airport-pins']),
+          query(['activities-line']),
+        ]);
+        if (!mounted || request != tapRequest) return;
+        if (results[0].isNotEmpty) {
+          app.scrubActivity(
+            (results[0].first['properties']['i'] as num).toInt(),
+          );
+          return;
+        }
+        if (results[1].isNotEmpty) {
+          await showPhotos(
+            context,
+            app,
+            indices: results[1]
+                .map((f) => (f['properties']['index'] as num).toInt())
+                .toSet(),
+          );
+          return;
+        }
+        if (results[2].isNotEmpty) {
+          final hit = results[2].first;
+          final coord = hit['geometry']['coordinates'];
+          final data = await app.api.get(
+            '/api/airport?lng=${coord[0]}&lat=${coord[1]}',
+          );
+          if (mounted && request == tapRequest) {
+            await showAirport(
+              context,
+              Map<String, dynamic>.from(data['airport'] ?? hit['properties']),
+            );
+          }
+          return;
+        }
+        final routeIds = results[3].map((f) => f['properties']['id']).toSet();
+        if (routeIds.isNotEmpty) {
+          setState(() => placeInfo = null);
+          if (routeIds.length == 1) {
+            await app.openActivity(routeIds.first);
+          } else {
+            final ordered =
+                routeSummaries.where((r) => routeIds.contains(r['id'])).toList()
+                  ..sort(
+                    (a, b) =>
+                        (b['firstAt'] as num).compareTo(a['firstAt'] as num),
+                  );
+            final groups = <String, List<Map<String, dynamic>>>{};
+            for (final route in ordered) {
+              final sport = '${route['sport'] ?? ''}';
+              (groups[sport.isEmpty ? 'Not set' : sport] ??= []).add(route);
+            }
+            app.stackIds = groups.values
+                .expand((routes) => routes)
+                .map((r) => r['id'])
+                .toList();
+            app.changed();
+            try {
+              final stack = await app.api.get(
+                '/api/render/routes?${Uri(queryParameters: {'stack': app.stackIds.map((id) => '$id').toList()}).query}',
+              );
+              final colors = {
+                for (final f in stack['features'])
+                  f['properties']['id']: '${f['properties']['color']}',
+              };
+              if (!mounted || request != tapRequest) return;
+              await panel(
+                context,
+                'Choose an activity',
+                ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final group in groups.entries) ...[
+                      if (groups.length > 1) section(group.key),
+                      for (final r in group.value)
+                        ListTile(
+                          leading: SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: FittedBox(
+                              child: ColorDot(colors[r['id']] ?? '#ff9147'),
+                            ),
+                          ),
+                          title: Text('${r['name']}'),
+                          subtitle: Text(
+                            '${date(r['firstAt'])} · ${((r['lengthM'] as num) / 1000).toStringAsFixed(1)} km',
+                          ),
+                          onTap: () {
+                            Navigator.pop(context);
+                            app.openActivity(r['id']);
+                          },
+                        ),
+                    ],
+                  ],
+                ),
+                height: math.min(
+                  0.42,
+                  (76 + routeIds.length * 64) /
+                      MediaQuery.sizeOf(context).height,
+                ),
+              );
+            } finally {
+              app.stackIds = [];
+              app.changed();
+            }
+          }
+          return;
+        }
+      }
       if (!app.cellInfo || app.activity != null) return;
+      final b = factsBounds;
+      final inBounds =
+          b != null &&
+          point.latitude >= b[1] &&
+          point.latitude <= b[3] &&
+          (b[0] <= b[2]
+              ? point.longitude >= b[0] && point.longitude <= b[2]
+              : point.longitude >= b[0] || point.longitude <= b[2]);
+      final factsReady =
+          inBounds &&
+          factsLevel == currentLevel &&
+          factsQuery == app.renderQuery(currentLevel);
+      final local = factsReady
+          ? currentLevel < 6
+                ? cellFacts[cellKey(
+                    currentLevel,
+                    point.longitude,
+                    point.latitude,
+                  )]
+                : areaFacts
+                      .where(
+                        (a) => a.shape.contains(
+                          Offset(point.longitude, point.latitude),
+                        ),
+                      )
+                      .firstOrNull
+                      ?.info
+          : null;
+      setState(
+        () => placeInfo = {
+          'name': 'This place',
+          if (factsReady) 'visited': local != null,
+          ...?local,
+        },
+      );
       final info = await app.api.get(
         '/api/render/at?lng=${point.longitude}&lat=${point.latitude}&${app.renderQuery(currentLevel)}',
       );
-      if (mounted) await showInfo(context, Map<String, dynamic>.from(info));
+      if (mounted && request == tapRequest && placeInfo != null) {
+        setState(() => placeInfo = Map<String, dynamic>.from(info));
+      }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('$e')));
+      if (mounted && request == tapRequest) {
+        showToast(context, '$e', top: app.track == null ? 12 : 76);
       }
     }
   }
@@ -629,6 +983,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   @override
   void dispose() {
     generation++;
+    tapRequest++;
+    dismissToast();
     fade?.cancel();
     super.dispose();
   }
@@ -636,6 +992,24 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   @override
   Widget build(BuildContext context) {
     final app = ref.watch(appProvider);
+    if (app.activity != null) placeInfo = null;
+    if (observedTrack != app.track) {
+      observedTrack = app.track;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && map != null && app.track != null) goTo(map!, app.track!);
+      });
+    }
+    if (observedError != app.error) {
+      observedError = app.error;
+      final message = app.error;
+      if (message != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            showToast(context, message, top: app.track == null ? 12 : 76);
+          }
+        });
+      }
+    }
     if (requestedStyle != app.style) {
       requestedStyle = app.style;
       resolvedStyle = null;
@@ -663,13 +1037,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           goTo(
             map!,
             app.activity!['route'],
-            bottom: mapSize.width < 600
-                ? math.min(
-                        activityCardMaxHeight,
-                        mapSize.height * activityCardHeightShare,
-                      ) +
-                      60
-                : 150,
+            bottom: mapSize.width < 600 ? activityCardHeight + 60 : 150,
           );
         }
       });
@@ -685,19 +1053,23 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 styleString: resolvedStyle ?? mapStyle(app.style),
                 initialCameraPosition: camera,
                 trackCameraPosition: true,
+                featureTapsTriggersMapClick: true,
                 myLocationEnabled: locationEnabled,
                 myLocationRenderMode: locationEnabled
                     ? MyLocationRenderMode.compass
                     : MyLocationRenderMode.normal,
                 scaleControlEnabled: true,
-                attributionButtonPosition: AttributionButtonPosition.topRight,
+                attributionButtonPosition: AttributionButtonPosition.bottomLeft,
+                attributionButtonMargins: math.Point(
+                  12,
+                  MediaQuery.paddingOf(context).bottom + 8,
+                ),
                 onMapCreated: (c) {
                   generation++;
                   loaded = false;
                   sources.clear();
                   layers.clear();
                   map = c;
-                  c.onFeatureTapped.add(featureTap);
                 },
                 onStyleLoadedCallback: () {
                   loaded = true;
@@ -719,7 +1091,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     );
                   }
                 },
-                onMapClick: (_, p) => unawaited(tap(p)),
+                onMapClick: (pixel, p) => unawaited(tap(p, pixel: pixel)),
               ),
               if (app.editing && !app.clearingRegion)
                 Positioned.fill(
@@ -774,130 +1146,116 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     ),
                   ),
                 ),
-              SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
+              if (!app.menuOpen && !app.editing)
+                SafeArea(
                   child: Align(
-                    alignment:
-                        constraints.maxWidth < 600 &&
-                            constraints.maxHeight > 560
+                    alignment: constraints.maxWidth < 600
                         ? Alignment.bottomRight
                         : Alignment.topLeft,
-                    child: Padding(
-                      padding: EdgeInsets.only(
-                        bottom:
-                            constraints.maxWidth < 600 &&
-                                constraints.maxHeight > 560
-                            ? 112 +
-                                  (app.activity != null
-                                      ? math.min(
-                                              activityCardMaxHeight,
-                                              constraints.maxHeight *
-                                                  activityCardHeightShare,
-                                            ) +
-                                            10
-                                      : 0)
-                            : 0,
+                    child: AnimatedPadding(
+                      duration: MediaQuery.disableAnimationsOf(context)
+                          ? Duration.zero
+                          : const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
+                      padding: EdgeInsets.fromLTRB(
+                        16,
+                        16,
+                        16,
+                        16 +
+                            (app.activity != null && constraints.maxWidth < 600
+                                ? activityCardHeight + 14
+                                : placeInfo != null
+                                ? placeCardHeight + 14
+                                : 0),
                       ),
-                      child: Glass(
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              tooltip: 'Menu',
-                              onPressed: () => showMenuSheet(
-                                context,
-                                app,
-                                () => unawaited(refresh()),
-                                map,
-                              ),
-                              icon: const Icon(Icons.menu),
-                            ),
-                            IconButton(
-                              tooltip: 'Search',
-                              onPressed: () => map == null
-                                  ? null
-                                  : showSporraSearch(context, app, map!),
-                              icon: const Icon(Icons.search),
-                            ),
-                            IconButton(
-                              tooltip: 'Trips and calendar',
-                              onPressed: map == null
-                                  ? null
-                                  : () => showTrips(context, app, map!),
-                              icon: const Icon(Icons.calendar_month),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              SafeArea(
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    16,
-                    16,
-                    16,
-                    16 +
-                        (app.activity != null && constraints.maxWidth < 600
-                            ? math.min(
-                                    activityCardMaxHeight,
-                                    constraints.maxHeight *
-                                        activityCardHeightShare,
-                                  ) +
-                                  10
-                            : 0),
-                  ),
-                  child: Align(
-                    alignment: Alignment.bottomRight,
-                    child: Glass(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          IconButton(
-                            tooltip: 'Your location',
-                            onPressed: () {
-                              if (!locationEnabled) {
-                                setState(() {
-                                  locationEnabled = true;
-                                  locating = true;
-                                });
-                              } else if (location != null) {
-                                map?.animateCamera(
-                                  CameraUpdate.newLatLngZoom(location!, 13.6),
-                                );
-                              } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      'Allow location access in iOS Settings.',
+                          if (camera.bearing.abs() > 1 || camera.tilt > 1)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Glass(
+                                child: CupertinoButton(
+                                  padding: const EdgeInsets.all(12),
+                                  minimumSize: Size.zero,
+                                  onPressed: () => map?.animateCamera(
+                                    CameraUpdate.newCameraPosition(
+                                      CameraPosition(
+                                        target: camera.target,
+                                        zoom: camera.zoom,
+                                      ),
                                     ),
                                   ),
-                                );
-                              }
-                            },
-                            icon: const Icon(Icons.my_location),
-                          ),
-                          IconButton(
-                            tooltip: 'Reset compass',
-                            onPressed: () => map?.animateCamera(
-                              CameraUpdate.newCameraPosition(
-                                CameraPosition(
-                                  target: map!.cameraPosition!.target,
-                                  zoom: map!.cameraPosition!.zoom,
+                                  child: Transform.rotate(
+                                    angle: -camera.bearing * math.pi / 180,
+                                    child: const Icon(
+                                      CupertinoIcons.compass,
+                                      color: Colors.white,
+                                      size: 21,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
-                            icon: const Icon(Icons.explore_outlined),
+                          Glass(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Search',
+                                  onPressed: map == null
+                                      ? null
+                                      : () => showSporraSearch(
+                                          context,
+                                          app,
+                                          map!,
+                                        ),
+                                  icon: const Icon(CupertinoIcons.search),
+                                ),
+                                IconButton(
+                                  tooltip: 'Menu',
+                                  onPressed: () => showMenuSheet(
+                                    context,
+                                    app,
+                                    () => unawaited(refresh()),
+                                    map,
+                                  ),
+                                  icon: const Icon(
+                                    CupertinoIcons.line_horizontal_3,
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Your location',
+                                  onPressed: () {
+                                    if (!locationEnabled) {
+                                      setState(() {
+                                        locationEnabled = true;
+                                        locating = true;
+                                      });
+                                    } else if (location != null) {
+                                      map?.animateCamera(
+                                        CameraUpdate.newLatLngZoom(
+                                          location!,
+                                          13.6,
+                                        ),
+                                      );
+                                    } else {
+                                      showToast(
+                                        context,
+                                        'Allow location access in iOS Settings.',
+                                      );
+                                    }
+                                  },
+                                  icon: const Icon(CupertinoIcons.location),
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ),
                     ),
                   ),
                 ),
-              ),
               if (app.editing)
                 SafeArea(
                   child: Align(
@@ -995,7 +1353,99 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     ),
                   ),
                 ),
-              if (app.activity != null)
+              if (placeInfo != null && !app.menuOpen && !app.editing)
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 380),
+                        child: Measured(
+                          onSize: (size) {
+                            if (mounted && size.height != placeCardHeight) {
+                              setState(() => placeCardHeight = size.height);
+                            }
+                          },
+                          child: Dismissible(
+                            key: const ValueKey('place-card'),
+                            direction: DismissDirection.horizontal,
+                            onDismissed: (_) => setState(() {
+                              tapRequest++;
+                              placeInfo = null;
+                            }),
+                            child: Glass(
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  18,
+                                  12,
+                                  8,
+                                  16,
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            '${placeInfo!['name'] ?? 'This place'}',
+                                            style: const TextStyle(
+                                              fontSize: 17,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                        IconButton(
+                                          tooltip: 'Close place',
+                                          onPressed: () => setState(() {
+                                            tapRequest++;
+                                            placeInfo = null;
+                                          }),
+                                          icon: const Icon(
+                                            CupertinoIcons.xmark,
+                                            size: 18,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    Text(
+                                      placeInfo!['visited'] == null
+                                          ? 'Loading visit details…'
+                                          : placeInfo!['visited'] == true
+                                          ? 'You have been here'
+                                          : 'No visits recorded',
+                                    ),
+                                    if (placeInfo!['visited'] == true) ...[
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        placeInfo!['hits'] == 0
+                                            ? 'Marked by hand'
+                                            : '${placeInfo!['hits']} visits',
+                                        style: const TextStyle(
+                                          color: Colors.white70,
+                                        ),
+                                      ),
+                                      Text(
+                                        'First seen ${date(placeInfo!['firstAt'])} · Last seen ${date(placeInfo!['lastAt'])}',
+                                        style: const TextStyle(
+                                          color: Colors.white60,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (app.activity != null && !app.menuOpen && !app.editing)
                 SafeArea(
                   child: Align(
                     alignment: constraints.maxWidth < 600
@@ -1015,12 +1465,241 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                             constraints.maxHeight * activityCardHeightShare,
                           ),
                         ),
-                        child: Glass(child: ActivityCard(app: app)),
+                        child: Measured(
+                          onSize: (size) {
+                            if (mounted && size.height != activityCardHeight) {
+                              setState(() => activityCardHeight = size.height);
+                            }
+                          },
+                          child: Dismissible(
+                            key: ValueKey(
+                              'activity-${app.activity!['route']['id']}',
+                            ),
+                            direction: DismissDirection.horizontal,
+                            onDismissed: (_) => app.closeActivity(),
+                            child: Glass(child: ActivityCard(app: app)),
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
-              if (app.selectedRoute != null || app.clearingRegion)
+              if (app.track != null && app.activity == null)
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                      child: Dismissible(
+                        key: ValueKey(
+                          'track-${app.trackDay ?? app.track!['id']}',
+                        ),
+                        direction: app.trackDay == null
+                            ? DismissDirection.horizontal
+                            : DismissDirection.up,
+                        onDismissed: (_) => app.clearTrack(),
+                        child: GestureDetector(
+                          onHorizontalDragEnd: app.trackDay == null
+                              ? null
+                              : (d) {
+                                  if ((d.primaryVelocity ?? 0).abs() >= 150) {
+                                    app.stepDay(
+                                      d.primaryVelocity! < 0 ? 1 : -1,
+                                    );
+                                  }
+                                },
+                          child: Glass(
+                            radius: 24,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (app.trackDay != null && app.canStepDay(-1))
+                                  IconButton(
+                                    tooltip: 'Previous day',
+                                    onPressed: () => app.stepDay(-1),
+                                    icon: const Icon(
+                                      CupertinoIcons.chevron_left,
+                                      size: 16,
+                                    ),
+                                  ),
+                                Flexible(
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      16,
+                                      10,
+                                      8,
+                                      10,
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          app.trackDay == null ? 'TRIP' : 'DAY',
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w600,
+                                            letterSpacing: 1.2,
+                                            color: Colors.white54,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 3),
+                                        Text(
+                                          '${app.track!['label'] ?? app.track!['name']}',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w600,
+                                            letterSpacing: -0.2,
+                                            height: 1.2,
+                                          ),
+                                        ),
+                                        if (app.trackDay != null &&
+                                            app.track!['trip'] != null) ...[
+                                          const SizedBox(height: 3),
+                                          Text(
+                                            '${(app.prefs['tripNames'] as Map?)?[app.track!['trip']['id']] ?? app.track!['trip']['name']}',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.white60,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                if (app.trackDay != null && app.canStepDay(1))
+                                  IconButton(
+                                    tooltip: 'Next day',
+                                    onPressed: () => app.stepDay(1),
+                                    icon: const Icon(
+                                      CupertinoIcons.chevron_right,
+                                      size: 16,
+                                    ),
+                                  ),
+                                if (app.trackDay == null &&
+                                    app.track!['firstDay'] != null)
+                                  IconButton(
+                                    tooltip: 'Explore trip days',
+                                    onPressed: () => app.selectTrack(
+                                      day: '${app.track!['firstDay']}',
+                                    ),
+                                    icon: const Icon(
+                                      CupertinoIcons.chevron_down,
+                                      size: 16,
+                                    ),
+                                  ),
+                                IconButton(
+                                  tooltip: 'Clear trip',
+                                  onPressed: app.clearTrack,
+                                  icon: const Icon(
+                                    CupertinoIcons.xmark,
+                                    size: 16,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (app.activity != null)
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                      child: Dismissible(
+                        key: ValueKey(
+                          'workout-${app.activity!['route']['id']}',
+                        ),
+                        direction: DismissDirection.horizontal,
+                        onDismissed: (_) => app.closeActivity(),
+                        child: Glass(
+                          radius: 24,
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(4, 10, 4, 10),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Previous workout',
+                                  onPressed: app.busy
+                                      ? null
+                                      : () => app.run(() => app.stepActivity(-1)),
+                                  icon: const Icon(
+                                    CupertinoIcons.chevron_left,
+                                    size: 16,
+                                  ),
+                                ),
+                                Flexible(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '${app.activity!['route']['sport'] ?? 'Workout'}'
+                                                .isEmpty
+                                            ? 'WORKOUT'
+                                            : '${app.activity!['route']['sport']}'
+                                                  .toUpperCase(),
+                                        style: const TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w600,
+                                          letterSpacing: 1.2,
+                                          color: Colors.white54,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        '${app.activity!['route']['name']}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w600,
+                                          letterSpacing: -0.2,
+                                          height: 1.2,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Next workout',
+                                  onPressed: app.busy
+                                      ? null
+                                      : () => app.run(() => app.stepActivity(1)),
+                                  icon: const Icon(
+                                    CupertinoIcons.chevron_right,
+                                    size: 16,
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Close workout',
+                                  onPressed: app.closeActivity,
+                                  icon: const Icon(
+                                    CupertinoIcons.xmark,
+                                    size: 16,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (app.clearingRegion)
                 SafeArea(
                   child: Align(
                     alignment: Alignment.topCenter,
@@ -1051,20 +1730,36 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     child: LinearProgressIndicator(minHeight: 2),
                   ),
                 ),
-              if (mapError != null || app.error != null)
+              if (mapError != null)
                 SafeArea(
                   child: Align(
-                    alignment: Alignment.bottomCenter,
+                    alignment: Alignment.topCenter,
                     child: Padding(
-                      padding: const EdgeInsets.only(
-                        bottom: 100,
-                        left: 16,
-                        right: 16,
+                      padding: EdgeInsets.fromLTRB(
+                        16,
+                        app.track == null ? 12 : 76,
+                        16,
+                        0,
                       ),
-                      child: Glass(
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Text(mapError ?? app.error!),
+                      child: Dismissible(
+                        key: ValueKey('map-error-$mapError'),
+                        direction: DismissDirection.horizontal,
+                        onDismissed: (_) => setState(() => mapError = null),
+                        child: Glass(
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(child: Text(mapError!)),
+                                CupertinoButton(
+                                  padding: const EdgeInsets.all(12),
+                                  onPressed: () => unawaited(refresh()),
+                                  child: const Text('Retry'),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                     ),

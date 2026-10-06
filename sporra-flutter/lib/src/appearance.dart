@@ -15,6 +15,9 @@ ThemeData webTheme() {
       secondary: accent,
       surface: surface,
     ),
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: {TargetPlatform.iOS: CupertinoPageTransitionsBuilder()},
+    ),
     splashFactory: NoSplash.splashFactory,
     highlightColor: Colors.white10,
     dividerColor: Colors.white12,
@@ -29,7 +32,8 @@ ThemeData webTheme() {
     ),
     listTileTheme: const ListTileThemeData(
       contentPadding: EdgeInsets.symmetric(horizontal: 20),
-      minVerticalPadding: 8,
+      minVerticalPadding: 4,
+      dense: true,
       iconColor: Colors.white70,
     ),
     iconButtonTheme: IconButtonThemeData(
@@ -122,49 +126,30 @@ class ChoiceRow extends StatelessWidget {
           style: const TextStyle(fontSize: 13, color: Colors.white70),
         ),
         const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.all(3),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.05),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.white10),
-          ),
-          child: Row(
-            children: [
-              for (final c in choices.entries)
-                Expanded(
-                  child: Semantics(
-                    selected: c.key == value,
-                    child: GestureDetector(
-                      onTap: () => onChanged(c.key),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 160),
-                        padding: const EdgeInsets.symmetric(vertical: 9),
-                        decoration: BoxDecoration(
-                          color: c.key == value
-                              ? Colors.white.withValues(alpha: 0.14)
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(17),
-                        ),
-                        child: Text(
-                          c.value,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: c.key == value
-                                ? FontWeight.w600
-                                : FontWeight.w400,
-                            color: c.key == value
-                                ? Colors.white
-                                : Colors.white60,
-                          ),
-                        ),
-                      ),
-                    ),
+        CupertinoSlidingSegmentedControl<String>(
+          groupValue: choices.containsKey(value) ? value : null,
+          backgroundColor: Colors.white.withValues(alpha: 0.05),
+          thumbColor: const Color(0xff484848),
+          children: {
+            for (final c in choices.entries)
+              c.key: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                child: Text(
+                  c.value,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: c.key == value
+                        ? FontWeight.w600
+                        : FontWeight.w400,
+                    color: c.key == value ? Colors.white : Colors.white60,
                   ),
                 ),
-            ],
-          ),
+              ),
+          },
+          onValueChanged: (v) {
+            if (v != null) onChanged(v);
+          },
         ),
       ],
     ),
