@@ -219,7 +219,7 @@ try {
   check(cells(3,'a',()=>({cellIds:[],cellMeta:new Map()}),opts).rows.length===0,'account caches are isolated');
   check(cells(1,'b',supply,{...opts,bbox:[40,40,41,41]}).rows.length===0,'empty viewport');
   const saved = (await api('GET', '/api/routes?geom=1')).body.routes[0];
-  await api('POST', '/api/routes', { routes: [{...saved, key:'render-stack-second', name:'Second overlap'}] });
+  await api('POST', '/api/routes', { routes: [{...saved, key:'render-stack-second', name:'Second overlap', firstAt:saved.firstAt+86400, lastAt:saved.lastAt+86400}] });
   const stackedRoutes = (await api('GET', '/api/routes')).body.routes;
   const stackIds = stackedRoutes.map(r => r.id);
   const stack = await api('GET', '/api/render/routes?' + stackIds.map(id => 'stack='+id).join('&'));

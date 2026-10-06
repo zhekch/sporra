@@ -49,3 +49,21 @@ assert.equal(stats.distance, '3.5 km', 'total still includes undated distance');
 assert.equal(stats.duration, '30 min', 'duration only includes credible clocks');
 assert.equal(stats.longest.distance, '2.0 km');
 console.log('native activity statistics: annual distance, totals and duration passed');
+
+const { foldedActivities } = await import('../../server/render-routes.js');
+const { duplicateRoutes } = await import('../../src/routes.js');
+const copies = [
+  { id: 10, name: 'Afternoon ride', source: 'strava', firstAt: 1746345600, lastAt: 1746358800, lengthM: 62600, bounds: [7,46,8,47], geom: [[[7,46],[8,47]]] },
+  { id: 11, name: 'Bern → Frutigen', source: 'komoot', firstAt: 1746345600, lastAt: 1746358800, lengthM: 62700, bounds: [7,46,8,47], geom: [[[7,46],[8,47]]] },
+  { id: 12, name: 'Bern → Frutigen', source: 'komoot', firstAt: 1746345601, lastAt: 1746358801, lengthM: 62700, bounds: [7,46,8,47], geom: [[[7,46],[8,47]]] },
+];
+const folded = foldedActivities(copies);
+assert.deepEqual(folded.duplicates, Object.fromEntries(duplicateRoutes(copies)), 'native grouping is precisely the web grouping');
+assert.equal(folded.routes.length, 1);
+assert.equal(folded.routes[0].source, 'komoot');
+assert.equal(folded.foldedCount, 2);
+assert.deepEqual(routeFeatures(copies).features.map(f => f.id), folded.routes.map(r => r.id));
+assert.equal(routeFeatures(copies, {}, [10]).features[0].id, folded.routes[0].id, 'old stack IDs resolve to preferred recording');
+assert.equal(activityStats(copies).distance, '62.7 km', 'copies count only once');
+assert.equal(copies.length, 3, 'imports remain stored');
+console.log('native duplicate folding: shared browser selection, map, stacks and totals passed');

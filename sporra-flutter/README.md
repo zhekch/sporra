@@ -1,7 +1,7 @@
 # Sporra Preview
 
 The Flutter iOS preview lives here. It installs alongside the original Sporra
-app and connects to your Sporra server. Use server version **0.134.0 or newer**.
+app and connects to your Sporra server. Use server version **0.135.0 or newer**.
 Open `ios/Runner.xcworkspace` for the native project; Flutter development starts
 at `lib/main.dart`.
 

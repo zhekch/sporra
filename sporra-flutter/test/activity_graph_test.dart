@@ -45,6 +45,44 @@ final graph = <String, dynamic>{
   ],
 };
 void main() {
+  testWidgets('Focus sends duration and measured insets to the native camera', (
+    tester,
+  ) async {
+    final calls = <MethodCall>[];
+    const channel = MethodChannel('plugins.flutter.io/maplibre_gl_987');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+      call,
+    ) async {
+      calls.add(call);
+      return true;
+    });
+    final platform = MapLibreMethodChannel();
+    await platform.initPlatform(987);
+    final controller = MapLibreMapController(
+      maplibrePlatform: platform,
+      annotationOrder: [],
+      annotationConsumeTapEvents: [],
+    );
+    goTo(controller, {
+      'bounds': [7, 46, 8, 47],
+    }, padding: const EdgeInsets.fromLTRB(24, 139, 24, 466));
+    await tester.pump();
+    final arguments =
+        calls.singleWhere((c) => c.method == 'camera#animate').arguments as Map;
+    expect(arguments['duration'], 450);
+    expect((arguments['cameraUpdate'] as List).skip(2).toList(), [
+      24.0,
+      139.0,
+      24.0,
+      466.0,
+    ]);
+    controller.dispose();
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      channel,
+      null,
+    );
+  });
+
   testWidgets('activity card and main menu share the same clip and border', (
     tester,
   ) async {
@@ -113,6 +151,7 @@ void main() {
                 context = c;
                 return Scaffold(
                   body: SafeArea(
+                    bottom: false,
                     child: Align(
                       alignment: Alignment.bottomCenter,
                       child: Padding(
@@ -172,10 +211,22 @@ void main() {
       matching: find.byType(FilledButton),
     );
     expect(actions, findsNWidgets(3));
+    expect(844 - tester.getBottomLeft(find.byType(Glass)).dy, 12);
+    expect(
+      tester.getTopLeft(find.text('Evening walk')).dy -
+          tester.getTopLeft(find.byType(Glass)).dy,
+      22,
+    );
+    for (final button in tester.widgetList<FilledButton>(actions)) {
+      final shape =
+          button.style!.shape!.resolve({}) as RoundedSuperellipseBorder;
+      expect(shape.borderRadius, BorderRadius.circular(29));
+    }
+
     final sizes = [for (var i = 0; i < 3; i++) tester.getSize(actions.at(i))];
     for (final size in sizes) {
       expect(size.width, closeTo(sizes.first.width, 0.01));
-      expect(size.height, 40);
+      expect(size.height, 44);
     }
     expect(
       tester.getTopLeft(find.text('Walking · 18.09.2026')).dy -
@@ -240,6 +291,20 @@ void main() {
       );
       expect(find.text('Evening walk'), findsOneWidget);
       expect(find.text('Walking'), findsNothing);
+      final original = tester.getTopLeft(find.text('Evening walk'));
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(ActivityBanner)),
+      );
+      await gesture.moveBy(const Offset(-70, 5));
+      await tester.pump();
+      expect(
+        tester.getTopLeft(find.text('Evening walk')).dx,
+        lessThan(original.dx - 40),
+      );
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(find.text('Evening walk')), original);
+      steps.clear();
       await tester.drag(find.byType(ActivityBanner), const Offset(-120, 15));
       await tester.pumpAndSettle();
       await tester.drag(find.byType(ActivityBanner), const Offset(120, -15));

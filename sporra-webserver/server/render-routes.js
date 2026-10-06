@@ -1,11 +1,21 @@
-import { routeSamples, recordedSeconds, formatDistance, formatDuration, totalLength, distanceByYear } from '../src/routes.js';
+import { duplicateRoutes, routeSamples, recordedSeconds, formatDistance, formatDuration, totalLength, distanceByYear } from '../src/routes.js';
 import { graphData } from '../src/route-graph.js';
 import { metricCollection } from '../src/route-metric.js';
 // Native clients consume the browser's palette and account preferences.
 import { paletteFor } from '../src/route-colors.js';
 import { hexOpaque, hexAlpha } from '../src/color-picker.js';
 
+// Use the browser's preference rules; imports remain stored and individually accessible.
+export function foldedActivities(routes) {
+  const duplicates = duplicateRoutes(routes);
+  return { routes: routes.filter(r => !duplicates.has(r.id)),
+    duplicates: Object.fromEntries(duplicates), foldedCount: duplicates.size };
+}
+
 export function routeFeatures(routes, view = {}, stackIds = []) {
+  const folded = foldedActivities(routes);
+  routes = folded.routes;
+  stackIds = [...new Set(stackIds.map(id => folded.duplicates[id] ?? id))];
   view = view && typeof view === 'object' ? view : {};
   const hidden = new Set(Array.isArray(view.hidden) ? view.hidden : []);
   const colors = view.colors ?? {};
@@ -39,8 +49,10 @@ export function activityData(route) {
 }
 
 export function activityStats(routes) {
+  const folded = foldedActivities(routes);
+  routes = folded.routes;
   const longest = routes.reduce((best, r) => !best || r.lengthM > best.lengthM ? r : best, null);
-  return { routes, distance: formatDistance(totalLength(routes)),
+  return { ...folded, distance: formatDistance(totalLength(routes)),
     duration: formatDuration(routes.reduce((sum, r) => sum + recordedSeconds(r), 0)),
     longest: longest ? { name: longest.name, distance: formatDistance(longest.lengthM) } : null,
     years: distanceByYear(routes).map(([year, value]) => ({ year, value, label: formatDistance(value) })),

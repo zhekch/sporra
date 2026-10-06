@@ -142,7 +142,7 @@ EdgeInsets activityMapPadding(Size viewport, Size card, EdgeInsets safeArea) {
           safeArea.left + gap,
           safeArea.top + 80,
           safeArea.right + gap,
-          safeArea.bottom + 10 + card.height + gap,
+          12 + card.height + gap,
         )
       : EdgeInsets.fromLTRB(
           safeArea.left + 10 + card.width + gap,

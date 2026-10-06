@@ -149,7 +149,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> stepActivity(int delta) async {
     final routes = List<Map<String, dynamic>>.from(
-      (await api.get('/api/routes'))['routes'],
+      (await api.get('/api/routes?fold=1'))['routes'],
     );
     routes.sort((a, b) => (a['firstAt'] as num).compareTo(b['firstAt'] as num));
     final index = routes.indexWhere((r) => r['id'] == activity?['route']['id']);
@@ -307,7 +307,7 @@ class AppState extends ChangeNotifier {
   }
 
   void warmData() {
-    for (final path in ['/api/days', '/api/trips', '/api/routes']) {
+    for (final path in ['/api/days', '/api/trips', '/api/routes?fold=1']) {
       unawaited(api.get(path).then<void>((_) {}, onError: (Object _) {}));
     }
   }

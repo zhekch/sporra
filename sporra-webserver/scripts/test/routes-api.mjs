@@ -115,6 +115,22 @@ try {
   check(save.status === 200, 'POST /api/routes succeeds', `got ${save.status} ${JSON.stringify(save.body)}`);
   check(save.body?.added === 2, 'both routes were added', `added=${save.body?.added} skipped=${save.body?.skipped}`);
 
+  await api('POST', '/api/routes', { routes: [{
+    key: 'k-copy', name: 'Afternoon ride', source: 'strava', sport: 'Cycling',
+    firstAt: 1746345600, lastAt: 1746358800, lengthM: 62600, geom,
+  }] });
+  const raw = await api('GET', '/api/routes');
+  const folded = await api('GET', '/api/routes?fold=1');
+  check(raw.body?.routes?.length === 3, 'raw web list retains duplicate imports');
+  check(folded.body?.routes?.length === 2 && folded.body?.foldedCount === 1, 'native list folds the same outing');
+  const preferred = folded.body?.routes?.find(r => r.name === 'Bern → Thun');
+  const nativeMap = await api('GET', '/api/render/routes');
+  check(new Set(nativeMap.body?.features?.map(f => f.id)).size === 2, 'native map excludes duplicate geometry');
+  const totals = await api('GET', '/api/render/activity-stats');
+  check(totals.body?.routes?.length === 2 && totals.body?.distance === '74.7 km', 'native statistics count each outing once');
+  const copyId = raw.body?.routes?.find(r => r.name === 'Afternoon ride')?.id;
+  check(folded.body?.duplicates?.[copyId] === preferred?.id, 'native metadata identifies preferred web recording');
+
   const list = await api('GET', '/api/routes?geom=1');
   check(list.status === 200, 'GET /api/routes');
   const known = list.body?.routes?.find((r) => r.name === 'Bern → Thun');

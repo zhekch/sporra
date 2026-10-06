@@ -463,7 +463,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         DateTime.now().difference(routesUpdated!) < SporraApi.dataFreshness) {
       return;
     }
-    final summaries = app.api.get('/api/routes');
+    final summaries = app.api.get('/api/routes?fold=1');
     final geometry = app.routes
         ? app.api.get(
             '/api/render/routes${app.stackIds.isEmpty ? '' : '?${Uri(queryParameters: {'stack': app.stackIds.map((id) => '$id').toList()}).query}'}',
@@ -1677,6 +1677,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 ),
               if (app.activity != null && !app.menuOpen && !app.editing)
                 SafeArea(
+                  bottom: false,
                   child: Align(
                     alignment: constraints.maxWidth < 600
                         ? Alignment.bottomCenter
@@ -1685,7 +1686,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                       padding: EdgeInsets.only(
                         left: 10,
                         right: constraints.maxWidth < 600 ? 10 : 80,
-                        bottom: 10,
+                        bottom: 12,
                       ),
                       child: ConstrainedBox(
                         constraints: BoxConstraints(

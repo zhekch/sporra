@@ -88,7 +88,7 @@ import * as derive from './derive.js';
 import * as render from './render.js';
 import * as renderGeo from './render-geography.js';
 import * as renderReference from './render-reference.js';
-import { routeFeatures, activityData, activityStats } from './render-routes.js';
+import { routeFeatures, activityData, activityStats, foldedActivities } from './render-routes.js';
 import { expand, parseExpanded } from '../src/import-data.js';
 import localeEn from '../src/locales/en.js';
 import { banner } from './banner.js';
@@ -110,7 +110,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.134.0';
+export const SERVER_VERSION = '0.135.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -3174,10 +3174,12 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       const user = currentUser(req);
       if (!user) return send(res, 401, { error: 'not authenticated' });
       const withGeom = query.get('geom') === '1';
-      const head = conditional(req, res, routesSignature(user, withGeom));
+      const fold = query.get('fold') === '1';
+      const head = conditional(req, res, routesSignature(user, withGeom) + (fold ? ':fold' : ''));
       if (!head) return;
       const rows = withGeom ? q.routesGeom.all(user.id) : q.routes.all(user.id);
-      return send(res, 200, { routes: rows.map(routeOut) }, head);
+      const routes = rows.map(routeOut);
+      return send(res, 200, fold ? foldedActivities(routes) : { routes }, head);
     }
 
     // --- Derived, read-only -----------------------------------------------------

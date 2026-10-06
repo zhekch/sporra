@@ -9970,8 +9970,20 @@ hidden while an activity is open and returns when it closes.
 
 Automatic activity focus waits for the card's first measured layout instead of
 using the preceding card's height. Focus and automatic fitting share padding:
-on narrow maps, the actual card height plus safe bottom inset, 10 px placement
+on narrow maps, the measured card height (including internal home-indicator clearance), 12 px placement
 and 24 px clearance; on wide maps, the actual card width plus its left inset and
 clearance. The top padding includes the safe inset plus 80 px for the activity
 banner and breathing room. The initial unpadded fit from the activities list is
 removed so the route is never first fitted behind the card.
+
+Flutter 0.5.1 places the activity card 12 px from the screen bottom, keeping
+home-indicator clearance inside the card. The title has 22 px top padding;
+44 px footer buttons use the outer menu radius minus their 14 px inset.
+The activity banner translates with the finger and animates back on release.
+Bounds fitting passes an explicit 450 ms duration: MapLibre iOS otherwise
+applies the calculated camera without its edge padding.
+Server 0.135.0 folds native activity maps and statistics with the browser's
+`duplicateRoutes`, including preferred-source selection and chained matches.
+Flutter requests `/api/routes?fold=1` for lists, map metadata and swipe navigation;
+the unqualified endpoint still returns every import for the web's duplicate toggle.
+Stack IDs are resolved to the preferred recording before rendering.

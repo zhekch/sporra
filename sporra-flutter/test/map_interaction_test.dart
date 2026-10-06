@@ -16,7 +16,7 @@ void main() {
         const Size(370, 300),
         const EdgeInsets.fromLTRB(0, 59, 0, 34),
       );
-      expect(padding.bottom, 368);
+      expect(padding.bottom, 336);
       expect(padding.top, 139);
       final larger = activityMapPadding(
         const Size(390, 844),

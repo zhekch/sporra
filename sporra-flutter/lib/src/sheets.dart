@@ -900,6 +900,8 @@ void goTo(
         top: padding?.top ?? 100,
         bottom: padding?.bottom ?? bottom,
       ),
+      // iOS only applies bounds edge padding through its duration-aware path.
+      duration: const Duration(milliseconds: 450),
     );
   } else if (r['lng'] != null && r['lat'] != null) {
     map.animateCamera(
@@ -2202,7 +2204,7 @@ Future<void> showActivityStyle(BuildContext context, AppState app) => panel(
   context,
   'Activities',
   AsyncList(
-    load: () => app.api.get('/api/routes'),
+    load: () => app.api.get('/api/routes?fold=1'),
     builder: (context, data) => Consumer(
       builder: (context, ref, _) {
         final a = ref.watch(appProvider);

@@ -28,7 +28,7 @@ class ActivityCard extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(18, 12, 10, 0),
+          padding: const EdgeInsets.fromLTRB(22, 22, 18, 0),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -136,9 +136,14 @@ class ActivityCard extends StatelessWidget {
         ),
         const Divider(height: 1),
         Padding(
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+          padding: EdgeInsets.fromLTRB(
+            14,
+            10,
+            14,
+            math.max(14, MediaQuery.paddingOf(context).bottom - 12),
+          ),
           child: SizedBox(
-            height: 40,
+            height: 44,
             child: Row(
               children: [
                 Expanded(
@@ -184,7 +189,11 @@ class ActivityCard extends StatelessWidget {
     padding: const EdgeInsets.symmetric(horizontal: 6),
     textStyle: Theme.of(context).textTheme.labelLarge
         ?.copyWith(fontSize: 12, fontWeight: FontWeight.w600),
-    shape: RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(14)),
+    shape: RoundedSuperellipseBorder(
+      borderRadius: BorderRadius.circular(
+        math.max(0, menuCornerRadius(context) - 14),
+      ),
+    ),
   );
 
   Widget _reading(String title, String value) => Column(
@@ -219,35 +228,51 @@ class ActivityBanner extends StatefulWidget {
 
 class _ActivityBannerState extends State<ActivityBanner> {
   Offset travel = Offset.zero;
+  bool dragging = false;
+  void reset() => setState(() {
+    dragging = false;
+    travel = Offset.zero;
+  });
   @override
   Widget build(BuildContext context) => GestureDetector(
     behavior: HitTestBehavior.opaque,
     dragStartBehavior: DragStartBehavior.down,
-    onPanStart: (_) => travel = Offset.zero,
-    onPanUpdate: (event) => travel += event.delta,
+    onPanStart: (_) => setState(() {
+      dragging = true;
+      travel = Offset.zero;
+    }),
+    onPanUpdate: (event) => setState(() => travel += event.delta),
+    onPanCancel: reset,
     onPanEnd: (event) {
+      final displacement = travel;
       final velocity = event.velocity.pixelsPerSecond;
-      if (travel.dx.abs() > travel.dy.abs()) {
+      reset();
+      if (displacement.dx.abs() > displacement.dy.abs()) {
         if (!widget.busy &&
-            (travel.dx.abs() >= 32 || velocity.dx.abs() >= 150)) {
-          widget.onStep(travel.dx < 0 ? 1 : -1);
+            (displacement.dx.abs() >= 32 || velocity.dx.abs() >= 150)) {
+          widget.onStep(displacement.dx < 0 ? 1 : -1);
         }
-      } else if (travel.dy.abs() >= 60 || velocity.dy.abs() >= 150) {
+      } else if (displacement.dy.abs() >= 60 || velocity.dy.abs() >= 150) {
         widget.onDismiss();
       }
     },
-    child: Glass(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-        child: Text(
-          widget.name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            height: 1.2,
+    child: AnimatedContainer(
+      duration: dragging ? Duration.zero : const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      transform: Matrix4.translationValues(travel.dx, travel.dy, 0),
+      child: Glass(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          child: Text(
+            widget.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
+            ),
           ),
         ),
       ),
