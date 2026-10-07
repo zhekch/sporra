@@ -61,4 +61,31 @@ void main() {
     expect(undos, 1);
     dismissToast();
   });
+  testWidgets(
+    'brief failures stay quiet but sustained failures become visible',
+    (tester) async {
+      Future<void> notice(String? message) => tester.pumpWidget(
+        MaterialApp(
+          home: DelayedErrorNotice(
+            message: message,
+            builder: (value) => Text(value),
+          ),
+        ),
+      );
+      await notice('Connection lost');
+      await tester.pump(const Duration(milliseconds: 200));
+      await notice(null);
+      await tester.pump(const Duration(seconds: 4));
+      expect(find.text('Connection lost'), findsNothing);
+      await notice('First failure');
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.text('First failure'), findsNothing);
+      await notice('Persistent failure');
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('Persistent failure'), findsOneWidget);
+      await notice(null);
+      expect(find.text('Persistent failure'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

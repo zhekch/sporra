@@ -6107,11 +6107,12 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
 }
 
 .menu-expand svg {
+  transform: rotate(-90deg);
   transition: transform 0.18s ease;
 }
 
 .menu-expand.open svg {
-  transform: rotate(180deg);
+  transform: rotate(0deg);
 }
 
 .routes-options {
@@ -11716,7 +11717,24 @@ body.intro-picking .layers {
   appearance: none; border: 0; background: transparent; color: inherit;
   font: inherit; padding: 4px 0; cursor: pointer;
 }
-.cell-visit-toggle span { font-size: 22px; line-height: 14px; }
+.cell-visit-toggle { line-height: 18px; }
+.cell-visit-toggle .visit-chevron {
+  display: inline-block; width: 6px; height: 6px; margin-right: 3px;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform .22s ease-in-out;
+}
+.cell-visit-toggle[aria-expanded='true'] .visit-chevron { transform: rotate(45deg); }
+.place-name-dots { display: inline-flex; align-items: center; gap: 5px; height: 25.2px; }
+.place-name-dots i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .4; animation: place-dot 1.1s ease-in-out infinite; }
+.place-name-dots i:nth-child(2) { animation-delay: .15s; }
+.place-name-dots i:nth-child(3) { animation-delay: .3s; }
+.place-name-ready { animation: place-name-in .22s ease-out; }
+@keyframes place-dot { 50% { opacity: .7; } }
+@keyframes place-name-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .cell-visit-toggle .visit-chevron { transition: none; }
+  .place-name-dots i, .place-name-ready { animation: none; }
+}
 #cell-info-dates { max-height: min(30vh, 260px); overflow-y: auto; margin-top: 10px; }
 #cell-info-dates ul { list-style: none; margin: 0; padding: 0; }
 #cell-info-dates li { padding: 7px 0; font-size: 14px; }

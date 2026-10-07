@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:sporra_flutter/src/api.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -97,6 +98,21 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       addTearDown(tester.view.resetPadding);
+      final impacts = <dynamic>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'HapticFeedback.vibrate')
+            impacts.add(call.arguments);
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
       late BuildContext context;
       await tester.pumpWidget(
         ProviderScope(
@@ -163,6 +179,7 @@ void main() {
         corners,
       );
       expect(find.text('Submenu content'), findsOneWidget);
+      expect(impacts, isEmpty);
       expect(
         webTheme(menuRadius: menuCornerRadius(context)).dialogTheme.shape,
         RoundedSuperellipseBorder(borderRadius: corners),
@@ -175,6 +192,7 @@ void main() {
       await tester.tapAt(const Offset(5, 100));
       await tester.pumpAndSettle();
       expect(find.text('Only the new panel'), findsNothing);
+      expect(impacts, ['HapticFeedbackType.lightImpact']);
       showSettings(context, app);
       await tester.pumpAndSettle();
       expect(find.byType(ChoiceChip), findsNWidgets(7));
@@ -194,6 +212,10 @@ void main() {
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(app.menuOpen, isFalse);
+      expect(impacts, [
+        'HapticFeedbackType.lightImpact',
+        'HapticFeedbackType.lightImpact',
+      ]);
       final removal = confirmRemoval(
         context,
         'Remove trip',

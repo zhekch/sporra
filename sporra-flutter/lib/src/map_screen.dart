@@ -39,6 +39,7 @@ class LayerPatch implements LayerProperties {
 const sheetZoomTolerance = 0.35;
 const sheetReuseInset = 0.1;
 const brushBridgeBatch = 32;
+const connectionRetryDelay = Duration(seconds: 2);
 
 const activityCardMaxHeight = 430.0;
 const activityCardHeightShare = 0.64;
@@ -101,6 +102,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
     zoom: 7,
   );
   String? mapError;
+  Timer? errorToastTimer;
+  Timer? mapRetryTimer;
   Map<String, dynamic>? placeInfo;
   Map<String, dynamic>? observedTrack;
   final cellFacts = <String, Map<String, dynamic>>{};
@@ -208,6 +211,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       final point = location ?? await controller.requestMyLocationLatLng();
       if (point == null ||
           !mounted ||
+          !locating ||
           !loaded ||
           token != generation ||
           !identical(map, controller)) {
@@ -501,7 +505,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
       if (mounted) setState(() => mapError = null);
     } catch (e) {
       if (mounted && token == generation && loaded) {
-        setState(() => mapError = '$e');
+        setState(() => mapError = readableError('$e'));
+        if (isConnectionFailure(e)) {
+          mapRetryTimer?.cancel();
+          mapRetryTimer = Timer(connectionRetryDelay, () {
+            mapRetryTimer = null;
+            if (mounted && mapError != null && loaded) unawaited(refresh());
+          });
+        }
       }
     } finally {
       refreshing = false;
@@ -1054,7 +1065,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
               ?.geometry;
     setState(
       () => placeInfo = {
-        'name': 'This place',
+        'name': null,
         'geometry': geometry,
         if (factsReady) 'visited': local != null,
         ...?local,
@@ -1338,11 +1349,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
+      if (state == AppLifecycleState.paused) setState(() => locating = false);
       unawaited(ref.read(appProvider).api.flushCache());
     } else if (state == AppLifecycleState.resumed) {
-      setState(() => locating = true);
       updateSun();
-      unawaited(focusLocation());
       unawaited(refresh());
     }
   }
@@ -1350,6 +1360,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    errorToastTimer?.cancel();
+    mapRetryTimer?.cancel();
     generation++;
     tapRequest++;
     sunTimer?.cancel();
@@ -1370,11 +1382,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
     if (observedError != app.error) {
       observedError = app.error;
-      final message = app.error;
-      if (message != null) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            showToast(context, message, top: app.track == null ? 12 : 76);
+      if (app.error == null) {
+        errorToastTimer?.cancel();
+        errorToastTimer = null;
+      } else {
+        errorToastTimer ??= Timer(persistentErrorDelay, () {
+          final current = ref.read(appProvider);
+          if (mounted && current.error != null) {
+            showToast(
+              context,
+              readableError(current.error!),
+              top: current.track == null ? 12 : 76,
+            );
           }
         });
       }
@@ -1492,9 +1511,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
               if (!loaded && mapError == null)
                 const Positioned.fill(
                   child: IgnorePointer(
-                    child: Center(
-                      child: LoadingIndicator(label: 'Loading your map…'),
-                    ),
+                    child: Center(child: LoadingIndicator(showLabel: false)),
                   ),
                 ),
               if (app.editing && !app.clearingRegion)
@@ -1760,17 +1777,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           },
                           child: Dismissible(
                             key: const ValueKey('place-card'),
-                            direction: DismissDirection.vertical,
+                            direction: DismissDirection.down,
                             onDismissed: (_) => setState(() {
                               tapRequest++;
                               placeInfo = null;
                             }),
                             child: PlaceCard(
-                              key: ValueKey((
-                                placeInfo!['lng'],
-                                placeInfo!['lat'],
-                                placeInfo!['name'],
-                              )),
+                              key: ValueKey(('place', tapRequest)),
                               info: placeInfo!,
                               onClose: () => setState(() {
                                 tapRequest++;
@@ -2010,41 +2023,49 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     ),
                   ),
                 ),
-              if ((refreshing || app.busy) && !app.menuOpen)
+              if (loaded && (refreshing || app.busy) && !app.menuOpen)
                 const SafeArea(
                   child: Align(
                     alignment: Alignment.topCenter,
-                    child: LinearProgressIndicator(minHeight: 2),
+                    child: IgnorePointer(
+                      child: Padding(
+                        padding: EdgeInsets.only(top: 12),
+                        child: LoadingIndicator(showLabel: false),
+                      ),
+                    ),
                   ),
                 ),
-              if (mapError != null && !app.menuOpen)
-                SafeArea(
-                  child: Align(
-                    alignment: Alignment.topCenter,
-                    child: Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        16,
-                        app.track == null ? 12 : 76,
-                        16,
-                        0,
-                      ),
-                      child: Dismissible(
-                        key: ValueKey('map-error-$mapError'),
-                        direction: DismissDirection.vertical,
-                        onDismissed: (_) => setState(() => mapError = null),
-                        child: Glass(
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(child: Text(mapError!)),
-                                CupertinoButton(
-                                  padding: const EdgeInsets.all(12),
-                                  onPressed: () => unawaited(refresh()),
-                                  child: const Text('Retry'),
-                                ),
-                              ],
+              if (!app.menuOpen)
+                DelayedErrorNotice(
+                  message: mapError,
+                  builder: (message) => SafeArea(
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          16,
+                          app.track == null ? 12 : 76,
+                          16,
+                          0,
+                        ),
+                        child: Dismissible(
+                          key: ValueKey('map-error-$message'),
+                          direction: DismissDirection.vertical,
+                          onDismissed: (_) => setState(() => mapError = null),
+                          child: Glass(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(child: Text(message)),
+                                  CupertinoButton(
+                                    padding: const EdgeInsets.all(12),
+                                    onPressed: () => unawaited(refresh()),
+                                    child: const Text('Retry'),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),

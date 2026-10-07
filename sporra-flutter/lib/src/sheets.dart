@@ -1,5 +1,7 @@
 import 'loading.dart';
 
+import 'package:flutter/services.dart';
+
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'native_map.dart';
@@ -233,6 +235,7 @@ Future<void> panel(
     if (generation == _panelGeneration) {
       _activePanel = null;
       app.setMenuOpen(false);
+      await HapticFeedback.lightImpact();
     }
   }
 }
@@ -311,9 +314,8 @@ Future<void> showMenuSheet(
           shrinkWrap: true,
           padding: EdgeInsets.zero,
           children: [
-            ExpansionTile(
+            DisclosureTile(
               title: const Text('Appearance'),
-              trailing: const Icon(CupertinoIcons.chevron_right, size: 18),
               children: [
                 ChoiceRow(
                   label: 'Basemap',
@@ -487,9 +489,8 @@ Future<void> showMenuSheet(
                 a.changed();
               },
             ),
-            ExpansionTile(
+            DisclosureTile(
               title: const Text('Overlay options'),
-              trailing: const Icon(CupertinoIcons.chevron_right, size: 18),
               children: [
                 GlassSwitch(
                   title: const Text('Places answer a tap'),
@@ -717,7 +718,7 @@ Widget statisticsList(AppState app) {
             ),
             section('Countries'),
             for (final c in countries)
-              ExpansionTile(
+              DisclosureTile(
                 key: PageStorageKey('coverage-${c['id']}'),
                 onExpansionChanged: (open) => setState(() {
                   if (open) {
@@ -752,10 +753,8 @@ Widget statisticsList(AppState app) {
                   children: [
                     coverageValue(c, sort),
                     const SizedBox(width: 8),
-                    Icon(
-                      openedCountries.contains(c['id'])
-                          ? CupertinoIcons.chevron_down
-                          : CupertinoIcons.chevron_right,
+                    DisclosureChevron(
+                      expanded: openedCountries.contains(c['id']),
                       size: 14,
                     ),
                   ],
@@ -1586,14 +1585,14 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
                   child: const Text('Sync now'),
                 ),
               ),
-              ExpansionTile(
+              DisclosureTile(
                 title: const Text('Strava'),
                 initiallyExpanded: true,
                 children: [
                   ConnectorSettings(app: app, kind: 'strava', inline: true),
                 ],
               ),
-              ExpansionTile(
+              DisclosureTile(
                 title: const Text('Home Assistant'),
                 initiallyExpanded: true,
                 children: [
@@ -2157,7 +2156,7 @@ Widget activitiesList(AppState app) {
                 for (final activity in bucket.value)
                   activityRow(context, app, activity),
               ] else
-                ExpansionTile(
+                DisclosureTile(
                   key: PageStorageKey('activity-group-$group-${bucket.key}'),
                   initiallyExpanded: true,
                   title: Text(

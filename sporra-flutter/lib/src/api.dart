@@ -14,6 +14,20 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+bool isConnectionFailure(Object error) =>
+    error is SocketException ||
+    error is http.ClientException ||
+    error is TimeoutException ||
+    (error is ApiException && error.status >= 500);
+
+String readableError(String message) =>
+    RegExp(
+      r'SocketException|ClientException|TimeoutException|Connection (?:reset|refused)|network.*(?:lost|connection)',
+      caseSensitive: false,
+    ).hasMatch(message)
+    ? 'Unable to reach your server. Check your connection and retry.'
+    : message;
+
 class SporraApi {
   SporraApi({http.Client? client})
     : client =

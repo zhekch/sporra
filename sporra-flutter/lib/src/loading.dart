@@ -104,3 +104,72 @@ class _LoadingRing extends CustomPainter {
   @override
   bool shouldRepaint(_LoadingRing old) => old.ink != ink;
 }
+
+class LoadingDots extends StatefulWidget {
+  const LoadingDots({super.key});
+  @override
+  State<LoadingDots> createState() => _LoadingDotsState();
+}
+
+class _LoadingDotsState extends State<LoadingDots>
+    with SingleTickerProviderStateMixin {
+  late final pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  );
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      pulse.stop();
+    } else if (!pulse.isAnimating) {
+      pulse.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: 'Loading place name',
+    child: SizedBox(
+      height: 25.2,
+      child: AnimatedBuilder(
+        animation: pulse,
+        builder: (_, _) => Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var i = 0; i < 3; i++)
+              Padding(
+                padding: EdgeInsets.only(right: i == 2 ? 0 : 5),
+                child: Opacity(
+                  opacity: MediaQuery.disableAnimationsOf(context)
+                      ? 0.6
+                      : 0.3 +
+                            0.4 *
+                                (0.5 +
+                                    0.5 *
+                                        math.sin(
+                                          pulse.value * 2 * math.pi - i * 0.8,
+                                        )),
+                  child: const SizedBox.square(
+                    dimension: 5,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.white60,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+}

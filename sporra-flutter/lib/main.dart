@@ -45,7 +45,7 @@ class _RootScreenState extends ConsumerState<RootScreen> {
     final app = ref.watch(appProvider);
     if (!app.ready) {
       return const Scaffold(
-        body: Center(child: LoadingIndicator(label: 'Loading your map…')),
+        body: Center(child: LoadingIndicator(showLabel: false)),
       );
     }
     return app.user == null ? const LoginScreen() : const MapScreen();

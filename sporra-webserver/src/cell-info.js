@@ -60,7 +60,15 @@ export function mountCellInfo({ onClose, loadDates } = {}) {
 
   function show(info) {
     const request = ++generation;
-    titleEl.textContent = info.title ?? 'This place';
+    titleEl.replaceChildren();
+    if (info.title) titleEl.textContent = info.title;
+    else {
+      const dots = document.createElement('span');
+      dots.className = 'place-name-dots';
+      dots.setAttribute('aria-label', 'Loading place name');
+      for (let i = 0; i < 3; i++) dots.append(document.createElement('i'));
+      titleEl.append(dots);
+    }
     coordEl.title = info.sizeLabel ?? '';
     rowsEl.replaceChildren();
     datesEl.replaceChildren();
@@ -73,7 +81,12 @@ export function mountCellInfo({ onClose, loadDates } = {}) {
       coordEl.replaceChildren();
       datesEl.replaceChildren();
       datesEl.hidden = !expanded || !dates.length;
-      if (!info.title && current.name) titleEl.textContent = current.name;
+      if (!info.title && current.name && titleEl.textContent !== current.name) {
+        const name = document.createElement('span');
+        name.className = 'place-name-ready';
+        name.textContent = current.name;
+        titleEl.replaceChildren(name);
+      }
       if (!dates.length) {
         coordEl.textContent = current.visited === false ? 'Not visited yet' : 'You have been here';
         return;
@@ -85,10 +98,14 @@ export function mountCellInfo({ onClose, loadDates } = {}) {
       toggle.setAttribute('aria-expanded', String(expanded));
       toggle.setAttribute('aria-controls', 'cell-info-dates');
       const chevron = document.createElement('span');
-      chevron.textContent = '›';
+      chevron.className = 'visit-chevron';
       chevron.setAttribute('aria-hidden', 'true');
       toggle.append(chevron);
-      toggle.addEventListener('click', () => { expanded = !expanded; renderDates({}); });
+      toggle.addEventListener('click', () => {
+        expanded = !expanded;
+        toggle.setAttribute('aria-expanded', String(expanded));
+        datesEl.hidden = !expanded;
+      });
       coordEl.append(toggle);
       const list = document.createElement('ul');
       for (const value of dates) {

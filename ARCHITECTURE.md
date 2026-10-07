@@ -10178,3 +10178,26 @@ responses after the card changes or closes and retains local dates when offline.
 The Flutter activity card toggles Show all / Show this without closing the
 activity. Its outside spacing is 12 px on phone sides and bottom; action-row
 padding is 14 px on every side. Missing graph data adds no empty-state paragraph.
+
+Flutter 0.13.1 and web 0.140.1 animate disclosure chevrons from right to down
+through a quarter turn (220 ms), including menus, grouped activities and coverage.
+Navigation chevrons stay right-facing. Place cards omit the date-list heading.
+An unresolved name uses three pulsing gray dots, with a 220 ms fade into the name;
+the card's identity follows the tap request rather than the incoming name so the
+transition keeps its state. Reduced motion disables these animations. The web
+disclosure retains its button DOM node while toggling, allowing CSS rotation.
+
+Automatic location focus is armed only when the map screen starts. Resuming
+refreshes data and solar lighting without arming a camera move, and pausing
+cancels a pending focus; permission-dialog inactivity alone does not cancel it.
+The location button still explicitly arms a new focus. Startup indicators have
+no visible label, and background map reads use the same white ring instead of
+a linear progress bar. Place-card dismissal accepts only downward swipes.
+Closing the final menu panel triggers a light haptic; replacing a panel does not.
+
+Map failures wait persistentErrorDelay (3 s) before showing a notice, cancelling
+that timer on recovery. Connection failures automatically retry after
+connectionRetryDelay (2 s). App error toasts use the same delay and read the current
+error when it expires. Changed error text does not restart a continuing failure's
+window. Socket/client/timeout messages are replaced by a readable connection
+message. Background timers are cancelled when the map screen is disposed.

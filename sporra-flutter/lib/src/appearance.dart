@@ -190,3 +190,71 @@ class ChoiceRow extends StatelessWidget {
     ),
   );
 }
+
+class DisclosureChevron extends StatelessWidget {
+  const DisclosureChevron({
+    super.key,
+    required this.expanded,
+    this.size = 18,
+    this.color,
+  });
+  final bool expanded;
+  final double size;
+  final Color? color;
+  @override
+  Widget build(BuildContext context) => AnimatedRotation(
+    turns: expanded ? 0.25 : 0,
+    duration: MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 220),
+    curve: Curves.easeInOut,
+    child: Icon(CupertinoIcons.chevron_right, size: size, color: color),
+  );
+}
+
+class DisclosureTile extends StatefulWidget {
+  const DisclosureTile({
+    super.key,
+    required this.title,
+    required this.children,
+    this.subtitle,
+    this.trailing,
+    this.initiallyExpanded = false,
+    this.onExpansionChanged,
+  });
+  final Widget title;
+  final Widget? subtitle, trailing;
+  final List<Widget> children;
+  final bool initiallyExpanded;
+  final ValueChanged<bool>? onExpansionChanged;
+  @override
+  State<DisclosureTile> createState() => _DisclosureTileState();
+}
+
+class _DisclosureTileState extends State<DisclosureTile> {
+  late bool expanded = widget.initiallyExpanded;
+  bool restored = false;
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!restored) {
+      expanded =
+          PageStorage.maybeOf(context)?.readState(context) as bool? ??
+          widget.initiallyExpanded;
+      restored = true;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ExpansionTile(
+    title: widget.title,
+    subtitle: widget.subtitle,
+    initiallyExpanded: expanded,
+    trailing: widget.trailing ?? DisclosureChevron(expanded: expanded),
+    onExpansionChanged: (open) {
+      setState(() => expanded = open);
+      widget.onExpansionChanged?.call(open);
+    },
+    children: widget.children,
+  );
+}

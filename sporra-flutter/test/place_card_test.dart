@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sporra_flutter/src/appearance.dart';
 import 'package:sporra_flutter/src/place_card.dart';
+import 'package:sporra_flutter/src/loading.dart';
 
 void main() {
   Future<void> mount(
@@ -63,9 +64,20 @@ void main() {
     });
     final height = tester.getSize(find.byType(PlaceCard)).height;
     expect(find.text('3 visits'), findsOneWidget);
+    expect(find.text('Recorded dates'), findsNothing);
     expect(find.byIcon(CupertinoIcons.chevron_right), findsOneWidget);
     expect(find.text('03.02.2024'), findsNothing);
     await tester.tap(find.text('3 visits'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 110));
+    final arrow = tester.widget<RotationTransition>(
+      find.descendant(
+        of: find.byType(DisclosureChevron),
+        matching: find.byType(RotationTransition),
+      ),
+    );
+    expect(arrow.turns.value, greaterThan(0));
+    expect(arrow.turns.value, lessThan(0.25));
     await tester.pumpAndSettle();
     expect(tester.getSize(find.byType(PlaceCard)).height, greaterThan(height));
     for (final value in ['05.04.2024', '03.02.2024', '01.01.2024']) {
@@ -88,5 +100,18 @@ void main() {
     expect(find.text('You have been here'), findsOneWidget);
     expect(find.text('Marked by hand'), findsNothing);
     expect(find.byIcon(CupertinoIcons.chevron_right), findsNothing);
+  });
+  testWidgets('place name pulses while pending and fades into the result', (
+    tester,
+  ) async {
+    await mount(tester, {'visited': false});
+    expect(find.byType(LoadingDots), findsOneWidget);
+    expect(find.text('This place'), findsNothing);
+    await tester.pump(const Duration(milliseconds: 150));
+    await mount(tester, {'name': 'Bern', 'visited': false});
+    expect(find.text('Bern'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.byType(LoadingDots), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }

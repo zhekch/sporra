@@ -1,9 +1,12 @@
 import 'dart:ui';
 
+import 'loading.dart';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import 'sheets.dart' show date;
+import 'appearance.dart' show DisclosureChevron;
 import 'map_interaction.dart' show groupedNumber, formatGround, formatPercent;
 
 class PlaceCard extends StatefulWidget {
@@ -65,15 +68,32 @@ class _PlaceCardState extends State<PlaceCard> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                '${info['name'] ?? 'This place'}',
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 21,
-                                  fontWeight: FontWeight.w600,
-                                  height: 1.2,
+                              AnimatedSwitcher(
+                                duration:
+                                    MediaQuery.disableAnimationsOf(context)
+                                    ? Duration.zero
+                                    : const Duration(milliseconds: 220),
+                                layoutBuilder: (current, previous) => Stack(
+                                  alignment: Alignment.centerLeft,
+                                  children: [...previous, ?current],
                                 ),
+                                child:
+                                    info['name'] == null ||
+                                        info['name'] == 'This place'
+                                    ? const LoadingDots(
+                                        key: ValueKey('loading-name'),
+                                      )
+                                    : Text(
+                                        '${info['name']}',
+                                        key: ValueKey(info['name']),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontSize: 21,
+                                          fontWeight: FontWeight.w600,
+                                          height: 1.2,
+                                        ),
+                                      ),
                               ),
                               const SizedBox(height: 4),
                               if (dates.isNotEmpty)
@@ -101,8 +121,8 @@ class _PlaceCardState extends State<PlaceCard> {
                                             ),
                                           ),
                                           const SizedBox(width: 6),
-                                          const Icon(
-                                            CupertinoIcons.chevron_right,
+                                          DisclosureChevron(
+                                            expanded: expanded,
                                             size: 12,
                                             color: Colors.white60,
                                           ),
@@ -142,16 +162,6 @@ class _PlaceCardState extends State<PlaceCard> {
                           padding: EdgeInsets.zero,
                           shrinkWrap: true,
                           children: [
-                            const Padding(
-                              padding: EdgeInsets.only(top: 4, bottom: 8),
-                              child: Text(
-                                'Recorded dates',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.white54,
-                                ),
-                              ),
-                            ),
                             for (final value in dates)
                               Padding(
                                 padding: const EdgeInsets.symmetric(

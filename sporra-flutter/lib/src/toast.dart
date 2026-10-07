@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 
 import 'appearance.dart';
 
+const persistentErrorDelay = Duration(seconds: 3);
+
 // Toasts live above sheets too, and a replacement never leaves an old timer
 // able to dismiss the new message.
 OverlayEntry? _entry;
@@ -99,4 +101,58 @@ void dismissToast() {
   _timer = null;
   _entry?.remove();
   _entry = null;
+}
+
+// A brief failed request is often followed immediately by a successful one.
+// Keep the notice quiet until the failure survives a recovery window.
+class DelayedErrorNotice extends StatefulWidget {
+  const DelayedErrorNotice({
+    super.key,
+    required this.message,
+    required this.builder,
+  });
+  final String? message;
+  final Widget Function(String message) builder;
+  @override
+  State<DelayedErrorNotice> createState() => _DelayedErrorNoticeState();
+}
+
+class _DelayedErrorNoticeState extends State<DelayedErrorNotice> {
+  Timer? timer;
+  bool visible = false;
+  @override
+  void initState() {
+    super.initState();
+    update();
+  }
+
+  @override
+  void didUpdateWidget(DelayedErrorNotice old) {
+    super.didUpdateWidget(old);
+    update();
+  }
+
+  void update() {
+    if (widget.message == null) {
+      timer?.cancel();
+      timer = null;
+      visible = false;
+    } else if (!visible && timer == null) {
+      timer = Timer(persistentErrorDelay, () {
+        timer = null;
+        if (mounted && widget.message != null) setState(() => visible = true);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => visible && widget.message != null
+      ? widget.builder(widget.message!)
+      : const SizedBox.shrink();
 }
