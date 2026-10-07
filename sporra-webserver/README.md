@@ -160,12 +160,40 @@ skips the `git pull`; `PORT` picks a different port.
 A machine you use for trying things out can follow `nightly` instead of `main`:
 
 ```sh
-npm run nightly   # check out nightly, then the same pull, build, and swap
+npm run nightly   # check out nightly, then the same update, build, and swap
+npm run main      # switch back to main, update, build, and swap
 ```
 
 That command arrives with `main`. On a checkout that is still on `main`, run
 `npm run restart` once so the script is there, then `npm run nightly`. After
 that the checkout stays on `nightly`, and `npm run restart` updates that branch.
+
+On a server that only needs the web app, enable web-only updates once:
+
+```sh
+npm run restart -- --web-only
+```
+
+This keeps `sporra-webserver/` and the root files checked out, and configures
+future fetches to download file contents only when needed. Flutter, iOS and
+macOS files are excluded. Git still fetches commit and directory metadata;
+objects already downloaded stay in `.git`. The Git remote must support partial
+clone filters (GitHub does). Use this on a deployment clone with no tracked
+edits. Your database, imports and other untracked webserver files stay in place.
+The setting persists across `restart`, `nightly` and `main`.
+
+For a fresh deployment, avoid downloading the native files in the first place:
+
+```sh
+git clone --filter=blob:none --sparse https://github.com/zhekch/sporra.git
+cd sporra
+git sparse-checkout set sporra-webserver
+cd sporra-webserver
+npm run restart
+```
+
+To restore all folders later, run `git sparse-checkout disable` from the repo.
+This downloads any missing file contents.
 
 For a private personal deployment, putting `tailscale serve` in front of
 `npm start` gives you an HTTPS URL reachable only from your own devices. HTTPS
