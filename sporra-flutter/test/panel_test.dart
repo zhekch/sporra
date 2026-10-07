@@ -167,7 +167,7 @@ void main() {
         builder: (_) => const AlertDialog(content: Text('One dialog')),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Mapbox public token'), findsNothing);
+      expect(find.text('Mapbox public token'), findsOneWidget);
       Navigator.of(context).pop();
       await tester.pumpAndSettle();
       expect(find.text('Mapbox public token'), findsOneWidget);

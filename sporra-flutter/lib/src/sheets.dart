@@ -89,7 +89,7 @@ Future<void> panel(
         _activePanel = ModalRoute.of(context);
         if (fullscreen) {
           return Offstage(
-            offstage: !(ModalRoute.of(context)?.isCurrent ?? true),
+            offstage: false,
             child: SizedBox(
               height: MediaQuery.sizeOf(context).height,
               width: MediaQuery.sizeOf(context).width,
@@ -137,7 +137,7 @@ Future<void> panel(
           );
         }
         return Offstage(
-          offstage: !(ModalRoute.of(context)?.isCurrent ?? true),
+          offstage: false,
           child: SafeArea(
             bottom: false,
             child: Padding(
@@ -545,7 +545,7 @@ Future<void> showMenuSheet(
             const Padding(
               padding: EdgeInsets.all(24),
               child: Text(
-                'Sporra Preview · 0.9.0',
+                'Sporra Preview · 0.9.1',
                 style: TextStyle(color: Colors.white38),
               ),
             ),
@@ -808,9 +808,6 @@ Widget coverageValue(Map area, String sort) {
     ],
   );
 }
-
-Future<void> showSources(BuildContext context, AppState app) =>
-    panel(context, 'Sources', _Sources(app: app));
 
 class _Sources extends StatefulWidget {
   const _Sources({required this.app});
@@ -1540,6 +1537,40 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
       builder: (context, ref, _) {
         ref.watch(appProvider);
         final d = app.device;
+        if (tab == 'Sources') return _Sources(app: app);
+        if (tab == 'Administration' &&
+            (app.user?['admin'] == true || app.user?['isAdmin'] == true)) {
+          return administrationList(app);
+        }
+        if (tab == 'Sync') {
+          return ListView(
+            children: [
+              ListTile(
+                title: const Text('Your phone'),
+                subtitle: Text('${d['deviceName'] ?? 'iPhone'}'),
+                leading: const Icon(CupertinoIcons.device_phone_portrait),
+                trailing: CupertinoButton(
+                  onPressed: app.busy ? null : app.sync,
+                  child: const Text('Sync now'),
+                ),
+              ),
+              ExpansionTile(
+                title: const Text('Strava'),
+                initiallyExpanded: true,
+                children: [
+                  ConnectorSettings(app: app, kind: 'strava', inline: true),
+                ],
+              ),
+              ExpansionTile(
+                title: const Text('Home Assistant'),
+                initiallyExpanded: true,
+                children: [
+                  ConnectorSettings(app: app, kind: 'ha', inline: true),
+                ],
+              ),
+            ],
+          );
+        }
         return ListView(
           shrinkWrap: true,
           children: [
@@ -1547,7 +1578,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               section('Your phone'),
               ListTile(
                 title: const Text('Background location'),
-                trailing: DropdownButton<int>(
+                trailing: IOSPicker<int>(
                   value: d['cadence'] ?? -1,
                   items: const [
                     DropdownMenuItem(value: -1, child: Text('Off')),
@@ -1572,7 +1603,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               ),
               ListTile(
                 title: const Text('Location precision'),
-                trailing: DropdownButton<int>(
+                trailing: IOSPicker<int>(
                   value: d['precision'] ?? 80,
                   items: [30, 80, 200, 0]
                       .map(
@@ -1632,19 +1663,6 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
                   Navigator.pop(context);
                 },
               ),
-            if (tab == 'Sync')
-              ListTile(
-                leading: const Icon(Icons.sync),
-                title: const Text('Sync connections'),
-                onTap: () => showConnections(context, app),
-              ),
-            if (tab == 'Administration' &&
-                (app.user?['admin'] == true || app.user?['isAdmin'] == true))
-              ListTile(
-                leading: const Icon(Icons.admin_panel_settings_outlined),
-                title: const Text('Administration'),
-                onTap: () => showAdmin(context, app),
-              ),
             if (tab == 'Personal') ...[
               section('Personal'),
               ListTile(
@@ -1670,7 +1688,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               fact('Server', app.api.server),
               ListTile(
                 title: const Text('Clock'),
-                trailing: DropdownButton<String>(
+                trailing: IOSPicker<String>(
                   value: '${app.prefs['clock'] ?? 'auto'}',
                   items: const [
                     DropdownMenuItem(value: 'auto', child: Text('Automatic')),
@@ -1685,12 +1703,11 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               ),
             ],
             if (tab == 'Account') ...[
-              if (app.user?['admin'] == true)
-                ListTile(
-                  title: const Text('Backups'),
-                  leading: const Icon(Icons.backup_outlined),
-                  onTap: () => showBackup(context, app),
-                ),
+              if (app.user?['admin'] == true ||
+                  app.user?['isAdmin'] == true) ...[
+                section('Backups'),
+                backupList(app),
+              ],
               ListTile(
                 title: const Text(
                   'Delete account',
@@ -1798,11 +1815,6 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
             ],
             if (tab == 'Map layers' && app.airports)
               airportCategoryControls(app),
-            if (tab == 'Sources')
-              ListTile(
-                title: const Text('Manage sources'),
-                onTap: () => showSources(context, app),
-              ),
             if (tab == 'Import')
               ListTile(
                 title: const Text('Import activities'),
@@ -1810,7 +1822,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               ),
             const ListTile(
               title: Text('Sporra Preview'),
-              subtitle: Text('0.9.0 · Native map for iOS'),
+              subtitle: Text('0.9.1 · Native map for iOS'),
             ),
           ],
         );
@@ -1826,127 +1838,62 @@ Future<void> configure(AppState app, Map<String, dynamic> patch) =>
       );
       app.changed();
     });
-Future<void> showBackup(BuildContext context, AppState app) => panel(
-  context,
-  'Backups',
-  AsyncList(
-    load: () => app.api.get('/api/backup'),
-    builder: (context, data) => ListView(
-      shrinkWrap: true,
-      children: [
+Widget backupList(AppState app) => AsyncList(
+  load: () => app.api.get('/api/backup'),
+  builder: (context, data) => ListView(
+    shrinkWrap: true,
+    physics: const NeverScrollableScrollPhysics(),
+    children: [
+      ListTile(
+        title: const Text('Back up now on the server'),
+        leading: const Icon(Icons.backup),
+        onTap: () => app.run(() async {
+          await app.api.post('/api/backup/run', {});
+        }),
+      ),
+      for (final backup in data['backup']['files'])
         ListTile(
-          title: const Text('Back up now on the server'),
-          leading: const Icon(Icons.backup),
+          title: Text(date(backup['at'])),
+          subtitle: Text(
+            '${((backup['size'] as num) / 1024 / 1024).toStringAsFixed(1)} MB',
+          ),
+          leading: const Icon(Icons.download),
           onTap: () => app.run(() async {
-            await app.api.post('/api/backup/run', {});
+            final name = '${backup['name']}';
+            final bytes = await app.api.download(
+              '/api/backup/download?name=${Uri.encodeQueryComponent(name)}',
+            );
+            final dir = await getTemporaryDirectory();
+            final file = File('${dir.path}/$name');
+            await file.writeAsBytes(bytes);
+            await SharePlus.instance.share(
+              ShareParams(
+                files: [XFile(file.path)],
+                sharePositionOrigin: context.mounted
+                    ? ((context.findRenderObject() as RenderBox?)
+                                  ?.localToGlobal(Offset.zero) ??
+                              Offset.zero) &
+                          const Size(1, 1)
+                    : null,
+              ),
+            );
           }),
         ),
-        for (final backup in data['backup']['files'])
-          ListTile(
-            title: Text(date(backup['at'])),
-            subtitle: Text(
-              '${((backup['size'] as num) / 1024 / 1024).toStringAsFixed(1)} MB',
-            ),
-            leading: const Icon(Icons.download),
-            onTap: () => app.run(() async {
-              final name = '${backup['name']}';
-              final bytes = await app.api.download(
-                '/api/backup/download?name=${Uri.encodeQueryComponent(name)}',
-              );
-              final dir = await getTemporaryDirectory();
-              final file = File('${dir.path}/$name');
-              await file.writeAsBytes(bytes);
-              await SharePlus.instance.share(
-                ShareParams(
-                  files: [XFile(file.path)],
-                  sharePositionOrigin: context.mounted
-                      ? ((context.findRenderObject() as RenderBox?)
-                                    ?.localToGlobal(Offset.zero) ??
-                                Offset.zero) &
-                            const Size(1, 1)
-                      : null,
-                ),
-              );
-            }),
-          ),
-      ],
-    ),
+    ],
   ),
 );
 
-Future<void> showConnections(BuildContext context, AppState app) => panel(
-  context,
-  'Sync connections',
-  AsyncList(
-    load: () => app.api.getMany({
-      'strava': '/api/strava',
-      'ha': '/api/ha',
-      'device': '/api/device',
-    }),
-    builder: (context, data) => ListView(
-      shrinkWrap: true,
-      children: [
+Widget administrationList(AppState app) => AsyncList(
+  load: () => app.api.get('/api/admin/users'),
+  builder: (context, data) => ListView(
+    shrinkWrap: true,
+    children: [
+      for (final u in data['users'] ?? [])
         ListTile(
-          title: const Text('Your phone'),
-          subtitle: Text('${app.device['deviceName'] ?? 'iPhone'}'),
-          leading: const Icon(Icons.phone_iphone),
-          onTap: () => showSettings(context, app),
+          title: Text('${u['username']}'),
+          subtitle: Text(u['admin'] == true ? 'Administrator' : 'Account'),
         ),
-        ListTile(
-          title: const Text('Strava'),
-          onTap: () => showConnector(context, app, 'strava'),
-          subtitle: Text(
-            data['strava']['link']?['connected'] == true
-                ? 'Connected'
-                : 'Not connected',
-          ),
-          leading: const Icon(Icons.directions_bike),
-          trailing: TextButton(
-            onPressed: data['strava']['link']?['connected'] != true
-                ? null
-                : () => app.run(() async {
-                    await app.api.post('/api/strava/sync', {});
-                    app.changed();
-                  }),
-            child: const Text('Sync'),
-          ),
-        ),
-        ListTile(
-          title: const Text('Home Assistant'),
-          onTap: () => showConnector(context, app, 'ha'),
-          subtitle: Text(
-            data['ha']['link'] == null ? 'Not connected' : 'Connected',
-          ),
-          leading: const Icon(Icons.home_outlined),
-          trailing: TextButton(
-            onPressed: data['ha']['link'] == null
-                ? null
-                : () => app.run(() async {
-                    await app.api.post('/api/ha/sync', {});
-                    app.changed();
-                  }),
-            child: const Text('Sync'),
-          ),
-        ),
-      ],
-    ),
-  ),
-);
-Future<void> showAdmin(BuildContext context, AppState app) => panel(
-  context,
-  'Administration',
-  AsyncList(
-    load: () => app.api.get('/api/admin/users'),
-    builder: (context, data) => ListView(
-      shrinkWrap: true,
-      children: [
-        for (final u in data['users'] ?? [])
-          ListTile(
-            title: Text('${u['username']}'),
-            subtitle: Text(u['admin'] == true ? 'Administrator' : 'Account'),
-          ),
-      ],
-    ),
+    ],
   ),
 );
 
@@ -2797,17 +2744,16 @@ Uri? activityLink(dynamic value) {
       : null;
 }
 
-Future<void> showConnector(BuildContext context, AppState app, String kind) =>
-    panel(
-      context,
-      kind == 'strava' ? 'Strava' : 'Home Assistant',
-      ConnectorSettings(app: app, kind: kind),
-    );
-
 class ConnectorSettings extends StatefulWidget {
-  const ConnectorSettings({super.key, required this.app, required this.kind});
+  const ConnectorSettings({
+    super.key,
+    required this.app,
+    required this.kind,
+    this.inline = false,
+  });
   final AppState app;
   final String kind;
+  final bool inline;
   @override
   State<ConnectorSettings> createState() => _ConnectorSettingsState();
 }
@@ -2872,6 +2818,7 @@ class _ConnectorSettingsState extends State<ConnectorSettings> {
       final connected = link != null && (!strava || link!['connected'] == true);
       return ListView(
         shrinkWrap: true,
+        physics: widget.inline ? const NeverScrollableScrollPhysics() : null,
         children: [
           if (app.error != null) ListTile(title: Text(app.error!)),
           ListTile(
@@ -2905,7 +2852,7 @@ class _ConnectorSettingsState extends State<ConnectorSettings> {
             ),
             ListTile(
               title: const Text('Sync interval'),
-              trailing: DropdownButton<int>(
+              trailing: IOSPicker<int>(
                 value: link!['intervalMin'] as int,
                 items: (strava ? [15, 30, 60, 180, 720] : [5, 15, 30, 60, 180])
                     .map(
@@ -2931,7 +2878,7 @@ class _ConnectorSettingsState extends State<ConnectorSettings> {
             if (!strava) ...[
               ListTile(
                 title: const Text('Location accuracy'),
-                trailing: DropdownButton<int>(
+                trailing: IOSPicker<int>(
                   value: link!['maxAccuracy'] as int,
                   items: [0, 100, 250, 500, 1000]
                       .map(
@@ -3016,5 +2963,76 @@ class ActivityMiniature extends StatelessWidget {
         '${segments.map((points) => '<polyline points="$points" fill="none" stroke="#ff9147" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>').join()}'
         '</svg>';
     return SizedBox(width: 40, height: 40, child: SvgPicture.string(svg));
+  }
+}
+
+class IOSPicker<T> extends StatelessWidget {
+  const IOSPicker({
+    super.key,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+  final T value;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T?>? onChanged;
+  @override
+  Widget build(BuildContext context) {
+    final selected = items.where((item) => item.value == value).firstOrNull;
+    return CupertinoButton(
+      padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 8),
+      onPressed: onChanged == null
+          ? null
+          : () async {
+              final choice = await showCupertinoModalPopup<T>(
+                context: context,
+                builder: (context) => CupertinoTheme(
+                  data: const CupertinoThemeData(
+                    brightness: Brightness.dark,
+                    primaryColor: Colors.white,
+                  ),
+                  child: CupertinoActionSheet(
+                    actions: [
+                      for (final item in items)
+                        CupertinoActionSheetAction(
+                          onPressed: () => Navigator.pop(context, item.value),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              item.child,
+                              if (item.value == value)
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 10),
+                                  child: Icon(
+                                    CupertinoIcons.check_mark,
+                                    size: 18,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                    ],
+                    cancelButton: CupertinoActionSheetAction(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancel'),
+                    ),
+                  ),
+                ),
+              );
+              if (choice != null && context.mounted) onChanged?.call(choice);
+            },
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          selected?.child ?? Text('$value'),
+          const SizedBox(width: 6),
+          const Icon(
+            CupertinoIcons.chevron_up_chevron_down,
+            size: 14,
+            color: Colors.white54,
+          ),
+        ],
+      ),
+    );
   }
 }

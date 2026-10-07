@@ -10072,3 +10072,13 @@ Activity/app groups collapse independently and the ungrouped choice reads None.
 Coverage opens with Share selected, shows both percentages and area, and country
 rows show visited/total regions plus a chevron. Expanded countries initially show
 eight regions with Show all/Show fewer controls, matching the web preview size.
+
+
+Flutter 0.9.1 replaces all Material dropdown menus with Cupertino action-sheet
+pickers, including clock, recording cadence, accuracy and connector intervals.
+Settings remains rendered behind modal pickers and input dialogs; previously an
+isCurrent-based Offstage gate hid the whole screen under every popup. Sources,
+sync connectors, administration and account backups are embedded directly in
+their Settings categories. Connector lists disable their inner scrolling when
+embedded so the Settings tab owns the scroll. Input, authorization, file selection
+and destructive confirmations retain their necessary dialogs/system flows.

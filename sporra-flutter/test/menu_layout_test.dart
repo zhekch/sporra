@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/cupertino.dart';
+
 import 'package:flutter_svg/flutter_svg.dart';
 
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -196,4 +198,92 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+  testWidgets('Settings stays behind iOS picker and embeds sources and sync', (
+    tester,
+  ) async {
+    final app = AppState(
+      api: SporraApi(
+        client: MockClient((request) async {
+          if (request.url.path == '/api/health') {
+            return http.Response('{"app":"sporra","version":"test"}', 200);
+          }
+          if (request.url.path == '/api/sources') {
+            return http.Response(
+              '{"sources":[{"key":"gpx","cells":20,"routes":2}]}',
+              200,
+            );
+          }
+          if (request.url.path == '/api/admin/users') {
+            return http.Response(
+              '{"users":[{"username":"Alice","admin":true}]}',
+              200,
+            );
+          }
+          if (request.url.path == '/api/backup') {
+            return http.Response('{"backup":{"files":[]}}', 200);
+          }
+          return http.Response('{"link":null}', 200);
+        }),
+      )..server = 'https://example.test',
+    );
+    app.user = {'admin': true, 'username': 'Alice'};
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appProvider.overrideWith((ref) => app)],
+        child: MaterialApp(
+          theme: webTheme(),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showSettings(context, app),
+                child: const Text('Open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    final appTab = find.widgetWithText(ChoiceChip, 'App settings');
+    await tester.ensureVisible(appTab);
+    await tester.tap(appTab);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Off'));
+    await tester.pumpAndSettle();
+    expect(find.byType(CupertinoActionSheet), findsOneWidget);
+    expect(find.text('Background location'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
+    expect(app.menuOpen, isTrue);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    final sources = find.widgetWithText(ChoiceChip, 'Sources');
+    await tester.ensureVisible(sources);
+    await tester.tap(sources);
+    await tester.pumpAndSettle();
+    expect(find.text('gpx'), findsOneWidget);
+    expect(find.text('Manage sources'), findsNothing);
+    expect(find.text('Settings'), findsOneWidget);
+    final sync = find.widgetWithText(ChoiceChip, 'Sync');
+    await tester.ensureVisible(sync);
+    await tester.tap(sync);
+    await tester.pumpAndSettle();
+    expect(find.byType(ConnectorSettings), findsNWidgets(2));
+    expect(find.text('Strava'), findsOneWidget);
+    expect(find.text('Sync connections'), findsNothing);
+    expect(find.text('Settings'), findsOneWidget);
+    final admin = find.widgetWithText(ChoiceChip, 'Administration');
+    await tester.ensureVisible(admin);
+    await tester.tap(admin);
+    await tester.pumpAndSettle();
+    expect(find.text('Alice'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
+    final account = find.widgetWithText(ChoiceChip, 'Account');
+    await tester.ensureVisible(account);
+    await tester.tap(account);
+    await tester.pumpAndSettle();
+    expect(find.text('Back up now on the server'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }
