@@ -299,9 +299,12 @@ void main() {
     );
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
-    final appTab = find.widgetWithText(ChoiceChip, 'App settings');
+    final appTab = find.widgetWithText(ChoiceChip, 'Sync');
     await tester.ensureVisible(appTab);
     await tester.tap(appTab);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ChoiceChip, 'App settings'), findsNothing);
+    await tester.tap(find.text('Phone settings'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Off'));
     await tester.pumpAndSettle();
@@ -347,20 +350,39 @@ void main() {
     await tester.ensureVisible(importTab);
     await tester.tap(importTab);
     await tester.pumpAndSettle();
-    expect(find.text('Import files'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Import files'), findsOneWidget);
+    expect(find.text('GPX, FIT, TCX, KML or GeoJSON'), findsNothing);
+    expect(find.text('Import links'), findsNothing);
     expect(find.text('Import Komoot links'), findsOneWidget);
     await tester.enterText(
       find.byType(TextField),
       'https://www.komoot.com/tour/123456',
     );
+    await tester.pump();
+    expect(find.widgetWithText(FilledButton, 'Import links'), findsOneWidget);
+    final filesButton = tester.getRect(
+      find.widgetWithText(FilledButton, 'Import files'),
+    );
+    final linksButton = tester.getRect(
+      find.widgetWithText(FilledButton, 'Import links'),
+    );
+    expect(linksButton.left, filesButton.left);
+    expect(linksButton.right, filesButton.right);
     await tester.tap(find.text('Import links'));
     await tester.pumpAndSettle();
     expect(find.text('Imported 20 cells and 1 activity.'), findsOneWidget);
+    expect(find.text('Import links'), findsNothing);
     final personal = find.widgetWithText(ChoiceChip, 'Personal');
     await tester.ensureVisible(personal);
     await tester.tap(personal);
     await tester.pumpAndSettle();
     expect(find.widgetWithText(ChoiceChip, 'Edit'), findsNothing);
+    expect(find.text('Device name'), findsNothing);
+    expect(find.text('Clear cache'), findsOneWidget);
+    expect(
+      tester.getCenter(find.text('Clear cache')).dy,
+      lessThan(tester.getCenter(find.text('Delete account')).dy),
+    );
     expect(find.text('Delete account'), findsOneWidget);
     expect(find.text('Sign out'), findsOneWidget);
     expect(find.widgetWithText(ChoiceChip, 'Account'), findsNothing);

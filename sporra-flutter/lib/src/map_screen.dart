@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'photo_markers.dart';
 import 'sf_icon.dart';
 import 'loading.dart';
@@ -809,12 +811,69 @@ class _MapScreenState extends ConsumerState<MapScreen>
     activityView = view;
   }
 
+  Object? railView;
+  final railSpecs = <String, Map<String, dynamic>>{};
+  final railSprites = <String>{};
+
+  Future<void> installRailSprites(AppState app, List sprites) async {
+    final token = generation;
+    for (final sprite in sprites) {
+      final id = sprite['id'] as String;
+      final key = '$generation:$id';
+      if (railSprites.contains(key)) continue;
+      final url = sprite['url'] as String;
+      final index = await app.api.get('$url.json');
+      final codec = await ui.instantiateImageCodec(
+        await app.api.download('$url.png'),
+      );
+      final atlas = (await codec.getNextFrame()).image;
+      try {
+        for (final entry in index.entries) {
+          if (!mounted || token != generation) return;
+          final item = entry.value as Map;
+          final w = (item['width'] as num).toInt(),
+              h = (item['height'] as num).toInt();
+          final recorder = ui.PictureRecorder();
+          final canvas = ui.Canvas(recorder);
+          canvas.drawImageRect(
+            atlas,
+            ui.Rect.fromLTWH(
+              (item['x'] as num).toDouble(),
+              (item['y'] as num).toDouble(),
+              w.toDouble(),
+              h.toDouble(),
+            ),
+            ui.Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
+            ui.Paint(),
+          );
+          final picture = recorder.endRecording();
+          final image = await picture.toImage(w, h);
+          final png = await image.toByteData(format: ui.ImageByteFormat.png);
+          await map!.addImage(
+            '$id:${entry.key}',
+            png!.buffer.asUint8List(),
+            sdf: item['sdf'] == true || id.endsWith('-sdf'),
+          );
+          image.dispose();
+          picture.dispose();
+        }
+        if (mounted && token == generation) railSprites.add(key);
+      } finally {
+        atlas.dispose();
+        codec.dispose();
+      }
+    }
+  }
+
   Future<void> updateOverlays(AppState app) async {
     final view = (
       generation,
       app.airports,
       app.airportGroups.toList().join(','),
       app.rail,
+      app.railTechnical,
+      jsonEncode(app.prefs['railGroups']),
+      app.accentTheme,
       app.trails,
       app.trailTheme,
       app.trailStrength,
@@ -899,9 +958,26 @@ class _MapScreenState extends ConsumerState<MapScreen>
         }
       }
     }
-    if (app.rail && !sources.contains('rail-ready')) {
-      final data = await app.api.get('/api/render/reference?kind=rail');
+    final railGeneration = generation;
+    final railKey = (generation, app.railTechnical, app.accentTheme);
+    if (app.rail && railView != railKey) {
+      final data = await app.api.get(
+        '/api/render/reference?kind=rail&native=1&technical=${app.railTechnical ? 1 : 0}&theme=${app.accentTheme}',
+      );
+      if (!mounted || generation != railGeneration) return;
+      await installRailSprites(app, data['sprites'] as List? ?? []);
+      if (!mounted || generation != railGeneration) return;
+      for (final id
+          in layers
+              .where((id) => id.startsWith('sporra-orm-'))
+              .toList()
+              .reversed) {
+        await map!.removeLayer(id);
+        layers.remove(id);
+      }
+      railSpecs.clear();
       for (final entry in (data['sources'] as Map).entries) {
+        if (sources.contains(entry.key)) continue;
         final source = entry.value as Map;
         await map!.addSource(
           entry.key,
@@ -914,29 +990,25 @@ class _MapScreenState extends ConsumerState<MapScreen>
         sources.add(entry.key);
       }
       final anchor = await below();
-      for (final l in (data['layers'] as List).expand(
+      for (final layer in (data['layers'] as List).expand(
         (layer) => nativeRailLayers(Map<String, dynamic>.from(layer)),
       )) {
-        await map!.addLineLayer(
-          l['source'],
-          l['id'],
-          LineLayerProperties.fromJson(
-            Map<String, dynamic>.from({...?l['paint'], ...?l['layout']}),
-          ),
-          sourceLayer: l['source-layer'],
-          minzoom: (l['minzoom'] as num?)?.toDouble(),
-          maxzoom: (l['maxzoom'] as num?)?.toDouble(),
-          filter: l['filter'],
-          belowLayerId: anchor,
-        );
-        layers.add(l['id']);
+        if (!mounted || generation != railGeneration) return;
+        await map!.addReferenceLayer(layer, below: anchor);
+        layers.add(layer['id']);
+        railSpecs[layer['id']] = layer;
       }
-      sources.add('rail-ready');
+      railView = railKey;
     }
-    for (final id in layers.where((id) => id.startsWith('sporra-orm-'))) {
-      await patchLayer(
-        id,
-        LineLayerProperties(visibility: app.rail ? 'visible' : 'none'),
+    for (final entry in railSpecs.entries) {
+      if (!layers.contains(entry.key)) continue;
+      final spec = entry.value;
+      final group = spec['metadata']?['sporra:group'] as String?;
+      await map!.setLayerVisibility(
+        entry.key,
+        app.rail &&
+            spec['layout']?['visibility'] != 'none' &&
+            (group == null || app.railGroupOn(group)),
       );
     }
     final trailSource = 'trails-${app.trailTheme}';

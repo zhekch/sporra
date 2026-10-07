@@ -1,3 +1,8 @@
+import 'rail_settings.dart';
+
+import 'dart:async';
+
+import 'backup_settings.dart';
 import 'photo_markers.dart';
 import 'loading.dart';
 import 'sf_icon.dart';
@@ -1639,6 +1644,16 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
             key: ValueKey('settings-$tab'),
             children: [
               phoneSyncTile(context, app),
+              DisclosureTile(
+                title: const Text('Phone settings'),
+                initiallyExpanded:
+                    d['cadence'] != null && d['cadence'] != -1 ||
+                    d['health'] == true ||
+                    d['photos'] == true,
+                tilePadding: const EdgeInsets.symmetric(horizontal: 20),
+                trailingWidth: 48,
+                children: phoneSettings(context, app),
+              ),
               ConnectorSettings(app: app, kind: 'strava', inline: true),
               ConnectorSettings(app: app, kind: 'ha', inline: true),
             ],
@@ -1648,88 +1663,6 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
           key: ValueKey('settings-$tab'),
           shrinkWrap: true,
           children: [
-            if (tab == 'App settings') ...[
-              section('Your phone'),
-              ListTile(
-                title: const Text('Background location'),
-                trailing: IOSPicker<int>(
-                  value: d['cadence'] ?? -1,
-                  items: const [
-                    DropdownMenuItem(value: -1, child: Text('Off')),
-                    DropdownMenuItem(
-                      value: 0,
-                      child: Text('Significant changes'),
-                    ),
-                    DropdownMenuItem(value: 60, child: Text('Every hour')),
-                    DropdownMenuItem(
-                      value: 30,
-                      child: Text('Every 30 minutes'),
-                    ),
-                    DropdownMenuItem(
-                      value: 15,
-                      child: Text('Every 15 minutes'),
-                    ),
-                    DropdownMenuItem(value: 5, child: Text('Every 5 minutes')),
-                    DropdownMenuItem(value: 1, child: Text('Every minute')),
-                  ],
-                  onChanged: (v) => configure(app, {'cadence': v}),
-                ),
-              ),
-              ListTile(
-                title: const Text('Location precision'),
-                trailing: IOSPicker<int>(
-                  value: d['precision'] ?? 80,
-                  items: [30, 80, 200, 0]
-                      .map(
-                        (n) => DropdownMenuItem(
-                          value: n,
-                          child: Text(n == 0 ? 'Every fix' : 'Within $n m'),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) => configure(app, {'precision': v}),
-                ),
-              ),
-              GlassSwitch(
-                title: const Text('Apple Health workouts'),
-                value: d['health'] == true,
-                onChanged: (v) => configure(app, {'health': v}),
-              ),
-              GlassSwitch(
-                title: const Text('Photo locations'),
-                value: d['photos'] == true,
-                onChanged: (v) => configure(app, {'photos': v}),
-              ),
-              ListTile(
-                title: const Text('Clear cache'),
-                subtitle: const Text('Reload map data and photo thumbnails'),
-                leading: const SFIcon('trash', fallback: CupertinoIcons.trash),
-                onTap: app.busy
-                    ? null
-                    : () => app.run(() async {
-                        await app.clearDeviceCache();
-                        PaintingBinding.instance.imageCache.clear();
-                        PaintingBinding.instance.imageCache.clearLiveImages();
-                        if (context.mounted) {
-                          showToast(context, 'Cache cleared');
-                        }
-                      }),
-              ),
-              fact('Queued locations', d['pending'] ?? 0),
-              ListTile(
-                title: const Text('Sync now'),
-                leading: const SFIcon(
-                  'arrow.triangle.2.circlepath',
-                  fallback: CupertinoIcons.arrow_2_circlepath,
-                ),
-                onTap: app.busy ? null : app.sync,
-              ),
-              if ('${d['error'] ?? ''}'.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text('${d['error']}'),
-                ),
-            ],
             if (tab == 'Personal') ...[
               section('Personal'),
               section('Manual edit'),
@@ -1753,18 +1686,6 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
                 ),
                 leading: const SFIcon('house', fallback: CupertinoIcons.house),
                 onTap: () => chooseHome(context, app),
-              ),
-              ListTile(
-                title: const Text('Device name'),
-                subtitle: Text('${d['deviceName'] ?? 'iPhone'}'),
-                onTap: () async {
-                  final name = await askText(
-                    context,
-                    'Device name',
-                    '${d['deviceName'] ?? 'iPhone'}',
-                  );
-                  if (name != null) await configure(app, {'deviceName': name});
-                },
               ),
               fact('Server', app.api.server),
               ListTile(
@@ -1790,18 +1711,6 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               backupList(app),
             ],
             if (tab == 'Map layers') ...[
-              ChoiceRow(
-                label: 'Basemap',
-                value: app.style,
-                choices: {
-                  'dark': 'Dark',
-                  'voyager': 'Light',
-                  'terrain': 'Terrain',
-                  'satellite': 'Satellite',
-                  if (app.hasMapbox) 'mapbox': '3D',
-                },
-                onChanged: app.setStyle,
-              ),
               ListTile(
                 title: const Text('Mapbox public token'),
                 subtitle: const Text(
@@ -1828,6 +1737,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
                   app.changed();
                 },
               ),
+              RailSettings(app: app),
               GlassSwitch(
                 title: const Text('Waymarked trails'),
                 value: app.trails,
@@ -1848,10 +1758,19 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
             if (tab == 'Map layers' && app.airports)
               airportCategoryControls(app),
             if (tab == 'Import') ...[
-              ListTile(
-                title: const Text('Import files'),
-                subtitle: const Text('GPX, FIT, KML, Timeline or an archive'),
-                onTap: () => importFile(context, app),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                child: FilledButton.icon(
+                  onPressed: app.busy ? null : () => importFile(context, app),
+                  icon: const SFIcon(
+                    'doc.badge.plus',
+                    fallback: CupertinoIcons.doc,
+                  ),
+                  label: const Text('Import files'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(double.infinity, 48),
+                  ),
+                ),
               ),
               ImportLinks(app: app),
             ],
@@ -1862,11 +1781,77 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
   ),
   fullscreen: true,
 );
+List<Widget> phoneSettings(BuildContext context, AppState app) {
+  final d = app.device;
+  return [
+    ListTile(
+      title: const Text('Background location'),
+      trailing: IOSPicker<int>(
+        value: d['cadence'] ?? -1,
+        items: const [
+          DropdownMenuItem(value: -1, child: Text('Off')),
+          DropdownMenuItem(value: 0, child: Text('Significant changes')),
+          DropdownMenuItem(value: 60, child: Text('Every hour')),
+          DropdownMenuItem(value: 30, child: Text('Every 30 minutes')),
+          DropdownMenuItem(value: 15, child: Text('Every 15 minutes')),
+          DropdownMenuItem(value: 5, child: Text('Every 5 minutes')),
+          DropdownMenuItem(value: 1, child: Text('Every minute')),
+        ],
+        onChanged: (v) => configure(app, {'cadence': v}),
+      ),
+    ),
+    ListTile(
+      title: const Text('Location precision'),
+      trailing: IOSPicker<int>(
+        value: d['precision'] ?? 80,
+        items: [30, 80, 200, 0]
+            .map(
+              (n) => DropdownMenuItem(
+                value: n,
+                child: Text(n == 0 ? 'Every fix' : 'Within $n m'),
+              ),
+            )
+            .toList(),
+        onChanged: (v) => configure(app, {'precision': v}),
+      ),
+    ),
+    GlassSwitch(
+      title: const Text('Apple Health workouts'),
+      value: d['health'] == true,
+      onChanged: (v) => configure(app, {'health': v}),
+    ),
+    GlassSwitch(
+      title: const Text('Photo locations'),
+      value: d['photos'] == true,
+      onChanged: (v) => configure(app, {'photos': v}),
+    ),
+    fact('Queued locations', d['pending'] ?? 0),
+    if ('${d['error'] ?? ''}'.isNotEmpty)
+      Padding(padding: const EdgeInsets.all(24), child: Text('${d['error']}')),
+  ];
+}
+
 Widget accountActions(BuildContext context, AppState app) => AnimatedBuilder(
   animation: app,
   builder: (context, _) => Column(
     mainAxisSize: MainAxisSize.min,
     children: [
+      ListTile(
+        title: const Text('Clear cache'),
+        subtitle: const Text('Reload map data and photo thumbnails'),
+        leading: const SFIcon('trash', fallback: CupertinoIcons.trash),
+        onTap: app.busy
+            ? null
+            : () => app.run(() async {
+                await app.clearDeviceCache();
+                PaintingBinding.instance.imageCache.clear();
+                PaintingBinding.instance.imageCache.clearLiveImages();
+                if (context.mounted) {
+                  showToast(context, 'Cache cleared');
+                }
+              }),
+      ),
+
       ListTile(
         title: const Text(
           'Delete account',
@@ -1921,34 +1906,99 @@ Widget accountActions(BuildContext context, AppState app) => AnimatedBuilder(
   ),
 );
 
-Widget phoneSyncTile(BuildContext context, AppState app) => ListTile(
-  title: Text('${app.device['deviceName'] ?? 'iPhone'}'),
-  leading: const SFIcon(
-    'iphone',
-    fallback: CupertinoIcons.device_phone_portrait,
-  ),
-  onTap: app.busy
-      ? null
-      : () async {
-          final name = await askText(
-            context,
-            'Rename phone',
-            '${app.device['deviceName'] ?? 'iPhone'}',
-          );
-          if (name != null && name.isNotEmpty) {
-            await configure(app, {'deviceName': name});
-          }
-        },
-  trailing: IconButton(
-    tooltip: 'Sync phone',
-    onPressed: app.busy ? null : app.sync,
-    icon: const SFIcon(
-      'arrow.triangle.2.circlepath',
-      fallback: CupertinoIcons.arrow_2_circlepath,
-      size: 20,
+Widget phoneSyncTile(BuildContext context, AppState app) =>
+    PhoneSyncTile(app: app);
+
+class PhoneSyncTile extends StatefulWidget {
+  const PhoneSyncTile({super.key, required this.app});
+  final AppState app;
+  @override
+  State<PhoneSyncTile> createState() => _PhoneSyncTileState();
+}
+
+class _PhoneSyncTileState extends State<PhoneSyncTile> {
+  final text = TextEditingController();
+  final focus = FocusNode();
+  bool editing = false, saving = false;
+  @override
+  void initState() {
+    super.initState();
+    focus.addListener(() {
+      if (!focus.hasFocus && editing) unawaited(save());
+    });
+  }
+
+  @override
+  void dispose() {
+    text.dispose();
+    focus.dispose();
+    super.dispose();
+  }
+
+  Future<void> save() async {
+    if (saving || !editing) return;
+    final name = text.text.trim();
+    if (name.isEmpty || name == widget.app.device['deviceName']) {
+      setState(() => editing = false);
+      return;
+    }
+    saving = true;
+    await configure(widget.app, {'deviceName': name});
+    if (mounted) {
+      setState(() {
+        saving = false;
+        editing = widget.app.error != null;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: widget.app,
+    builder: (context, _) => ListTile(
+      leading: const SFIcon(
+        'iphone',
+        fallback: CupertinoIcons.device_phone_portrait,
+      ),
+      title: editing
+          ? CupertinoTextField(
+              controller: text,
+              focusNode: focus,
+              padding: EdgeInsets.zero,
+              decoration: null,
+              maxLength: 64,
+              style: Theme.of(context).textTheme.titleMedium,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => unawaited(save()),
+            )
+          : Text('${widget.app.device['deviceName'] ?? 'iPhone'}'),
+      onTap: widget.app.busy || editing
+          ? null
+          : () {
+              text.text = '${widget.app.device['deviceName'] ?? 'iPhone'}';
+              setState(() => editing = true);
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) focus.requestFocus();
+              });
+            },
+      trailing: IconButton(
+        tooltip: editing ? 'Save phone name' : 'Sync phone',
+        onPressed: widget.app.busy
+            ? null
+            : editing
+            ? save
+            : widget.app.sync,
+        icon: SFIcon(
+          editing ? 'checkmark' : 'arrow.triangle.2.circlepath',
+          fallback: editing
+              ? CupertinoIcons.check_mark
+              : CupertinoIcons.arrow_2_circlepath,
+          size: 20,
+        ),
+      ),
     ),
-  ),
-);
+  );
+}
 
 Future<void> configure(AppState app, Map<String, dynamic> patch) =>
     app.run(() async {
@@ -1957,54 +2007,38 @@ Future<void> configure(AppState app, Map<String, dynamic> patch) =>
       );
       app.changed();
     });
-Widget backupList(AppState app) => AsyncList(
-  load: () => app.api.get('/api/backup'),
-  builder: (context, data) => ListView(
-    shrinkWrap: true,
-    physics: const NeverScrollableScrollPhysics(),
-    children: [
-      ListTile(
-        title: const Text('Back up now on the server'),
-        leading: const SFIcon(
-          'externaldrive',
-          fallback: CupertinoIcons.archivebox,
+Widget backupList(AppState app) => BackupSettings(
+  app: app,
+  fileBuilder: (context, backup) => ListTile(
+    title: Text(date(backup['at'])),
+    subtitle: Text(
+      '${((backup['size'] as num) / 1024 / 1024).toStringAsFixed(1)} MB',
+    ),
+    leading: const SFIcon(
+      'arrow.down.to.line',
+      fallback: CupertinoIcons.arrow_down_to_line,
+    ),
+    onTap: () => app.run(() async {
+      final name = '${backup['name']}';
+      final bytes = await app.api.download(
+        '/api/backup/download?name=${Uri.encodeQueryComponent(name)}',
+      );
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/$name');
+      await file.writeAsBytes(bytes);
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(file.path)],
+          sharePositionOrigin: context.mounted
+              ? ((context.findRenderObject() as RenderBox?)?.localToGlobal(
+                          Offset.zero,
+                        ) ??
+                        Offset.zero) &
+                    const Size(1, 1)
+              : null,
         ),
-        onTap: () => app.run(() async {
-          await app.api.post('/api/backup/run', {});
-        }),
-      ),
-      for (final backup in data['backup']['files'])
-        ListTile(
-          title: Text(date(backup['at'])),
-          subtitle: Text(
-            '${((backup['size'] as num) / 1024 / 1024).toStringAsFixed(1)} MB',
-          ),
-          leading: const SFIcon(
-            'arrow.down.to.line',
-            fallback: CupertinoIcons.arrow_down_to_line,
-          ),
-          onTap: () => app.run(() async {
-            final name = '${backup['name']}';
-            final bytes = await app.api.download(
-              '/api/backup/download?name=${Uri.encodeQueryComponent(name)}',
-            );
-            final dir = await getTemporaryDirectory();
-            final file = File('${dir.path}/$name');
-            await file.writeAsBytes(bytes);
-            await SharePlus.instance.share(
-              ShareParams(
-                files: [XFile(file.path)],
-                sharePositionOrigin: context.mounted
-                    ? ((context.findRenderObject() as RenderBox?)
-                                  ?.localToGlobal(Offset.zero) ??
-                              Offset.zero) &
-                          const Size(1, 1)
-                    : null,
-              ),
-            );
-          }),
-        ),
-    ],
+      );
+    }),
   ),
 );
 
@@ -2823,10 +2857,10 @@ class _SettingsTabsState extends State<SettingsTabs> {
               'Import',
               'Sync',
               if (widget.app.user?['admin'] == true ||
-                  widget.app.user?['isAdmin'] == true)
+                  widget.app.user?['isAdmin'] == true) ...[
                 'Administration',
-              'App settings',
-              'Backups',
+                'Backups',
+              ],
             ])
               Padding(
                 padding: const EdgeInsets.only(right: 6),
@@ -3214,7 +3248,7 @@ class _ImportLinksState extends State<ImportLinks> {
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.all(20),
     child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const Text(
           'Import Komoot links',
@@ -3223,6 +3257,7 @@ class _ImportLinksState extends State<ImportLinks> {
         const SizedBox(height: 8),
         TextField(
           controller: text,
+          onChanged: (_) => setState(() {}),
           minLines: 2,
           maxLines: 4,
           keyboardType: TextInputType.url,
@@ -3230,13 +3265,19 @@ class _ImportLinksState extends State<ImportLinks> {
             hintText: 'Paste tour or share links',
           ),
         ),
-        const SizedBox(height: 8),
-        CupertinoButton(
-          onPressed: busy ? null : submit,
-          child: busy
-              ? const LoadingIndicator(showLabel: false)
-              : const Text('Import links'),
-        ),
+        if (text.text.trim().isNotEmpty) ...[
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: busy ? null : submit,
+            icon: busy
+                ? const LoadingIndicator(showLabel: false)
+                : const SFIcon('link', fallback: CupertinoIcons.link),
+            label: Text(busy ? 'Importing…' : 'Import links'),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(double.infinity, 48),
+            ),
+          ),
+        ],
         if (message != null) Text(message!),
       ],
     ),

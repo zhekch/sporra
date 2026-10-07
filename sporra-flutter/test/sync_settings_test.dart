@@ -159,7 +159,9 @@ void main() {
     await tester.tap(find.text('iPhone'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(CupertinoTextField), 'My iPhone');
-    await tester.tap(find.text('Save'));
+    expect(find.byType(CupertinoAlertDialog), findsNothing);
+    expect(find.byType(AlertDialog), findsNothing);
+    await tester.tap(find.byTooltip('Save phone name'));
     await tester.pumpAndSettle();
     await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpAndSettle();

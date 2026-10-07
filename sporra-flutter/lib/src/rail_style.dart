@@ -1,6 +1,6 @@
 // Native iOS cannot use feature expressions for line-dasharray. Split a web
 // match expression into equivalent filtered layers with constant dash arrays.
-Iterable<Map<String, dynamic>> nativeRailLayers(
+Iterable<Map<String, dynamic>> _nativeDashLayers(
   Map<String, dynamic> layer,
 ) sync* {
   final paint = Map<String, dynamic>.from(layer['paint'] ?? {});
@@ -42,4 +42,75 @@ Map<String, dynamic> _withDash(
     'paint': {...paint, 'line-dasharray': dash},
     'filter': ['all', if (layer['filter'] != null) layer['filter'], condition],
   };
+}
+
+// The UIKit property bridge cannot infer colors returned by a case expression.
+// Express each branch as a filtered layer with a constant color instead.
+Iterable<Map<String, dynamic>> nativeRailLayers(
+  Map<String, dynamic> layer,
+) sync* {
+  for (final dashed in _nativeDashLayers(layer)) {
+    yield* _nativeColorLayers(dashed);
+  }
+}
+
+Iterable<Map<String, dynamic>> _nativeColorLayers(
+  Map<String, dynamic> layer,
+) sync* {
+  final paint = Map<String, dynamic>.from(layer['paint'] ?? {});
+  for (final entry in paint.entries) {
+    final value = entry.value;
+    if (!entry.key.endsWith('color') ||
+        value is! List ||
+        value.isEmpty ||
+        !['case', 'match'].contains(value.first)) {
+      continue;
+    }
+    final conditions = <dynamic>[];
+    final start = value.first == 'case' ? 1 : 2;
+    for (var i = start; i < value.length - 1; i += 2) {
+      final condition = value.first == 'case'
+          ? value[i]
+          : [
+              'in',
+              value[1],
+              [
+                'literal',
+                value[i] is List ? value[i] : [value[i]],
+              ],
+            ];
+      final filter = [
+        'all',
+        if (layer['filter'] != null) layer['filter'],
+        if (conditions.isNotEmpty)
+          [
+            '!',
+            ['any', ...conditions],
+          ],
+        condition,
+      ];
+      yield* _nativeColorLayers({
+        ...layer,
+        'id': '${layer['id']}-${entry.key}-$i',
+        'paint': {...paint, entry.key: value[i + 1]},
+        'filter': filter,
+      });
+      conditions.add(condition);
+    }
+    yield* _nativeColorLayers({
+      ...layer,
+      'id': '${layer['id']}-${entry.key}-default',
+      'paint': {...paint, entry.key: value.last},
+      'filter': [
+        'all',
+        if (layer['filter'] != null) layer['filter'],
+        [
+          '!',
+          ['any', ...conditions],
+        ],
+      ],
+    });
+    return;
+  }
+  yield layer;
 }

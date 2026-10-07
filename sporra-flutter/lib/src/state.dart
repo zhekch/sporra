@@ -98,6 +98,10 @@ class AppState extends ChangeNotifier {
         .toList();
   }
 
+  bool get railTechnical => prefs['railTechnical'] == true;
+  bool railGroupOn(String key) =>
+      (prefs['railGroups'] as Map?)?[key] as bool? ??
+      !['linenumbers', 'symbols', 'milestones'].contains(key);
   bool rail = false;
   bool trails = false;
   String trailTheme = 'hiking';

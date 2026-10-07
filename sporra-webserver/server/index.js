@@ -111,7 +111,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.140.1';
+export const SERVER_VERSION = '0.141.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -2897,7 +2897,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       const user = currentUser(req);
       if (!user) return send(res, 401, { error: 'not authenticated' });
       try {
-        const data = pathname.endsWith('/style') ? await renderReference.style(query.get('name')) : await renderReference.reference(query.get('kind'), selfOrigin(req), query.get('group') ?? 'airline', query.get('index'));
+        const data = pathname.endsWith('/style') ? await renderReference.style(query.get('name')) : await renderReference.reference(query.get('kind'), selfOrigin(req), query.get('group') ?? 'airline', query.get('index'), { native: query.get('native') === '1', technical: query.get('technical') === '1', theme: query.get('theme') });
         const tag = 'reference:' + createHash('sha1').update(JSON.stringify(data)).digest('base64url');
         const head = conditional(req, res, tag);
         if (!head) return;

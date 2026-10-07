@@ -196,9 +196,10 @@ void main() {
       expect(impacts, ['HapticFeedbackType.lightImpact']);
       showSettings(context, app);
       await tester.pumpAndSettle();
-      expect(find.byType(ChoiceChip), findsNWidgets(7));
+      expect(find.byType(ChoiceChip), findsNWidgets(5));
       await tester.tap(find.widgetWithText(ChoiceChip, 'Map layers'));
       await tester.pumpAndSettle();
+      expect(find.text('Basemap'), findsNothing);
       expect(find.text('Mapbox public token'), findsOneWidget);
       expect(find.text('Home'), findsNothing);
       showDialog<void>(

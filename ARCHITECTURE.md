@@ -10244,3 +10244,29 @@ The primary map controls use native SF Symbols: magnifyingglass,
 line.3.horizontal, and location (location.fill while native location tracking
 is armed). Explore and manage uses filled chart.bar, camera, and gearshape
 symbols, with corresponding Cupertino fallbacks.
+
+Flutter Settings keeps phone location, Health and photo-sync controls in an
+expandable Phone settings section on Sync. Device names are edited in the row
+and saved with Return, its checkmark action, or loss of focus. Personal pins
+Clear cache, Delete account and Sign out above the version footer; App settings
+and Personal's duplicate device-name editor are removed. Basemap selection stays
+in the main Appearance menu.
+
+The native rail reference accepts native=1, technical=0/1 and theme=light/dark.
+It shares technical-infrastructure filters with the browser, resolves global
+style state for native SDKs, normalizes color literals and fonts, and exports all
+six groups with line, symbol, fill and circle layers. Flutter installs cropped
+PNG/SDF sprite images from the authenticated rail proxy, preserves source-layer
+filters and base visibility, and persists group/technical options in account
+preferences. Technical or theme changes rebuild the layers; group changes only
+change visibility. Native dash-array matches and conditional colors are split into equivalent
+filtered layers with constant paint values to avoid UIKit expression conversion
+failures. Hover-only expressions resolve to their inactive state on native maps.
+
+Backups embeds the server's complete schedule and status in Settings: hourly,
+six-hour, daily, weekly, monthly or custom cron, server-local time, retention,
+last/next run, size, counters, errors, folder and downloadable files. Saving uses
+/api/backup; an immediate run uses /api/backup/run and displays saved, unchanged
+or failed outcomes. Import uses equal-width 48-point file/link buttons; the link
+button is shown only while the input contains text and hides after successful
+import. The file-import subtitle is removed.

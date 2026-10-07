@@ -276,6 +276,107 @@ class NativeMapController {
     );
   }
 
+  Future<void> removeLayer(String id) =>
+      libre != null ? libre!.removeLayer(id) : box!.removeStyleLayer(id);
+  Future<void> addImage(String id, Uint8List png, {bool sdf = false}) =>
+      libre != null
+      ? libre!.addImage(id, png, sdf)
+      : box!.addImage(id, 1, mb.StyleImage.bytes(png), sdf: sdf);
+
+  Future<void> addReferenceLayer(
+    Map<String, dynamic> layer, {
+    String? below,
+  }) async {
+    final source = layer['source'] as String, id = layer['id'] as String;
+    final properties = Map<String, dynamic>.from({
+      ...?layer['paint'],
+      ...?layer['layout'],
+    });
+    final type = layer['type'];
+    if (libre == null) {
+      await box!.addStyleLayer(
+        jsonEncode(
+          nativeMapboxLayer(
+            source,
+            id,
+            type,
+            properties,
+            sourceLayer: layer['source-layer'],
+            minzoom: (layer['minzoom'] as num?)?.toDouble(),
+            maxzoom: (layer['maxzoom'] as num?)?.toDouble(),
+            filter: layer['filter'],
+          ),
+        ),
+        below == null ? null : mb.LayerPosition(below: below),
+      );
+      return;
+    }
+    for (final entry in properties.entries.toList()) {
+      final value = entry.value;
+      if (entry.key.endsWith('color') &&
+          value is List &&
+          value.length == 5 &&
+          value.first == 'rgba') {
+        final channels = [
+          (255 * (value[4] as num)).round(),
+          value[1],
+          value[2],
+          value[3],
+        ];
+        properties[entry.key] =
+            '#${channels.map((n) => (n as num).round().toRadixString(16).padLeft(2, '0')).join()}';
+      }
+    }
+    switch (type) {
+      case 'line':
+        await libre!.addLineLayer(
+          source,
+          id,
+          LineLayerProperties.fromJson(properties),
+          belowLayerId: below,
+          sourceLayer: layer['source-layer'],
+          minzoom: (layer['minzoom'] as num?)?.toDouble(),
+          maxzoom: (layer['maxzoom'] as num?)?.toDouble(),
+          filter: layer['filter'],
+        );
+      case 'symbol':
+        await libre!.addSymbolLayer(
+          source,
+          id,
+          SymbolLayerProperties.fromJson(properties),
+          belowLayerId: below,
+          sourceLayer: layer['source-layer'],
+          minzoom: (layer['minzoom'] as num?)?.toDouble(),
+          maxzoom: (layer['maxzoom'] as num?)?.toDouble(),
+          filter: layer['filter'],
+        );
+      case 'fill':
+        await libre!.addFillLayer(
+          source,
+          id,
+          FillLayerProperties.fromJson(properties),
+          belowLayerId: below,
+          sourceLayer: layer['source-layer'],
+          minzoom: (layer['minzoom'] as num?)?.toDouble(),
+          maxzoom: (layer['maxzoom'] as num?)?.toDouble(),
+          filter: layer['filter'],
+        );
+      case 'circle':
+        await libre!.addCircleLayer(
+          source,
+          id,
+          CircleLayerProperties.fromJson(properties),
+          belowLayerId: below,
+          sourceLayer: layer['source-layer'],
+          minzoom: (layer['minzoom'] as num?)?.toDouble(),
+          maxzoom: (layer['maxzoom'] as num?)?.toDouble(),
+          filter: layer['filter'],
+        );
+      default:
+        throw UnsupportedError('Unsupported reference layer: $type');
+    }
+  }
+
   Future<void> addLineLayer(
     String source,
     String id,
