@@ -14,7 +14,9 @@ import 'native.g.dart';
 final appProvider = ChangeNotifierProvider((ref) => AppState());
 
 class AppState extends ChangeNotifier {
-  AppState({SporraApi? api}) : api = api ?? SporraApi();
+  AppState({SporraApi? api}) : api = api ?? SporraApi() {
+    this.api.onMapDataChanged = changed;
+  }
   final SporraApi api;
   final native = SporraNative();
   Map<String, dynamic> device = {};
@@ -430,6 +432,20 @@ class AppState extends ChangeNotifier {
       'updatedAt': DateTime.now().millisecondsSinceEpoch,
     };
     await api.post('/api/prefs', {'prefs': prefs});
+  }
+
+  String mapDataPath(int level, {bool fine = false}) =>
+      '/api/render/${level < 6 ? 'cells' : 'regions'}?${renderQuery(level)}&info=1&fine=${fine && level >= 6 && level < 8 ? 1 : 0}';
+
+  void warmMap(int level) {
+    final levels = List.generate(9, (i) => i)
+      ..sort((a, b) => (a - level).abs().compareTo((b - level).abs()));
+    api.prefetch([
+      for (final next in levels)
+        if (next != level) mapDataPath(next),
+      mapDataPath(6, fine: true),
+      mapDataPath(7, fine: true),
+    ]);
   }
 
   String renderQuery(int level, {String? bbox}) => Uri(

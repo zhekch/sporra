@@ -18,6 +18,18 @@ double latitude(double y) =>
     (2 * math.atan(math.exp(y * 2 * math.pi / world)) - math.pi / 2) *
     180 /
     math.pi;
+// Match the server's directed longitude interval, including date-line views.
+List<dynamic> cellsInBounds(List<dynamic> rows, List<double> bounds) =>
+    rows.where((row) {
+      final lng = ((longitude((row[1] as num).toDouble()) + 180) % 360) - 180;
+      final lat = latitude((row[2] as num).toDouble());
+      return lat >= bounds[1] &&
+          lat <= bounds[3] &&
+          (bounds[0] <= bounds[2]
+              ? lng >= bounds[0] && lng <= bounds[2]
+              : lng >= bounds[0] || lng <= bounds[2]);
+    }).toList();
+
 int levelForZoom(double zoom) => zoom < 2.75
     ? 8
     : math.min(

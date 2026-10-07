@@ -38,12 +38,17 @@ class SporraApi {
   final http.Client client;
   String server = '';
   static const isolateThreshold = 64 * 1024;
-  static const cacheLimit = 128;
-  static const cacheBytes = 8 * 1024 * 1024;
+  static const cacheLimit = 512;
+  static const cacheBytes = 128 * 1024 * 1024;
   static const dataFreshness = Duration(seconds: 60);
   static const viewportFreshness = Duration(seconds: 15);
   static const referenceFreshness = Duration(days: 1);
-  static const offlineRetention = Duration(days: 1);
+  static const offlineRetention = Duration(days: 30);
+  static const mapFreshness = Duration(minutes: 5);
+  void Function()? onMapDataChanged;
+  final _revalidated = <String, DateTime>{};
+  Timer? _prefetchTimer;
+  int _prefetchGeneration = 0;
   final _cache = <String, ({String? tag, String json, DateTime at})>{};
   final _pending = <String, Future<dynamic>>{};
   int _epoch = 0;
@@ -53,15 +58,16 @@ class SporraApi {
   Future<void> _diskWork = Future.value();
   Uri uri(String path) => Uri.parse(server).resolve(path);
 
+  bool _isMap(Uri url) =>
+      url.path == '/api/render/cells' || url.path == '/api/render/regions';
+
   Duration? _freshness(Uri url) {
+    if (_isMap(url)) return mapFreshness;
     if (url.path == '/api/render/style' ||
         url.path == '/api/render/reference') {
       return referenceFreshness;
     }
-    if (url.path == '/api/render/cells' ||
-        url.path == '/api/render/regions' ||
-        url.path == '/api/render/at' ||
-        url.path == '/api/search') {
+    if (url.path == '/api/render/at' || url.path == '/api/search') {
       return viewportFreshness;
     }
     return const {
@@ -147,13 +153,17 @@ class SporraApi {
       try {
         final json = await compute(jsonEncode, snapshot);
         await file.parent.create(recursive: true);
-        await file.writeAsString(json, flush: true);
+        final temporary = File('${file.path}.tmp');
+        await temporary.writeAsString(json, flush: true);
+        await temporary.rename(file.path);
       } catch (_) {}
     });
   }
 
   void clear() {
     _epoch++;
+    cancelPrefetch();
+    _revalidated.clear();
     _cache.clear();
     _pending.clear();
     _saveTimer?.cancel();
@@ -175,7 +185,17 @@ class SporraApi {
     if (!refresh &&
         cached != null &&
         freshness != null &&
-        DateTime.now().difference(cached.at) < freshness) {
+        DateTime.now().difference(cached.at) <
+            (_isMap(url) ? offlineRetention : freshness)) {
+      if (_isMap(url) &&
+          DateTime.now().difference(cached.at) >= freshness &&
+          DateTime.now().difference(_revalidated[key] ?? cached.at) >=
+              freshness) {
+        _revalidated[key] = DateTime.now();
+        unawaited(
+          get(path, refresh: true).then<void>((_) {}, onError: (Object _) {}),
+        );
+      }
       // Callers filter and decorate GeoJSON; never lend them the cached object.
       _cache.remove(key);
       _cache[key] = cached;
@@ -236,8 +256,38 @@ class SporraApi {
       );
       _trim();
       _save();
+      if (_isMap(url) && cached != null && cached.json != json) {
+        onMapDataChanged?.call();
+      }
     }
     return json;
+  }
+
+  void cancelPrefetch() {
+    _prefetchTimer?.cancel();
+    _prefetchGeneration++;
+  }
+
+  // One speculative request at a time, after camera activity has settled.
+  void prefetch(Iterable<String> paths) {
+    cancelPrefetch();
+    final generation = _prefetchGeneration;
+    final epoch = _epoch;
+    _prefetchTimer = Timer(const Duration(seconds: 2), () async {
+      for (final path in paths) {
+        if (generation != _prefetchGeneration || epoch != _epoch) return;
+        while (_pending.isNotEmpty) {
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+          if (generation != _prefetchGeneration || epoch != _epoch) return;
+        }
+        try {
+          await get(path);
+        } catch (_) {
+          return; // A struggling connection should not spend time on speculation.
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+    });
   }
 
   static Future<dynamic> decodeJson(String json) async =>

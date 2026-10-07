@@ -214,6 +214,90 @@ void main() {
     await expectLater(api.get('/api/days'), throwsA(isA<SocketException>()));
   });
 
+  test(
+    'old map snapshots paint before conditional background validation',
+    () async {
+      final directory = await Directory.systemTemp.createTemp('sporra-map-');
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/responses.json');
+      await file.writeAsString(
+        jsonEncode({
+          'scope': 'https://example.test\nalice',
+          'entries': [
+            {
+              'url': 'https://example.test/api/render/cells?level=3',
+              'tag': '"saved"',
+              'json': '{"rows":[1]}',
+              'at': DateTime.now()
+                  .subtract(const Duration(days: 7))
+                  .millisecondsSinceEpoch,
+            },
+          ],
+        }),
+      );
+      final reply = Completer<http.Response>();
+      var requests = 0, changes = 0;
+      final api = SporraApi(
+        client: MockClient((request) {
+          requests++;
+          expect(request.headers['If-None-Match'], '"saved"');
+          return reply.future;
+        }),
+      )..server = 'https://example.test';
+      api.onMapDataChanged = () => changes++;
+      await api.restore(file, 'alice');
+      expect((await api.get('/api/render/cells?level=3'))['rows'], [1]);
+      expect((await api.get('/api/render/cells?level=3'))['rows'], [1]);
+      await Future<void>.delayed(Duration.zero);
+      expect(requests, 1);
+      reply.complete(http.Response('{"rows":[2]}', 200));
+      await api.get('/api/render/cells?level=3', refresh: true);
+      expect(changes, 1);
+      expect((await api.get('/api/render/cells?level=3'))['rows'], [2]);
+      await api.flushCache();
+    },
+  );
+
+  test(
+    'invalidated background maps cannot notify or restore old data',
+    () async {
+      final reply = Completer<http.Response>();
+      var requests = 0, changes = 0;
+      final api = SporraApi(
+        client: MockClient((_) {
+          requests++;
+          return requests == 2
+              ? reply.future
+              : Future.value(http.Response('{"rows":[1]}', 200));
+        }),
+      )..server = 'https://example.test';
+      api.onMapDataChanged = () => changes++;
+      await api.get('/api/render/regions');
+      final pending = api.get('/api/render/regions', refresh: true);
+      await Future<void>.delayed(Duration.zero);
+      api.clear();
+      reply.complete(http.Response('{"rows":[2]}', 200));
+      await pending;
+      expect(changes, 0);
+      expect((await api.get('/api/render/regions'))['rows'], [1]);
+      expect(requests, 3);
+    },
+  );
+
+  test('cancelled speculative downloads never start', () async {
+    var requests = 0;
+    final api = SporraApi(
+      client: MockClient((_) async {
+        requests++;
+        return http.Response('{}', 200);
+      }),
+    )..server = 'https://example.test';
+    api.prefetch(['/api/render/cells?level=1']);
+    api.cancelPrefetch();
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    expect(requests, 0);
+  });
+
   test('English string table has not drifted', () async {
     final result = await Process.run('node', ['Tools/gen-arb.mjs', '--check']);
     expect(result.exitCode, 0, reason: '${result.stderr}');

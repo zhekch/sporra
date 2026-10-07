@@ -9,6 +9,8 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 import 'mapbox.dart';
 import 'native_map.dart';
 
+const mapboxTileDiskBytes = 512 * 1024 * 1024;
+
 class MapboxView extends StatefulWidget {
   const MapboxView({
     super.key,
@@ -44,6 +46,14 @@ class _MapboxViewState extends State<MapboxView> {
   @override
   void initState() {
     super.initState();
+    mb.MapboxMapsOptions.setTileStoreUsageMode(
+      mb.TileStoreUsageMode.READ_AND_UPDATE,
+    );
+    unawaited(
+      mb.TileStore.createDefault()
+          .then((store) => store.setDiskQuota(mapboxTileDiskBytes))
+          .catchError((Object _) {}),
+    );
     mb.MapboxOptions.setAccessToken(widget.token);
   }
 
@@ -156,6 +166,7 @@ class _MapboxViewState extends State<MapboxView> {
     onMapCreated: (map) async {
       controller = NativeMapController.box(map)..boxCamera = widget.camera;
       widget.onCreated(controller!);
+      await map.setPrefetchZoomDelta(2);
       await map.setBounds(mb.CameraBoundsOptions(maxPitch: 85));
       await map.compass.updateSettings(mb.CompassSettings(enabled: false));
       await map.scaleBar.updateSettings(mb.ScaleBarSettings(enabled: true));

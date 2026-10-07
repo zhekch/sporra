@@ -10276,3 +10276,34 @@ import. The file-import subtitle is removed.
 
 Train track options in Flutter Settings appear only while Train tracks is on,
 matching the conditional airport category controls.
+
+
+### Persistent Flutter map snapshots (0.17.0)
+
+Map reads omit the viewport bbox: each level is a reusable account-wide snapshot
+for its colouring, accent, hidden sources, info and fine-boundary mode. Cells are
+clipped locally using the server's directed longitude interval before painting
+and building tap facts. Fine region snapshots warm all visited country boundaries.
+Cached ground paints without waiting for independent route/activity requests.
+
+The response LRU allows 512 entries and 128 MiB of estimated string memory.
+Device restoration retains entries for 30 days, still requiring the server/account
+session check. Map snapshots display immediately within that window; after five
+minutes they revalidate with ETags in the background, at most once per key per five
+minutes even on failure. Changed responses notify the map to repaint. Explicit
+refresh awaits validation; writes, native sync, sign-out and Clear cache invalidate
+responses. Saves flush a temporary file and rename it atomically. Other endpoint
+freshness remains unchanged.
+
+After painting, a two-second quiet period starts sequential warming of adjacent
+levels, remaining levels, then fine region/country snapshots. New map refreshes,
+camera motion, invalidation and app backgrounding stop further speculation;
+foreground requests pause warming until the connection is idle;
+an active HTTP download may finish. This is foreground idle prefetch, not an iOS
+background execution service or a measurement of spare bandwidth.
+
+Mapbox enables READ_AND_UPDATE on the shared native tile store with a 512 MiB
+quota to retain tile packs near browsed places across launches. Native prefetch
+zoom delta 2 requests an overview before detailed tiles. Storage and eviction stay
+with the SDK. MapLibre retains its existing ambient cache. This does not promise
+all visited basemaps offline; cold snapshots require their first download.

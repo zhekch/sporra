@@ -265,6 +265,39 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
   }
 
+  void warmMap(AppState app, int level) {
+    if (mounted &&
+        loaded &&
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+      app.warmMap(level);
+    }
+  }
+
+  Future<void>? routeRefreshWork;
+  void refreshRoutes(AppState app) {
+    if (routeRefreshWork != null) return;
+    final token = generation, revision = app.revision;
+    routeRefreshWork = () async {
+      try {
+        await updateRoutes(app);
+        if (!mounted || token != generation || !loaded) return;
+        await updateActivityFocus(app);
+        await updateTrack(app);
+      } catch (error) {
+        if (mounted && token == generation && loaded) {
+          setState(() => mapError = readableError('$error'));
+        }
+      } finally {
+        routeRefreshWork = null;
+        if (mounted &&
+            loaded &&
+            (token != generation || revision != app.revision)) {
+          refreshRoutes(ref.read(appProvider));
+        }
+      }
+    }();
+  }
+
   Future<void> refresh() async {
     if (!mounted || !loaded || map == null) return;
     if (refreshing) {
@@ -274,6 +307,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     refreshing = true;
     final token = generation;
     final app = ref.read(appProvider);
+    app.api.cancelPrefetch();
     try {
       if (!mounted || token != generation) return;
       final renderRevision = app.revision;
@@ -301,6 +335,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         app.api.revision,
         app.renderQuery(level),
         app.ground,
+        app.revision,
         zoom >= regionFineZoom,
         mapSize.width,
         mapSize.height,
@@ -315,15 +350,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
           factsBounds != null &&
           renderedZoom != null &&
           renderedAt != null &&
-          DateTime.now().difference(renderedAt!) <
-              SporraApi.viewportFreshness &&
+          DateTime.now().difference(renderedAt!) < SporraApi.mapFreshness &&
           (zoom - renderedZoom!).abs() <= sheetZoomTolerance &&
           viewportWithin(factsBounds!, visible, inset: sheetReuseInset)) {
-        await updateRoutes(app);
-        await updateActivityFocus(app);
-        await updateTrack(app);
+        refreshRoutes(app);
         await updateOverlays(app);
         await updatePlaceOutline();
+        warmMap(app, level);
         if (mounted) setState(() => mapError = null);
         return;
       }
@@ -350,17 +383,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
         east = ((east + pad + 180) % 360) - 180;
       }
       final bounds = <double>[west, south, east, north];
-      final query =
-          '${app.renderQuery(level, bbox: bounds.join(','))}&info=1&fine=${zoom >= regionFineZoom ? 1 : 0}';
-      final results = await Future.wait([
-        app.api.get('/api/render/${level < 6 ? 'cells' : 'regions'}?$query'),
-        () async {
-          await updateRoutes(app);
-          await updateActivityFocus(app);
-          await updateTrack(app);
-        }(),
-      ]);
-      final data = Map<String, dynamic>.from(results[0]);
+      final path = app.mapDataPath(level, fine: zoom >= regionFineZoom);
+      refreshRoutes(app);
+      final data = Map<String, dynamic>.from(await app.api.get(path));
+      if (level < 6) {
+        data['rows'] = cellsInBounds(data['rows'] as List, bounds);
+      }
       if (!mounted || token != generation || renderRevision != app.revision) {
         pending = true;
         return;
@@ -522,6 +550,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       renderedView = view;
       renderedZoom = zoom;
       renderedAt = DateTime.now();
+      warmMap(app, level);
       await updateOverlays(app);
       await updatePlaceOutline();
       if (mounted) setState(() => mapError = null);
@@ -555,6 +584,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   Future<void> updateRoutes(AppState app) async {
+    final token = generation;
+    final revision = app.revision;
     final view = jsonEncode([
       generation,
       app.api.revision,
@@ -578,6 +609,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
           )
         : Future<dynamic>.value(empty);
     final results = await Future.wait([summaries, geometry]);
+    if (!mounted ||
+        !loaded ||
+        token != generation ||
+        revision != app.revision) {
+      return;
+    }
     routeSummaries = List<Map<String, dynamic>>.from(results[0]['routes']);
     routeDuplicates = Map<String, dynamic>.from(results[0]['duplicates'] ?? {});
     final data = Map<String, dynamic>.from(results[1]);
@@ -1430,6 +1467,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
       if (state == AppLifecycleState.paused) setState(() => locating = false);
+      ref.read(appProvider).api.cancelPrefetch();
       unawaited(ref.read(appProvider).api.flushCache());
     } else if (state == AppLifecycleState.resumed) {
       updateSun();
@@ -1537,6 +1575,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   },
                   onLoaded: styleLoaded,
                   onCamera: (p) {
+                    app.api.cancelPrefetch();
                     camera = p;
                   },
                   onIdle: () => unawaited(refresh()),
@@ -1576,6 +1615,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   onStyleLoadedCallback: styleLoaded,
                   onCameraIdle: () => unawaited(refresh()),
                   onCameraMove: (p) {
+                    app.api.cancelPrefetch();
                     camera = p;
                     if (p.tilt > 60) {
                       unawaited(map!.moveCamera(CameraUpdate.tiltTo(60)));
