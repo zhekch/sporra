@@ -1,3 +1,4 @@
+import { normalizeVisitDates } from './visit-dates.js';
 // Visit facts shown by both the web and native info cards.
 export function summarizeCells(ids, cellMeta) {
   let addedAt = 0;
@@ -23,4 +24,17 @@ export function summarizeCells(ids, cellMeta) {
   // was a count of the storage's own units, and the card that used to lead with
   // it says how much ground and how much of the place instead.
   return { hits, addedAt, firstAt, lastAt };
+}
+
+// Legacy records only have endpoints; newer imports retain every measured day.
+// Never fill the interval between endpoints with invented visits.
+export function recordedVisitDates(ids, cellMeta) {
+  const days = new Set();
+  for (const id of ids) {
+    for (const m of cellMeta.get(id) ?? []) {
+      if (m.source === 'manual' || m.source === 'unknown') continue;
+      for (const day of normalizeVisitDates([...(m.visitDates ?? []), m.firstAt, m.lastAt])) days.add(day);
+    }
+  }
+  return [...days].sort().reverse();
 }

@@ -407,7 +407,7 @@ export function mountImport({ knownCells, knownSources, onImported, onKomoot, on
       const routes = [];
       for (const g of groups) {
         const source = groups.length === 1 ? sourceSel.value : g.source;
-        const payload = g.cells.map((c) => [c.id, c.first, c.last, c.hits, c.fixes]);
+        const payload = g.cells.map((c) => [c.id, c.first, c.last, c.hits, c.fixes, c.visitDates]);
         const r = await auth.importCells(source, payload);
         added += r.added ?? 0;
         updated += r.updated ?? 0;

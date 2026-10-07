@@ -230,6 +230,13 @@ export const auth = {
   // { sources: ['manual', …], rows: [[cellId, sourceIdx, addedAt, firstAt, lastAt, hits, fixes], …] }
   // Timestamps are epoch seconds; 0 means the source didn't carry a date.
   // `hits` counts separate visits, `fixes` the raw points behind them.
+  getVisitDates: (info, hidden = []) => {
+    const query = new URLSearchParams(info.area
+      ? {kind: info.area.kind, id: info.area.id}
+      : {lng: info.lng, lat: info.lat, level: info.level});
+    for (const source of hidden) query.append('hidden', source);
+    return api('GET', '/api/render/visit-dates?' + query);
+  },
   getCells: () => api('GET', '/api/cells'),
   // The same answer as bytes, unparsed — for src/cells-load.js, which hands it
   // to a worker rather than parse 26 MB of JSON on the thread drawing the map.

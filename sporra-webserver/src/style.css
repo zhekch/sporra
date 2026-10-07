@@ -11696,3 +11696,28 @@ body.intro-picking .layers {
     animation: none;
   }
 }
+
+/* Place cards start as a compact capsule and grow when dated visits open. */
+#cell-info {
+  width: min(380px, calc(100vw - 24px));
+  padding: 12px 24px;
+  border-radius: 40px;
+}
+#cell-info .cell-info-head { align-items: center; margin-bottom: 0; }
+#cell-info .cell-info-head > div { min-width: 0; }
+#cell-info .cell-info-title { font-size: 21px; overflow-wrap: anywhere; }
+#cell-info .cell-info-coord { font-size: 13px; margin-top: 4px; }
+#cell-info .cell-info-close {
+  width: 36px; height: 36px; border: 0; background: transparent; border-radius: 50%;
+}
+#cell-info .cell-info-close:hover { background: rgba(255,255,255,.1); }
+.cell-visit-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  appearance: none; border: 0; background: transparent; color: inherit;
+  font: inherit; padding: 4px 0; cursor: pointer;
+}
+.cell-visit-toggle span { font-size: 22px; line-height: 14px; }
+#cell-info-dates { max-height: min(30vh, 260px); overflow-y: auto; margin-top: 10px; }
+#cell-info-dates ul { list-style: none; margin: 0; padding: 0; }
+#cell-info-dates li { padding: 7px 0; font-size: 14px; }
+#cell-info .cell-info-rows:not(:empty) { margin-top: 12px; }

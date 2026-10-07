@@ -26,6 +26,7 @@
 //   • any other JSON — the generic harvester above still walks the whole tree
 
 import { mercX, mercY, pointToCell, normCol, colsOf } from './hexgrid.js';
+import { normalizeVisitDates } from './visit-dates.js';
 import { parseTcx, looksLikeTcx } from './tcx.js';
 import { climb } from './routes.js';
 
@@ -709,5 +710,6 @@ export function pointsToCells(points, { visitGap = VISIT_GAP_SEC } = {}) {
   return [...cells.values()].map(({ times, runs, ...cell }) => ({
     ...cell,
     hits: countVisits(times, runs, visitGap),
+    visitDates: normalizeVisitDates(times),
   }));
 }

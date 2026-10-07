@@ -122,26 +122,13 @@ class ActivityCard extends StatelessWidget {
                       onScrub: app.scrubActivity,
                     ),
                   ),
-                if (choices.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(18),
-                    child: Text(
-                      'This activity has no recorded speed or elevation data.',
-                      style: TextStyle(color: Colors.white60),
-                    ),
-                  ),
               ],
             ),
           ),
         ),
         const Divider(height: 1),
         Padding(
-          padding: EdgeInsets.fromLTRB(
-            14,
-            10,
-            14,
-            math.max(14, MediaQuery.paddingOf(context).bottom - 12),
-          ),
+          padding: const EdgeInsets.all(14),
           child: SizedBox(
             height: 44,
             child: Row(
@@ -158,13 +145,15 @@ class ActivityCard extends StatelessWidget {
                 Expanded(
                   child: FilledButton(
                     style: _actionStyle(context),
-                    onPressed: app.selectedRoute == null
-                        ? null
-                        : () {
-                            app.selectedRoute = null;
-                            app.changed();
-                          },
-                    child: const Text('Show all'),
+                    onPressed: () {
+                      app.selectedRoute = app.selectedRoute == null
+                          ? route['id']
+                          : null;
+                      app.changed();
+                    },
+                    child: Text(
+                      app.selectedRoute == null ? 'Show this' : 'Show all',
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),

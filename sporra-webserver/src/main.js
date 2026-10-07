@@ -1,5 +1,5 @@
 import { trackFC, bboxOfPoints } from './track-data.js';
-import { summarizeCells } from './cell-info-data.js';
+import { summarizeCells, recordedVisitDates } from './cell-info-data.js';
 import { areaGeometry, mergeAreas, tallyAreas, areaFeatures } from './area-render.js';
 import './style.css';
 import {
@@ -3285,7 +3285,7 @@ async function restoreCells(snapshot) {
     cellMeta.set(id, list.map((e) => ({ ...e })));
     // It's going back on the map, so a queued "remove it" is no longer true.
     pendingRemove.delete(id);
-    for (const e of list) rows.push([id, e.source, e.addedAt, e.firstAt, e.lastAt, e.hits, e.fixes]);
+    for (const e of list) rows.push([id, e.source, e.addedAt, e.firstAt, e.lastAt, e.hits, e.fixes, e.visitDates]);
   }
   await auth.restoreCells(rows);
   recomputeLit();
@@ -4205,7 +4205,11 @@ const cellSizeLabel = (level) =>
 // Roll the dates and counts of a set of stored cells into one summary. Taken by
 // the cell card and by the region/country card, which differ only in how they
 // decide which cells to ask about.
-const rollUpIds = (ids) => summarizeCells(ids, cellMeta);
+const rollUpIds = (ids) => {
+  const visibleMeta = new Map(ids.map(id => [id, (cellMeta.get(id) ?? []).filter(m => !hiddenSources.has(m.source))]));
+  const visitDates = recordedVisitDates(ids, visibleMeta);
+  return {...summarizeCells(ids, visibleMeta), visited: ids.length > 0, visitDates, visitCount: visitDates.length};
+};
 
 function gatherInfo(L, col, row) {
   const ids = storedUnder(L, col, row);
@@ -4213,6 +4217,7 @@ function gatherInfo(L, col, row) {
   const [lng, lat] = project(cellCenter(L, col, row));
   return {
     ...rollUpIds(ids),
+    level: L,
     lat,
     lng: wrapLng(lng),
     sizeLabel: cellSizeLabel(L),
@@ -4491,6 +4496,7 @@ function showAreaInfo(area) {
   cellInfo?.show({
     ...rollUpIds(ids),
     title: area.name,
+    area,
     sizeLabel: [what, whole ? `${Math.round(whole).toLocaleString()} km²` : null].filter(Boolean).join(' · '),
     covered,
     coveredPct: whole ? (covered / whole) * 100 : 0,
@@ -12264,7 +12270,7 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
 
   wireLayersControl();
 
-  cellInfo = mountCellInfo({ onClose: () => closeCellInfo() });
+  cellInfo = mountCellInfo({ onClose: () => closeCellInfo(), loadDates: info => auth.getVisitDates(info, hiddenSources) });
   routeInfo = mountRouteInfo({
     onClose: () => closeRouteInfo(),
     onZoom: zoomToRoute,

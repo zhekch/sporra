@@ -10148,3 +10148,33 @@ The account name/version header and category preview footers are removed.
 Activities occupies the left segment and remains the initial page. A shared
 source display helper renders apple-health and Apple Health as Apple health in
 activity app groups and Settings sources without changing stored source keys.
+
+Flutter 0.13.0 and server 0.140.0 show dated place visits as a disclosure with
+one row per recorded UTC calendar day. This count intentionally differs from
+heat-map hits (stays separated by a 24-hour gap, summed across cells). Date rows
+are deduplicated across cells and sources and sorted newest first. The collapsed
+place card is a compact capsule with a larger name, gray status and centered close
+button. Undated visits retain the plain visited status without source labels.
+
+cell_sources.visit_dates stores JSON date arrays; the startup migration leaves
+legacy rows empty. pointsToCells retains every measured day before discarding
+individual fixes. File uploads, browser imports, baked imports, device locations,
+Health, Photos, Strava and Home Assistant carry those arrays through their write
+paths. Legacy writes keep richer retained dates. The trailing optional column in
+/api/cells and restore/clear rows preserves dates through worker loading, undo
+and source renames. Existing clients can continue using the original columns.
+The date-array size participates in cell cache signatures.
+
+/api/render/at includes visitDates and visitCount. The web card uses authenticated
+/api/render/visit-dates, addressing either a grid coordinate/level or a named area
+kind/id, so search results never use a bounding-box midpoint to resolve dates.
+Both endpoints supplement old aggregate records with measured vertices from
+saved activity traces, cached by the account input and hidden-source selection.
+Same-day dated routes without a clock trace can also supply that day. Intermediate
+dates discarded by old loose-point imports need reimporting; intervals are never
+filled with invented visits. The web disclosure ignores stale asynchronous
+responses after the card changes or closes and retains local dates when offline.
+
+The Flutter activity card toggles Show all / Show this without closing the
+activity. Its outside spacing is 12 px on phone sides and bottom; action-row
+padding is 14 px on every side. Missing graph data adds no empty-state paragraph.

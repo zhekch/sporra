@@ -1,3 +1,4 @@
+import { routeVisitDates } from '../src/visit-dates.js';
 import { readFileSync } from 'node:fs';
 import { loadCountries, countryNear, searchCountries, countryIso, countryGeometry, countryAreaKm2 } from '../src/countries.js';
 import { loadRegions, regionNear, regionsInCountry, searchRegions, countriesInView, regionById, addFineRegions, addFineOutline, seamedRegion, fineRegionsVersion, regionGeometry, geometryAreaM2 } from '../src/regions.js';
@@ -7,13 +8,14 @@ import { continentOf, continentAreaKm2 } from '../src/continents.js';
 import { tallyAreas, areaFeatures, areaGeometry } from '../src/area-render.js';
 import { cellStats, heatMetric, areaColorOf } from '../src/coloring.js';
 import { rollUp, finishRollUpSteps, storedUnder } from '../src/rollup.js';
-import { summarizeCells } from '../src/cell-info-data.js';
+import { summarizeCells, recordedVisitDates } from '../src/cell-info-data.js';
 import { tripRelevance, parseDateQuery, tripInPeriod } from '../src/search-data.js';
 import { fold } from '../src/fold.js';
 import { mercX, mercY, pointToCell, colsOf, normCol, brushRadius, cellsWithin, cellsOnPolyline, parseCellId, cellCenter, project } from '../src/hexgrid.js';
 
 const accounts = new Map();
 const prepared = new WeakMap();
+const datedRoutes = new WeakMap();
 const areaAnswers = new WeakMap();
 const sharpened = new Map();
 export function forget(userId) {
@@ -142,7 +144,35 @@ function coverageFacts(area, ids) {
   return { covered, coveredPct: whole ? covered / whole * 100 : 0, coveredOf: area.name, areaKm2: whole, ...(of ? { inside: { label: 'Regions visited', n: regions.size, of } } : {}) };
 }
 
-export async function at(input, lng, lat, level, hidden = []) {
+function visitDatesForCells(input, ids, hidden, supplyRoutes) {
+  if (!ids.length) return [];
+  const visibleMeta = new Map(ids.map(id => [id, (input.cellMeta.get(id) ?? []).filter(m => !hidden.includes(m.source))]));
+  let dates = recordedVisitDates(ids, visibleMeta);
+  if (supplyRoutes) {
+    if (!datedRoutes.has(input)) datedRoutes.set(input, new Map());
+    const variants = datedRoutes.get(input);
+    const key = JSON.stringify([...new Set(hidden)].sort());
+    if (!variants.has(key)) {
+      variants.set(key, routeVisitDates(supplyRoutes().filter(r => !hidden.includes(r.source))));
+      if (variants.size > 4) variants.delete(variants.keys().next().value);
+    }
+    const routes = variants.get(key);
+    const hiddenSources = new Set(hidden);
+    dates = [...new Set([...dates, ...ids.flatMap(id =>
+      (input.cellMeta.get(id) ?? []).some(m => !hiddenSources.has(m.source) && m.source !== 'manual' && m.source !== 'unknown') ? [...routes.get(id) ?? []] : []
+    )])].sort().reverse();
+  }
+  return dates;
+}
+export async function visitDatesForArea(input, kind, id, hidden = [], supplyRoutes) {
+  await prime();
+  const rolled = prepare(input, hidden);
+  const ids = [...rolled.shown ?? input.cellIds].filter(cell => geography(kind, cell) === id);
+  const dates = visitDatesForCells(input, ids, hidden, supplyRoutes);
+  return { visited: ids.length > 0, visitDates: dates, visitCount: dates.length };
+}
+
+export async function at(input, lng, lat, level, hidden = [], supplyRoutes) {
   await prime();
   const rolled = prepare(input, hidden);
   const visible = rolled.shown ?? input.cellIds;
@@ -161,7 +191,8 @@ export async function at(input, lng, lat, level, hidden = []) {
     name = area.name;
     ids = [...visible].filter((cell) => geography(kind, cell) === id);
   }
-  return { visited: ids.length > 0, name, area, level, lng, lat, ...summarizeCells(ids, input.cellMeta), ...(area ? { ...coverageFacts(area, ids), geometry: areaGeometry(area.kind, area.id, true) } : {}) };
+  const dates = visitDatesForCells(input, ids, hidden, supplyRoutes);
+  return { visited: ids.length > 0, name, area, level, lng, lat, ...summarizeCells(ids, input.cellMeta), visitDates: dates, visitCount: dates.length, ...(area ? { ...coverageFacts(area, ids), geometry: areaGeometry(area.kind, area.id, true) } : {}) };
 }
 export async function search(query, routes = [], trips = []) {
   await prime();

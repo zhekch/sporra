@@ -18,6 +18,7 @@ self.onmessage = (event) => {
     const { sources = [], rows = [] } = JSON.parse(new TextDecoder().decode(buffer)) ?? {};
     const n = rows.length;
     const ids = new Array(n);
+  const visitDates = rows.map(r => r[7] ?? []);
     const src = new Uint16Array(n);
     // A missing number is sent as NaN, which the reader turns back into the
     // null the JSON held — the columns cannot hold a null, and 0 means something.
@@ -31,7 +32,7 @@ self.onmessage = (event) => {
         cols[c][i] = v == null ? (c === 4 && v === undefined ? 0 : NaN) : v;
       }
     }
-    const out = { id, sources, ids: ids.join('\n'), n, src, cols };
+    const out = { id, sources, ids: ids.join('\n'), n, src, cols, visitDates };
     self.postMessage(out, [src.buffer, ...cols.map((a) => a.buffer)]);
   } catch (error) {
     self.postMessage({ id, error: String(error?.message ?? error) });

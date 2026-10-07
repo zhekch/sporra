@@ -205,9 +205,12 @@ void main() {
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxHeight: 430),
                           child: Glass(
-                            child: ActivityCard(
-                              app: app,
-                              onZoom: () => focused++,
+                            child: ListenableBuilder(
+                              listenable: app,
+                              builder: (_, _) => ActivityCard(
+                                app: app,
+                                onZoom: () => focused++,
+                              ),
                             ),
                           ),
                         ),
@@ -283,6 +286,12 @@ void main() {
     expect(focused, 1);
     await tester.tap(find.text('Show all'));
     expect(app.selectedRoute, isNull);
+    await tester.pump();
+    expect(find.text('Show this'), findsOneWidget);
+    await tester.tap(find.text('Show this'));
+    expect(app.selectedRoute, 1);
+    await tester.pump();
+    expect(find.text('Show all'), findsOneWidget);
     final activityCorners = clip();
     expect(activityCorners, BorderRadius.circular(43));
     expect(border().borderRadius, activityCorners);
@@ -455,7 +464,7 @@ void main() {
     expect(find.text('10.8 km/h'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
-  testWidgets('missing trace gives an explicit empty state', (tester) async {
+  testWidgets('missing trace keeps the card compact', (tester) async {
     final app = AppState()
       ..activity = {
         'route': {
@@ -482,7 +491,7 @@ void main() {
     expect(find.byType(ActivityGraph), findsNothing);
     expect(
       find.text('This activity has no recorded speed or elevation data.'),
-      findsOneWidget,
+      findsNothing,
     );
     expect(tester.takeException(), isNull);
     app.dispose();

@@ -281,11 +281,11 @@ Future<void> showInfo(BuildContext context, Map<String, dynamic> info) => panel(
           info['visited'] == true ? Icons.check_circle : Icons.circle_outlined,
         ),
         title: Text(
-          info['visited'] == true ? 'You have been here' : 'No visits recorded',
+          info['visited'] == true ? 'You have been here' : 'Not visited yet',
         ),
       ),
       if (info['visited'] == true) ...[
-        fact('Visits', info['hits'] == 0 ? 'Marked by hand' : info['hits']),
+        if ((info['hits'] as num? ?? 0) > 0) fact('Visits', info['hits']),
         fact('First seen', date(info['firstAt'])),
         fact('Last seen', date(info['lastAt'])),
       ],

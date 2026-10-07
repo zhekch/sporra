@@ -1,3 +1,4 @@
+import { normalizeVisitDates } from '../src/visit-dates.js';
 import { trackData } from '../src/track-data.js';
 // Tiny auth + per-user cell-storage API for Sporra.
 //
@@ -110,7 +111,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.139.0';
+export const SERVER_VERSION = '0.140.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -502,6 +503,7 @@ for (const [table, column, decl] of [
   ['routes', 'trace', "TEXT NOT NULL DEFAULT ''"],
   ['device_links', 'last_photo_scan', 'INTEGER NOT NULL DEFAULT 0'],
   ['device_links', 'total_photos', 'INTEGER NOT NULL DEFAULT 0'],
+  ['cell_sources', 'visit_dates', "TEXT NOT NULL DEFAULT '[]'"],
   ['users', 'is_admin', 'INTEGER NOT NULL DEFAULT 0'],
   ['users', 'last_login', "TEXT NOT NULL DEFAULT ''"],
   ['users', 'last_seen', "TEXT NOT NULL DEFAULT ''"],
@@ -614,7 +616,7 @@ const q = {
   getMeta: db.prepare('SELECT value FROM meta WHERE key = ?'),
   setMeta: db.prepare('INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'),
 
-  rows: db.prepare('SELECT cell_id, source, added_at, first_at, last_at, hits, fixes FROM cell_sources WHERE user_id = ? ORDER BY cell_id'),
+  rows: db.prepare('SELECT cell_id, source, added_at, first_at, last_at, hits, fixes, visit_dates FROM cell_sources WHERE user_id = ? ORDER BY cell_id'),
   countCells: db.prepare('SELECT COUNT(DISTINCT cell_id) AS n FROM cell_sources WHERE user_id = ?'),
   // What the derived endpoints key their cache on. Aggregates rather than a
   // counter this file has to remember to bump: six separate paths write cells
@@ -630,7 +632,7 @@ const q = {
   ),
   cellSignature: db.prepare(`
     SELECT COUNT(*) AS n, COALESCE(MAX(added_at), 0) AS added, COALESCE(MAX(last_at), 0) AS last,
-           COALESCE(SUM(hits), 0) AS hits
+           COALESCE(SUM(hits), 0) AS hits, COALESCE(SUM(LENGTH(visit_dates)), 0) AS dates
     FROM cell_sources WHERE user_id = ?
   `),
   routeSignature: db.prepare(`
@@ -936,7 +938,7 @@ const q = {
     'SELECT 1 FROM cell_sources WHERE user_id = ? AND source = ? AND cell_id = ? LIMIT 1',
   ),
   sourceRowsFull: db.prepare(
-    'SELECT cell_id, added_at, first_at, last_at, hits, fixes FROM cell_sources WHERE user_id = ? AND source = ?',
+    'SELECT cell_id, added_at, first_at, last_at, hits, fixes, visit_dates FROM cell_sources WHERE user_id = ? AND source = ?',
   ),
   renameRoutes: db.prepare('UPDATE routes SET source = ? WHERE user_id = ? AND source = ?'),
   setPhotoScan: db.prepare(`
@@ -985,6 +987,24 @@ const q = {
   haPerUser: db.prepare('SELECT user_id, enabled, last_ok, last_error FROM ha_links'),
   stravaPerUser: db.prepare('SELECT user_id, enabled, last_ok, last_error, refresh_token FROM strava_links'),
 };
+
+// Old clients still send aggregate endpoints. Keep richer dates when such a
+// client refreshes a row, and union daily batches from the device/pollers.
+const readVisitDates = db.prepare('SELECT visit_dates FROM cell_sources WHERE user_id = ? AND cell_id = ? AND source = ?');
+const writeVisitDates = db.prepare('UPDATE cell_sources SET visit_dates = ? WHERE user_id = ? AND cell_id = ? AND source = ?');
+for (const [name, arity] of [['upsertRow', 8], ['mergeRow', 9]]) {
+  const statement = q[name];
+  q[name] = { run(...args) {
+    const [user, cell, source] = args;
+    const result = statement.run(...args.slice(0, arity));
+    if (source !== 'manual' && source !== 'unknown') {
+      const old = JSON.parse(readVisitDates.get(user, cell, source)?.visit_dates ?? '[]');
+      const dates = normalizeVisitDates([...old, ...(Array.isArray(args[arity]) ? args[arity] : []), args[4], args[5]]);
+      writeVisitDates.run(JSON.stringify(dates), user, cell, source);
+    }
+    return result;
+  } };
+}
 
 // The two sources that are not really sources: 'unknown', the placeholder the
 // pre-provenance migration left on every cell it carried over, and 'manual', the
@@ -1348,9 +1368,9 @@ function mergeBakedImport(user) {
   if (q.getMeta.get(key)?.value === imported.stamp) return;
   const at = nowSec();
   tx(() => {
-    for (const [id, source, first, last, hits, fixes] of imported.detail) {
+    for (const [id, source, first, last, hits, fixes, visitDates] of imported.detail) {
       if (typeof id !== 'string') continue;
-      q.upsertRow.run(user.id, id, String(source || 'unknown'), at, +first || 0, +last || 0, +hits || 1, +fixes || 0);
+      q.upsertRow.run(user.id, id, String(source || 'unknown'), at, +first || 0, +last || 0, +hits || 1, +fixes || 0, visitDates);
     }
     q.setMeta.run(key, imported.stamp);
   });
@@ -1372,7 +1392,7 @@ function userCellRows(user) {
       index.set(r.source, i);
       sources.push(r.source);
     }
-    return [r.cell_id, i, r.added_at, r.first_at, r.last_at, r.hits, r.fixes];
+    return [r.cell_id, i, r.added_at, r.first_at, r.last_at, r.hits, r.fixes, JSON.parse(r.visit_dates ?? '[]')];
   });
   return { sources, rows };
 }
@@ -1406,6 +1426,7 @@ function derivedInput(user, home) {
         lastAt: r.last_at,
         hits: r.hits,
         fixes: r.fixes ?? 0,
+        visitDates: JSON.parse(r.visit_dates ?? '[]'),
       };
       const list = cellMeta.get(r.cell_id);
       if (list) {
@@ -1513,7 +1534,7 @@ function derivedSignature(user, home) {
  */
 function cellsSignature(user) {
   const c = q.cellSignature.get(user.id) ?? {};
-  return [c.n, c.added, c.last, c.hits, sourceStamp(user)].join(':');
+  return [c.n, c.added, c.last, c.hits, c.dates, sourceStamp(user)].join(':');
 }
 
 /**
@@ -1810,7 +1831,7 @@ async function haSync(row, { verify = false } = {}) {
   const at = nowSec();
   tx(() => {
     for (const c of cells) {
-      q.mergeRow.run(row.user_id, c.id, HA_SOURCE, at, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC);
+      q.mergeRow.run(row.user_id, c.id, HA_SOURCE, at, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC, c.visitDates);
       // Same as an imported file: a real reading beats a placeholder.
       clearPlaceholders(row.user_id, c.id, HA_SOURCE);
     }
@@ -1925,7 +1946,7 @@ async function stravaSync(row) {
         : [];
       tx(() => {
         for (const c of folded) {
-          q.mergeRow.run(row.user_id, c.id, STRAVA_SOURCE, at, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC);
+          q.mergeRow.run(row.user_id, c.id, STRAVA_SOURCE, at, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC, c.visitDates);
           clearPlaceholders(row.user_id, c.id, STRAVA_SOURCE);
         }
         for (const r of routes) {
@@ -2884,7 +2905,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       } catch (e) { return send(res, 400, { error: e.message }); }
     }
 
-    if (req.method === 'GET' && ['/api/render/regions', '/api/render/at', '/api/search', '/api/locale/en'].includes(pathname)) {
+    if (req.method === 'GET' && ['/api/render/regions', '/api/render/at', '/api/render/visit-dates', '/api/search', '/api/locale/en'].includes(pathname)) {
       const user = currentUser(req);
       if (!user) return send(res, 401, { error: 'not authenticated' });
       mergeBakedImport(user);
@@ -2904,7 +2925,8 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
           const plain = new URLSearchParams(query); plain.set('level', '0');
           options = { ...render.cellsOptions(plain), level, fine: query.get('fine') === '1' };
         }
-        if (pathname === '/api/render/at') {
+        if (pathname === '/api/render/visit-dates' && query.has('kind') && (!['region', 'country', 'continent'].includes(query.get('kind')) || !query.get('id') || query.get('id').length > 200)) throw new Error('invalid area');
+        if (pathname === '/api/render/at' || (pathname === '/api/render/visit-dates' && !query.has('kind'))) {
           point = renderGeo.coordinate(query.get('lng'), query.get('lat'));
           const zoom = Number(query.get('zoom') ?? 13.6);
           if (!Number.isFinite(zoom)) throw new Error('invalid zoom');
@@ -2915,7 +2937,15 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       const head = conditional(req, res, tag);
       if (!head) return;
       if (pathname === '/api/render/regions') return send(res, 200, await renderGeo.regions(renderGeo.inputFor(user.id, signature, supply), options, iso => fineRegions.get(iso)), head);
-      if (pathname === '/api/render/at') return send(res, 200, await renderGeo.at(renderGeo.inputFor(user.id, signature, supply), ...point, level, query.getAll('hidden')), head);
+      if (pathname === '/api/render/visit-dates') {
+        const input = renderGeo.inputFor(user.id, signature, supply);
+        const routes = () => q.routesGeom.all(user.id).map(routeOut);
+        const data = query.has('kind')
+          ? await renderGeo.visitDatesForArea(input, query.get('kind'), query.get('id'), query.getAll('hidden'), routes)
+          : await renderGeo.at(input, ...point, level, query.getAll('hidden'), routes);
+        return send(res, 200, {visited: data.visited, name: data.name, visitDates: data.visitDates ?? [], visitCount: data.visitCount ?? 0}, head);
+      }
+      if (pathname === '/api/render/at') return send(res, 200, await renderGeo.at(renderGeo.inputFor(user.id, signature, supply), ...point, level, query.getAll('hidden'), () => q.routesGeom.all(user.id).map(routeOut)), head);
       const trips = await derive.trips(user.id, signature, supply);
       const hiddenTrips = new Set(searchPrefs?.hiddenTrips ?? []);
       const namedTrips = trips.trips.filter(t => !hiddenTrips.has(t.id)).map(t => ({ ...t, name: searchPrefs?.tripNames?.[t.id] || t.name }));
@@ -2940,7 +2970,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
           if (remove.length > MAX_CELLS_PER_MUTATE) throw new Error('region exceeds 50000 cells');
         }
       } catch (e) { return send(res, 400, { error: e.message }); }
-      const rows = remove.flatMap(id => (input.cellMeta.get(id) ?? []).map(m => [id, m.source, m.addedAt, m.firstAt, m.lastAt, m.hits, m.fixes]));
+      const rows = remove.flatMap(id => (input.cellMeta.get(id) ?? []).map(m => [id, m.source, m.addedAt, m.firstAt, m.lastAt, m.hits, m.fixes, m.visitDates]));
       if (rows.length > MAX_CELLS_PER_MUTATE) return send(res, 400, { error: 'too many provenance rows to undo' });
       const at = nowSec();
       db.exec('BEGIN');
@@ -3000,7 +3030,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
         try {
           for (const {source,cells,routes} of batches) {
             for (const c of cells) {
-              q.upsertRow.run(user.id, c.id, source, at, c.first, c.last, c.hits, c.fixes);
+              q.upsertRow.run(user.id, c.id, source, at, c.first, c.last, c.hits, c.fixes, c.visitDates);
               clearPlaceholders(user.id, c.id, source);
             }
             for (const route of routes) if (storeImportedRoute(user, route, at)) routeCount++;
@@ -3091,9 +3121,9 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       let restored = 0;
       await chunked(rows, (slice) => {
         for (const r of slice) {
-          const [id, source, addedAt, firstAt, lastAt, hits, fixes] = Array.isArray(r)
+          const [id, source, addedAt, firstAt, lastAt, hits, fixes, visitDates] = Array.isArray(r)
             ? r
-            : [r.id, r.source, r.addedAt, r.firstAt, r.lastAt, r.hits, r.fixes];
+            : [r.id, r.source, r.addedAt, r.firstAt, r.lastAt, r.hits, r.fixes, r.visitDates];
           if (typeof id !== 'string' || !id || id.length > 40) continue;
           const src = String(source ?? 'manual').slice(0, 40) || 'manual';
           // added_at is restored as it was: a cell that has been on the map
@@ -3106,6 +3136,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
             Math.max(0, Math.trunc(+lastAt) || 0),
             Math.max(1, Math.trunc(+hits) || 1),
             Math.max(0, Math.trunc(+fixes) || 0),
+            visitDates,
           );
           restored++;
         }
@@ -3138,13 +3169,13 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
         let updated = 0;
         await chunked(body.cells, (slice) => {
           for (const c of slice) {
-            const [id, first, last, hits, fixes] = Array.isArray(c)
+            const [id, first, last, hits, fixes, visitDates] = Array.isArray(c)
               ? c
-              : [c.id, c.first, c.last, c.hits, c.fixes];
+              : [c.id, c.first, c.last, c.hits, c.fixes, c.visitDates];
             if (typeof id !== 'string' || !id || id.length > 40) continue;
             if (q.hasCell.get(user.id, id)) updated++;
             else added++;
-            q.upsertRow.run(user.id, id, source, at, +first || 0, +last || 0, +hits || 1, +fixes || 0);
+            q.upsertRow.run(user.id, id, source, at, +first || 0, +last || 0, +hits || 1, +fixes || 0, visitDates);
             // Cells carried over from the pre-provenance storage have a
             // placeholder 'unknown' row, and one you tapped on the map has a
             // 'manual' one. A real import knows strictly more about them, so it
@@ -3595,7 +3626,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
 
       await chunked(cells, (slice) => {
         for (const c of slice) {
-          q.mergeRow.run(user.id, c.id, DEVICE_SOURCE, now, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC);
+          q.mergeRow.run(user.id, c.id, DEVICE_SOURCE, now, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC, c.visitDates);
           // As for an imported file: a real reading beats a placeholder. The
           // phone having been somewhere is the answer a hand mark was standing
           // in for.
@@ -3670,7 +3701,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
           const built = buildRoutes([w.track], { source: HEALTH_SOURCE });
           tx(() => {
             for (const c of folded) {
-              q.mergeRow.run(user.id, c.id, HEALTH_SOURCE, now, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC);
+              q.mergeRow.run(user.id, c.id, HEALTH_SOURCE, now, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC, c.visitDates);
               clearPlaceholders(user.id, c.id, HEALTH_SOURCE);
             }
             for (const r of built) {
@@ -3810,7 +3841,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
           if (q.hasSourceCell.get(user.id, to, r.cell_id)) merged++;
           q.mergeRow.run(
             user.id, r.cell_id, to, r.added_at,
-            r.first_at, r.last_at, r.hits, r.fixes, VISIT_GAP_SEC,
+            r.first_at, r.last_at, r.hits, r.fixes, VISIT_GAP_SEC, JSON.parse(r.visit_dates ?? '[]'),
           );
         }
       });
@@ -3901,7 +3932,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
             // upsertRow, not mergeRow: this is a re-reading of the same library
             // rather than a new slice of time, so the counts are replaced the
             // way re-importing a file replaces them.
-            q.upsertRow.run(user.id, c.id, PHOTO_SOURCE, now, c.first, c.last, c.hits, c.fixes);
+            q.upsertRow.run(user.id, c.id, PHOTO_SOURCE, now, c.first, c.last, c.hits, c.fixes, c.visitDates);
             clearPlaceholders(user.id, c.id, PHOTO_SOURCE);
           }
         });

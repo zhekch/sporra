@@ -6,22 +6,9 @@
 // about the recording, not about the place, and it is answered in one place
 // that can act on it — Settings → Sources, which can also rename or remove one.
 
-import { formatTime } from './clock.js';
+import { normalizeVisitDates } from './visit-dates.js';
 
 const dayFmt = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-
-const day = (sec) => (sec ? dayFmt.format(new Date(sec * 1000)) : null);
-
-// "3 Sep 2023" for a single day, "3 Sep 2023 – 12 Jul 2026" for a span.
-function range(first, last) {
-  const a = day(first);
-  const b = day(last);
-  if (!a && !b) return null;
-  if (!a || !b || a === b) return a ?? b;
-  return `${a} – ${b}`;
-}
-
-const coord = (lat, lng) => `${lat.toFixed(4)}°, ${lng.toFixed(4)}°`;
 
 export const km2 = (v) =>
   v >= 1000 ? `${Math.round(v).toLocaleString()} km²`
@@ -41,15 +28,18 @@ export const pct = (v) =>
  * Wires the card (markup lives in index.html).
  * @returns {{show:(info:object)=>void, hide:()=>void, visible:()=>boolean}}
  */
-export function mountCellInfo({ onClose } = {}) {
+export function mountCellInfo({ onClose, loadDates } = {}) {
   const $ = (id) => document.getElementById(id);
   const card = $('cell-info');
   const titleEl = $('cell-info-title');
   const closeBtn = $('cell-info-close');
   const coordEl = $('cell-info-coord');
   const rowsEl = $('cell-info-rows');
+  const datesEl = $('cell-info-dates');
+  let generation = 0;
 
   const hide = () => {
+    generation++;
     card.hidden = true;
   };
 
@@ -69,23 +59,53 @@ export function mountCellInfo({ onClose } = {}) {
   }
 
   function show(info) {
-    // A cell is a place on the map, so it is named by its coordinates; a region
-    // has a name of its own and the coordinates of one point inside it would be
-    // noise.
-    titleEl.textContent = info.title ?? 'Visited';
-    coordEl.textContent = info.title
-      ? info.sizeLabel
-      : `${coord(info.lat, info.lng)} · ${info.sizeLabel}`;
+    const request = ++generation;
+    titleEl.textContent = info.title ?? 'This place';
+    coordEl.title = info.sizeLabel ?? '';
     rowsEl.replaceChildren();
-
-    const seen = range(info.firstAt, info.lastAt);
-    if (seen) {
-      row(info.firstAt && info.lastAt && day(info.firstAt) !== day(info.lastAt) ? 'Seen' : 'Seen on', seen);
-      // A single fix is worth a clock reading; a multi-year span isn't.
-      if (info.firstAt && info.firstAt === info.lastAt) {
-        row('Time', formatTime(info.firstAt * 1000));
+    datesEl.replaceChildren();
+    let expanded = false;
+    let current = info;
+    function renderDates(next) {
+      current = {...current, ...next};
+      const dates = normalizeVisitDates(current.visitDates ?? [current.firstAt, current.lastAt]);
+      const count = current.visitCount ?? dates.length;
+      coordEl.replaceChildren();
+      datesEl.replaceChildren();
+      datesEl.hidden = !expanded || !dates.length;
+      if (!info.title && current.name) titleEl.textContent = current.name;
+      if (!dates.length) {
+        coordEl.textContent = current.visited === false ? 'Not visited yet' : 'You have been here';
+        return;
       }
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'cell-visit-toggle';
+      toggle.textContent = `${count.toLocaleString()} ${count === 1 ? 'visit' : 'visits'}`;
+      toggle.setAttribute('aria-expanded', String(expanded));
+      toggle.setAttribute('aria-controls', 'cell-info-dates');
+      const chevron = document.createElement('span');
+      chevron.textContent = '›';
+      chevron.setAttribute('aria-hidden', 'true');
+      toggle.append(chevron);
+      toggle.addEventListener('click', () => { expanded = !expanded; renderDates({}); });
+      coordEl.append(toggle);
+      const list = document.createElement('ul');
+      for (const value of dates) {
+        const item = document.createElement('li');
+        const time = document.createElement('time');
+        time.dateTime = value;
+        time.textContent = dayFmt.format(new Date(value + 'T12:00:00'));
+        item.append(time);
+        list.append(item);
+      }
+      datesEl.append(list);
     }
+    renderDates(info);
+    if (loadDates) Promise.resolve().then(() => loadDates(info)).then(data => {
+      if (request === generation && !card.hidden) renderDates(data);
+    }).catch(() => {}); // Retain the local dates when offline.
+
     // "Added to map" is a fact about the import, not about the place — it says
     // when a file was dropped in, which is never the question anyone opened this
     // card to ask.
@@ -129,13 +149,6 @@ export function mountCellInfo({ onClose } = {}) {
           : `Nothing on the map in ${info.coveredOf} yet`,
       );
     }
-    // Visits are the number the heat map reads, and the only count worth
-    // showing. The raw fix count used to get a line of its own whenever it
-    // disagreed, which was most of the time and never meant anything: it says
-    // how often a recorder happened to sample, not how often you were here, so
-    // an hour parked with a workout app running outranked a week somewhere.
-    if (info.hits) row('Visits', info.hits.toLocaleString());
-
     card.hidden = false;
   }
 

@@ -1,4 +1,5 @@
 import 'loading.dart';
+import 'place_card.dart';
 import 'native_map.dart';
 import 'mapbox_view.dart';
 import 'mapbox.dart' as mb;
@@ -1764,87 +1765,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
                               tapRequest++;
                               placeInfo = null;
                             }),
-                            child: Glass(
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  18,
-                                  12,
-                                  8,
-                                  16,
-                                ),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            '${placeInfo!['name'] ?? 'This place'}',
-                                            style: const TextStyle(
-                                              fontSize: 17,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ),
-                                        IconButton(
-                                          tooltip: 'Close place',
-                                          onPressed: () => setState(() {
-                                            tapRequest++;
-                                            placeInfo = null;
-                                          }),
-                                          icon: const Icon(
-                                            CupertinoIcons.xmark,
-                                            size: 18,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    Text(
-                                      placeInfo!['visited'] == null
-                                          ? 'Loading visit details…'
-                                          : placeInfo!['visited'] == true
-                                          ? 'You have been here'
-                                          : 'No visits recorded',
-                                    ),
-                                    if (placeInfo!['inside'] != null)
-                                      Text(
-                                        '${placeInfo!['inside']['label']} · ${groupedNumber(placeInfo!['inside']['n'] as num)} of ${groupedNumber(placeInfo!['inside']['of'] as num)}',
-                                      ),
-                                    if (placeInfo!['covered'] != null)
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 8),
-                                        child: Text(
-                                          'Ground covered · ${(placeInfo!['covered'] as num) <= 0 ? 'None yet' : '${formatGround(placeInfo!['covered'] as num)}${(placeInfo!['coveredPct'] as num) > 0 ? ' · ${formatPercent(placeInfo!['coveredPct'] as num)}' : ''}'}',
-                                        ),
-                                      ),
-                                    if (placeInfo!['visited'] == true) ...[
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        placeInfo!['hits'] == 0
-                                            ? 'Marked by hand'
-                                            : '${groupedNumber(placeInfo!['hits'] as num)} visits',
-                                        style: const TextStyle(
-                                          color: Colors.white70,
-                                        ),
-                                      ),
-                                      if ((placeInfo!['firstAt'] as num? ?? 0) >
-                                              0 ||
-                                          (placeInfo!['lastAt'] as num? ?? 0) >
-                                              0)
-                                        Text(
-                                          'Seen ${date(placeInfo!['firstAt'])}${date(placeInfo!['firstAt']) == date(placeInfo!['lastAt']) ? '' : ' – ${date(placeInfo!['lastAt'])}'}',
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            color: Colors.white60,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                    ],
-                                  ],
-                                ),
-                              ),
+                            child: PlaceCard(
+                              key: ValueKey((
+                                placeInfo!['lng'],
+                                placeInfo!['lat'],
+                                placeInfo!['name'],
+                              )),
+                              info: placeInfo!,
+                              onClose: () => setState(() {
+                                tapRequest++;
+                                placeInfo = null;
+                              }),
                             ),
                           ),
                         ),
@@ -1861,8 +1792,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         : Alignment.bottomLeft,
                     child: Padding(
                       padding: EdgeInsets.only(
-                        left: 10,
-                        right: constraints.maxWidth < 600 ? 10 : 80,
+                        left: 12,
+                        right: constraints.maxWidth < 600 ? 12 : 80,
                         bottom: 12,
                       ),
                       child: ConstrainedBox(

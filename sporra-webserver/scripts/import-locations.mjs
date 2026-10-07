@@ -68,7 +68,7 @@ const ids = new Set();
 for (const [source, points] of bySource) {
   const cells = pointsToCells(points);
   for (const c of cells) {
-    detail.push([c.id, source, c.first, c.last, c.hits, c.fixes]);
+    detail.push([c.id, source, c.first, c.last, c.hits, c.fixes, c.visitDates]);
     ids.add(c.id);
   }
   console.log(`  ${sourceLabel(source)}: ${cells.length} cells`);
