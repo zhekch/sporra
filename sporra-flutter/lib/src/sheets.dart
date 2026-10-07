@@ -52,6 +52,8 @@ Future<void> panel(
   String title,
   Widget child, {
   double height = 0.62,
+  bool fullscreen = false,
+  bool showHeader = true,
 }) async {
   final app = ProviderScope.containerOf(
     context,
@@ -66,9 +68,12 @@ Future<void> panel(
   try {
     await showModalBottomSheet<void>(
       context: navigator.context,
+      constraints: fullscreen
+          ? BoxConstraints.tightFor(width: MediaQuery.sizeOf(context).width)
+          : null,
       isDismissible: true,
-      enableDrag: true,
-      useSafeArea: true,
+      enableDrag: !fullscreen,
+      useSafeArea: !fullscreen,
       isScrollControlled: true,
       showDragHandle: false,
       backgroundColor: Colors.transparent,
@@ -81,6 +86,29 @@ Future<void> panel(
             ),
       builder: (context) {
         _activePanel = ModalRoute.of(context);
+        if (fullscreen) {
+          return Offstage(
+            offstage: !(ModalRoute.of(context)?.isCurrent ?? true),
+            child: SizedBox(
+              height: MediaQuery.sizeOf(context).height,
+              width: MediaQuery.sizeOf(context).width,
+              child: Scaffold(
+                appBar: AppBar(
+                  title: Text(title),
+                  automaticallyImplyLeading: false,
+                  actions: [
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(CupertinoIcons.xmark),
+                    ),
+                  ],
+                ),
+                body: SafeArea(top: false, child: child),
+              ),
+            ),
+          );
+        }
         return Offstage(
           offstage: !(ModalRoute.of(context)?.isCurrent ?? true),
           child: SafeArea(
@@ -115,26 +143,32 @@ Future<void> panel(
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(20, 12, 8, 6),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      title,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .headlineSmall,
+                            if (showHeader)
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  20,
+                                  12,
+                                  8,
+                                  6,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        title,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .headlineSmall,
+                                      ),
                                     ),
-                                  ),
-                                  IconButton(
-                                    onPressed: () => Navigator.pop(context),
-                                    icon: const Icon(CupertinoIcons.xmark),
-                                  ),
-                                ],
+                                    IconButton(
+                                      onPressed: () => Navigator.pop(context),
+                                      icon: const Icon(CupertinoIcons.xmark),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                            const Divider(height: 1),
+                            if (showHeader) const Divider(height: 1),
                             Flexible(
                               child:
                                   NotificationListener<
@@ -360,59 +394,45 @@ Future<void> showMenuSheet(
               ],
             ),
             section('Map overlays'),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  FilterChip(
-                    label: const Text('Routes'),
-                    avatar: const Icon(Icons.route_outlined, size: 18),
-                    selected: a.routes,
-                    onSelected: (v) {
-                      a.routes = v;
-                      a.changed();
-                    },
-                  ),
-                  FilterChip(
-                    label: const Text('Photos'),
-                    avatar: const Icon(Icons.photo_outlined, size: 18),
-                    selected: a.photos,
-                    onSelected: (v) {
-                      a.photos = v;
-                      a.changed();
-                    },
-                  ),
-                  FilterChip(
-                    label: const Text('Rail'),
-                    avatar: const Icon(Icons.train_outlined, size: 18),
-                    selected: a.rail,
-                    onSelected: (v) {
-                      a.rail = v;
-                      a.changed();
-                    },
-                  ),
-                  FilterChip(
-                    label: const Text('Airports'),
-                    avatar: const Icon(Icons.flight_outlined, size: 18),
-                    selected: a.airports,
-                    onSelected: (v) {
-                      a.airports = v;
-                      a.changed();
-                    },
-                  ),
-                  FilterChip(
-                    label: const Text('Trails'),
-                    avatar: const Icon(Icons.hiking, size: 18),
-                    selected: a.trails,
-                    onSelected: (v) {
-                      a.trails = v;
-                      a.changed();
-                    },
-                  ),
-                ],
-              ),
+            GlassSwitch(
+              title: const Text('Routes'),
+              value: a.routes,
+              onChanged: (v) {
+                a.routes = v;
+                a.changed();
+              },
+            ),
+            GlassSwitch(
+              title: const Text('Photos'),
+              value: a.photos,
+              onChanged: (v) {
+                a.photos = v;
+                a.changed();
+              },
+            ),
+            GlassSwitch(
+              title: const Text('Rail'),
+              value: a.rail,
+              onChanged: (v) {
+                a.rail = v;
+                a.changed();
+              },
+            ),
+            GlassSwitch(
+              title: const Text('Airports'),
+              value: a.airports,
+              onChanged: (v) {
+                a.airports = v;
+                a.changed();
+              },
+            ),
+            GlassSwitch(
+              title: const Text('Trails'),
+              value: a.trails,
+              onChanged: (v) {
+                a.trails = v;
+                a.changed();
+              },
             ),
             ExpansionTile(
               title: const Text('Overlay options'),
@@ -474,33 +494,8 @@ Future<void> showMenuSheet(
             section('Explore and manage'),
             ListTile(
               leading: const Icon(Icons.bar_chart),
-              title: const Text('Statistics'),
+              title: const Text('Routes and statistics'),
               onTap: () => showStats(context, a),
-            ),
-            ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: const Text('Edit your map'),
-              onTap: () {
-                a.editing = true;
-                a.changed();
-                Navigator.pop(context);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.layers_outlined),
-              title: const Text('Sources'),
-              onTap: () => showSources(context, a),
-            ),
-            ListTile(
-              leading: const Icon(Icons.file_upload_outlined),
-              title: const Text('Import a location file'),
-              subtitle: const Text('GPX, FIT, Timeline or a Strava archive'),
-              onTap: () => importFile(context, a),
-            ),
-            ListTile(
-              leading: const Icon(Icons.sync),
-              title: const Text('Sync connections'),
-              onTap: () => showConnections(context, a),
             ),
             ListTile(
               leading: const Icon(Icons.photo_camera_outlined),
@@ -520,16 +515,10 @@ Future<void> showMenuSheet(
               title: const Text('Settings'),
               onTap: () => showSettings(context, a),
             ),
-            if (a.user?['admin'] == true || a.user?['isAdmin'] == true)
-              ListTile(
-                title: const Text('Administration'),
-                leading: const Icon(Icons.admin_panel_settings_outlined),
-                onTap: () => showAdmin(context, a),
-              ),
             const Padding(
               padding: EdgeInsets.all(24),
               child: Text(
-                'Sporra Preview · 0.3.1',
+                'Sporra Preview · 0.8.0',
                 style: TextStyle(color: Colors.white38),
               ),
             ),
@@ -587,9 +576,10 @@ class _AsyncListState extends State<AsyncList> {
 
 Future<void> showStats(BuildContext context, AppState app) => panel(
   context,
-  'Statistics',
+  'Routes and statistics',
   DefaultTabController(
     length: 2,
+    initialIndex: 1,
     child: Column(
       children: [
         const TabBar(
@@ -606,6 +596,7 @@ Future<void> showStats(BuildContext context, AppState app) => panel(
       ],
     ),
   ),
+  fullscreen: true,
 );
 
 Widget statisticsList(AppState app) {
@@ -805,7 +796,7 @@ Future<void> showSporraSearch(
   BuildContext context,
   AppState app,
   MapLibreMapController map,
-) => panel(context, 'Search', _Search(app: app, map: map));
+) => panel(context, 'Search', _Search(app: app, map: map), showHeader: false);
 
 class _Search extends StatefulWidget {
   const _Search({required this.app, required this.map});
@@ -861,18 +852,36 @@ class _SearchState extends State<_Search> {
     children: [
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 24),
-        child: TextField(
-          autofocus: false,
-          decoration: InputDecoration(
-            hintText: 'Trips, routes or places',
-            prefixIcon: const Icon(CupertinoIcons.search),
-            suffixIcon: IconButton(
-              icon: const Icon(CupertinoIcons.calendar),
-              tooltip: 'Calendar',
-              onPressed: () => setState(() => calendarOpen = !calendarOpen),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                autofocus: false,
+                decoration: InputDecoration(
+                  hintText: 'Trips, routes or places',
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  filled: false,
+                  prefixIcon: const Icon(CupertinoIcons.search),
+                  suffixIcon: IconButton(
+                    icon: const Icon(CupertinoIcons.calendar),
+                    tooltip: 'Calendar',
+                    onPressed: () {
+                      FocusScope.of(context).unfocus();
+                      setState(() => calendarOpen = !calendarOpen);
+                    },
+                  ),
+                ),
+                onChanged: search,
+              ),
             ),
-          ),
-          onChanged: search,
+            IconButton(
+              tooltip: 'Close',
+              onPressed: () => Navigator.pop(context),
+              icon: const Icon(CupertinoIcons.xmark),
+            ),
+          ],
         ),
       ),
       if (busy) const LinearProgressIndicator(),
@@ -881,16 +890,19 @@ class _SearchState extends State<_Search> {
       Expanded(
         child: calendarOpen
             ? AsyncList(
+                key: const ValueKey('search-calendar'),
                 load: () => widget.app.api.getMany({
                   'days': '/api/days',
                   'trips': '/api/trips',
                 }),
-                builder: (context, data) => VisitCalendar(
-                  days: data['days']['days'],
-                  trips: data['trips']['trips'],
-                  selected: widget.app.trackDay,
-                  onPick: (day) =>
-                      showDay(context, widget.app, dayKey(day), widget.map),
+                builder: (context, data) => SingleChildScrollView(
+                  child: VisitCalendar(
+                    days: data['days']['days'],
+                    trips: data['trips']['trips'],
+                    selected: widget.app.trackDay,
+                    onPick: (day) =>
+                        showDay(context, widget.app, dayKey(day), widget.map),
+                  ),
                 ),
               )
             : !hasQuery
@@ -1017,8 +1029,8 @@ Future<DateTime?> chooseDay(BuildContext context, AppState app) async {
 }
 
 Widget tripsList(AppState app, MapLibreMapController map) {
-  var showHidden = false;
   return AsyncList(
+    key: const ValueKey('search-trips'),
     load: () => app.api
         .getMany({'trips': '/api/trips', 'days': '/api/days'})
         .then(
@@ -1035,14 +1047,8 @@ Widget tripsList(AppState app, MapLibreMapController map) {
           shrinkWrap: true,
           children: [
             section('Trips'),
-            if (hidden.isNotEmpty)
-              GlassSwitch(
-                title: Text('Show ${hidden.length} hidden trips'),
-                value: showHidden,
-                onChanged: (v) => setState(() => showHidden = v),
-              ),
             for (final t in data['trips'])
-              if (showHidden || !hidden.contains(t['id']))
+              if (!hidden.contains(t['id']))
                 ListTile(
                   title: Text('${names[t['id']] ?? t['name']}'),
                   subtitle: Text(
@@ -1491,6 +1497,29 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
                   child: Text('${d['error']}'),
                 ),
             ],
+            if (tab == 'Edit')
+              ListTile(
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Edit your map'),
+                onTap: () {
+                  app.editing = true;
+                  app.changed();
+                  Navigator.pop(context);
+                },
+              ),
+            if (tab == 'Sync')
+              ListTile(
+                leading: const Icon(Icons.sync),
+                title: const Text('Sync connections'),
+                onTap: () => showConnections(context, app),
+              ),
+            if (tab == 'Administration' &&
+                (app.user?['admin'] == true || app.user?['isAdmin'] == true))
+              ListTile(
+                leading: const Icon(Icons.admin_panel_settings_outlined),
+                title: const Text('Administration'),
+                onTap: () => showAdmin(context, app),
+              ),
             if (tab == 'Personal') ...[
               section('Personal'),
               ListTile(
@@ -1656,13 +1685,14 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               ),
             const ListTile(
               title: Text('Sporra Preview'),
-              subtitle: Text('0.3.1 · Native map for iOS'),
+              subtitle: Text('0.8.0 · Native map for iOS'),
             ),
           ],
         );
       },
     ),
   ),
+  fullscreen: true,
 );
 Future<void> configure(AppState app, Map<String, dynamic> patch) =>
     app.run(() async {
@@ -2567,7 +2597,12 @@ class _SettingsTabsState extends State<SettingsTabs> {
               'Personal',
               'Map layers',
               'Sources',
+              'Edit',
               'Import',
+              'Sync',
+              if (widget.app.user?['admin'] == true ||
+                  widget.app.user?['isAdmin'] == true)
+                'Administration',
               'App settings',
               'Account',
             ])

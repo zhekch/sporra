@@ -157,7 +157,7 @@ void main() {
       expect(find.text('Only the new panel'), findsNothing);
       showSettings(context, app);
       await tester.pumpAndSettle();
-      expect(find.byType(ChoiceChip), findsNWidgets(6));
+      expect(find.byType(ChoiceChip), findsNWidgets(8));
       await tester.tap(find.widgetWithText(ChoiceChip, 'Map layers'));
       await tester.pumpAndSettle();
       expect(find.text('Mapbox public token'), findsOneWidget);
@@ -171,7 +171,7 @@ void main() {
       Navigator.of(context).pop();
       await tester.pumpAndSettle();
       expect(find.text('Mapbox public token'), findsOneWidget);
-      await tester.drag(find.text('Settings'), const Offset(0, 500));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(app.menuOpen, isFalse);
       final removal = confirmRemoval(

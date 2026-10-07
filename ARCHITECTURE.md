@@ -10044,3 +10044,16 @@ Photos open from map pins. Search opens on the trip list, preserving naming
 and hiding actions, with an inline calendar toggle. Server 0.137.0 returns
 search categories in trip, route, then place order, preserving each category's
 existing relevance order. Clearing a query also cancels its pending indicator.
+
+
+Flutter 0.8.0 puts the undecorated search input in the palette header and removes
+the hidden-trip count control. Trips and calendar have distinct loader keys:
+without them Flutter retained the previous AsyncList future across the toggle
+and supplied the calendar with the flattened trip response. The calendar scrolls
+within the palette and opening it dismisses the keyboard. Map overlays use a
+vertical switch list. Edit, import, sources, sync and administration live in
+Settings. Settings and Routes and statistics occupy the full viewport, overriding
+Material's default sheet width limit; Routes is selected on entry. These screens
+close with their header button rather than a sheet drag. Location rendering is
+enabled at map creation; the first fix centers the camera at zoom 13.6. Returning
+to the foreground arms that focus again for the next location update.

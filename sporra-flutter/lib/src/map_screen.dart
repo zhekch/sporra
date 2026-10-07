@@ -87,8 +87,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
   final sources = <String>{};
   final layers = <String>{};
   LatLng? location;
-  bool locationEnabled = false;
-  bool locating = false;
+  bool locationEnabled = true;
+  bool locating = true;
   CameraPosition camera = const CameraPosition(
     target: LatLng(46.95, 8.28),
     zoom: 7,
@@ -1248,6 +1248,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         state == AppLifecycleState.inactive) {
       unawaited(ref.read(appProvider).api.flushCache());
     } else if (state == AppLifecycleState.resumed) {
+      setState(() => locating = true);
       unawaited(refresh());
     }
   }

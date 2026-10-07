@@ -1,3 +1,8 @@
+import 'dart:convert';
+
+import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:sporra_flutter/src/appearance.dart';
+import 'package:sporra_flutter/src/calendar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,8 +12,10 @@ import 'package:sporra_flutter/src/api.dart';
 import 'package:sporra_flutter/src/sheets.dart';
 import 'package:sporra_flutter/src/state.dart';
 
+class _UnusedMap extends Fake implements MapLibreMapController {}
+
 void main() {
-  testWidgets('Statistics switches to routes with miniature geometry', (
+  testWidgets('Routes and statistics opens fullscreen on routes', (
     tester,
   ) async {
     final app = AppState(
@@ -44,21 +51,83 @@ void main() {
     );
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
-    expect(find.text('Ground covered'), findsOneWidget);
-    await tester.tap(find.text('Routes'));
-    await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(
-      find.text('Morning walk'),
-      200,
-      scrollable: find
-          .descendant(
-            of: find.byType(TabBarView),
-            matching: find.byType(Scrollable),
-          )
-          .last,
+    final scaffold = find.byType(Scaffold).last;
+    expect(
+      tester.getSize(scaffold),
+      tester.view.physicalSize / tester.view.devicePixelRatio,
     );
     expect(find.text('Morning walk'), findsOneWidget);
     expect(find.byType(RouteMiniature), findsOneWidget);
+    await tester.tap(find.text('Ground'));
+    await tester.pumpAndSettle();
+    expect(find.text('Ground covered'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+  testWidgets(
+    'Search header switches trips and calendar without reusing data',
+    (tester) async {
+      final app = AppState(
+        api: SporraApi(
+          client: MockClient((request) async {
+            if (request.url.path == '/api/days') {
+              return http.Response('{"days":{}}', 200);
+            }
+            return http.Response(
+              jsonEncode({
+                'trips': [
+                  {
+                    'id': 'visible',
+                    'name': 'Visible trip',
+                    'start': 1723280400,
+                    'end': 1723366800,
+                  },
+                  {
+                    'id': 'hidden',
+                    'name': 'Hidden trip',
+                    'start': 1723280400,
+                    'end': 1723366800,
+                  },
+                ],
+              }),
+              200,
+            );
+          }),
+        )..server = 'https://example.test',
+      );
+      app.prefs['hiddenTrips'] = ['hidden'];
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appProvider.overrideWith((ref) => app)],
+          child: MaterialApp(
+            theme: webTheme(),
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () => showSporraSearch(context, app, _UnusedMap()),
+                  child: const Text('Open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      expect(find.text('Search'), findsNothing);
+      expect(find.text('Visible trip'), findsOneWidget);
+      expect(find.text('Hidden trip'), findsNothing);
+      expect(find.textContaining('hidden trips'), findsNothing);
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.decoration!.border, InputBorder.none);
+      await tester.tap(find.byTooltip('Calendar'));
+      await tester.pumpAndSettle();
+      expect(find.byType(VisitCalendar), findsOneWidget);
+      expect(find.text('Mon'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byTooltip('Calendar'));
+      await tester.pumpAndSettle();
+      expect(find.text('Visible trip'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
