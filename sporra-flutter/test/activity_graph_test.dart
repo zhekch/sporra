@@ -1,3 +1,5 @@
+import 'package:sporra_flutter/src/native_map.dart';
+
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -107,7 +109,7 @@ void main() {
       annotationOrder: [],
       annotationConsumeTapEvents: [],
     );
-    goTo(controller, {
+    goTo(NativeMapController.libre(controller), {
       'bounds': [7, 46, 8, 47],
     }, padding: const EdgeInsets.fromLTRB(24, 139, 24, 466));
     await tester.pump();

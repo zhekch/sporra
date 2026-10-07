@@ -1,3 +1,5 @@
+import 'mapbox.dart' as mb;
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -339,11 +341,53 @@ class AppState extends ChangeNotifier {
     );
     accent =
         '${(prefs['accents'] as Map?)?['dark'] ?? prefs['accent'] ?? '#60acff'}';
+    refreshSun();
     mode = '${prefs['heatMode'] ?? 'flat'}';
     if (!['flat', 'visits', 'oldest', 'type'].contains(mode)) mode = 'flat';
   }
 
-  String get accentTheme => style == 'voyager' ? 'light' : 'dark';
+  String get mapboxToken => '${prefs['mapboxToken'] ?? ''}'.trim();
+  bool get hasMapbox => mb.tokenComplaint(mapboxToken) == null;
+  bool get isMapbox => mb.usesMapbox(style, mapboxToken);
+  String get mapboxLight => switch (prefs['mapboxLight']) {
+    'day' || 'dawn' => 'day',
+    'night' || 'dusk' => 'night',
+    _ => 'auto',
+  };
+  String lightPreset = mb.sunPhase(DateTime.now());
+  double? sunLatitude, sunLongitude;
+  void refreshSun({double? latitude, double? longitude}) {
+    sunLatitude = latitude ?? sunLatitude;
+    sunLongitude = longitude ?? sunLongitude;
+    final next = mapboxLight == 'auto'
+        ? mb.sunPhase(
+            DateTime.now(),
+            latitude: sunLatitude,
+            longitude: sunLongitude,
+          )
+        : mapboxLight;
+    if (next == lightPreset) return;
+    lightPreset = next;
+    setStyle(style);
+  }
+
+  Future<void> setMapboxLight(String value) async {
+    await patchPrefs({'mapboxLight': value});
+    refreshSun();
+    changed();
+  }
+
+  Future<void> setMapboxToken(String value) async {
+    final token = value.trim();
+    if (token.isNotEmpty) await mb.checkMapboxToken(token);
+    await patchPrefs({'mapboxToken': token});
+    setStyle(token.isEmpty ? mb.effectiveBasemap(style, token) : 'mapbox');
+  }
+
+  String get accentTheme =>
+      style == 'voyager' || (isMapbox && ['day', 'dawn'].contains(lightPreset))
+      ? 'light'
+      : 'dark';
   Map<String, dynamic> get routeView =>
       Map<String, dynamic>.from(prefs['routeView'] ?? {});
   String activityColor(String sport) =>
@@ -358,7 +402,7 @@ class AppState extends ChangeNotifier {
   }
 
   void setStyle(String value) {
-    style = value;
+    style = mb.effectiveBasemap(value, mapboxToken);
     accent =
         '${(prefs['accents'] as Map?)?[accentTheme] ?? prefs['accent'] ?? '#60acff'}';
     changed();

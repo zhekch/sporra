@@ -1,3 +1,5 @@
+import 'native_map.dart';
+
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -293,7 +295,7 @@ Future<void> showMenuSheet(
   BuildContext context,
   AppState app,
   VoidCallback refresh,
-  MapLibreMapController? map,
+  NativeMapController? map,
 ) async {
   await panel(
     context,
@@ -310,11 +312,19 @@ Future<void> showMenuSheet(
                 section('Appearance'),
                 ChoiceRow(
                   label: 'Basemap',
-                  value: a.style == 'satellite' ? 'satellite' : 'flat',
-                  choices: const {'flat': '2D', 'satellite': 'Satellite'},
+                  value: a.style == 'mapbox'
+                      ? 'mapbox'
+                      : a.style == 'satellite'
+                      ? 'satellite'
+                      : 'flat',
+                  choices: {
+                    'flat': '2D',
+                    'satellite': 'Satellite',
+                    if (a.hasMapbox) 'mapbox': '3D',
+                  },
                   onChanged: (v) => a.setStyle(v == 'flat' ? 'dark' : v),
                 ),
-                if (a.style != 'satellite')
+                if (a.style != 'satellite' && a.style != 'mapbox')
                   ChoiceRow(
                     label: 'Theme',
                     value: a.style,
@@ -324,6 +334,17 @@ Future<void> showMenuSheet(
                       'voyager': 'Light',
                     },
                     onChanged: a.setStyle,
+                  ),
+                if (a.isMapbox)
+                  ChoiceRow(
+                    label: 'Time of day',
+                    value: a.mapboxLight,
+                    choices: const {
+                      'day': 'Day',
+                      'night': 'Night',
+                      'auto': 'Auto',
+                    },
+                    onChanged: (v) => a.run(() => a.setMapboxLight(v)),
                   ),
                 ChoiceRow(
                   label: 'Detail',
@@ -915,13 +936,13 @@ class _SourcesState extends State<_Sources> {
 Future<void> showSporraSearch(
   BuildContext context,
   AppState app,
-  MapLibreMapController map,
+  NativeMapController map,
 ) => panel(context, 'Search', _Search(app: app, map: map), showHeader: false);
 
 class _Search extends StatefulWidget {
   const _Search({required this.app, required this.map});
   final AppState app;
-  final MapLibreMapController map;
+  final NativeMapController map;
   @override
   State<_Search> createState() => _SearchState();
 }
@@ -1072,7 +1093,7 @@ class _SearchState extends State<_Search> {
 }
 
 void goTo(
-  MapLibreMapController map,
+  NativeMapController map,
   Map r, {
   double bottom = 150,
   EdgeInsets? padding,
@@ -1150,7 +1171,7 @@ Future<DateTime?> chooseDay(BuildContext context, AppState app) async {
   return selected;
 }
 
-Widget tripsList(AppState app, MapLibreMapController map) {
+Widget tripsList(AppState app, NativeMapController map) {
   return AsyncList(
     key: const ValueKey('search-trips'),
     load: () => app.api
@@ -1266,7 +1287,7 @@ Future<void> showDay(
   BuildContext context,
   AppState app,
   String key,
-  MapLibreMapController map,
+  NativeMapController map,
 ) async {
   Navigator.of(context).popUntil((r) => r.isFirst);
   await app.selectTrack(day: key);
@@ -1763,18 +1784,19 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               ChoiceRow(
                 label: 'Basemap',
                 value: app.style,
-                choices: const {
+                choices: {
                   'dark': 'Dark',
                   'voyager': 'Light',
                   'terrain': 'Terrain',
                   'satellite': 'Satellite',
+                  if (app.hasMapbox) 'mapbox': '3D',
                 },
                 onChanged: app.setStyle,
               ),
               ListTile(
                 title: const Text('Mapbox public token'),
                 subtitle: const Text(
-                  'Saved to your account. 3D maps are available on web.',
+                  'Saved to your account. Enables 3D and satellite maps. Clear to remove.',
                 ),
                 onTap: () async {
                   final token = await askText(
@@ -1785,9 +1807,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
                   );
                   if (token == null) return;
                   await app.run(() async {
-                    app.prefs['mapboxToken'] = token.trim();
-                    await app.api.post('/api/prefs', {'prefs': app.prefs});
-                    app.changed();
+                    await app.setMapboxToken(token);
                   });
                 },
               ),

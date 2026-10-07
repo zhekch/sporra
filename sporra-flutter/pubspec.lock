@@ -49,6 +49,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.13.1"
+  benchmark:
+    dependency: transitive
+    description:
+      name: benchmark
+      sha256: cb3eeea01e3f054df76ee9775ca680f3afa5f19f39b2bb426ba78ba27654493b
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.0"
   boolean_selector:
     dependency: transitive
     description:
@@ -161,6 +169,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.1"
+  dart_sort_queue:
+    dependency: transitive
+    description:
+      name: dart_sort_queue
+      sha256: f3353ba8b4850e072d3368757f62edb79af34a9703c3e3df9c59342721f5f5b1
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.2+3"
   dart_style:
     dependency: transitive
     description:
@@ -173,10 +189,10 @@ packages:
     dependency: transitive
     description:
       name: dbus
-      sha256: f7db8504e715b835f5ebe5fe74604ccd961d504c73389a5d8e81bafc2e2f3612
+      sha256: a48d5da28e89bd02196e80d81ed8d7954923d00a0f4a68cc20b575038f023383
       url: "https://pub.dev"
     source: hosted
-    version: "0.8.0"
+    version: "0.7.15"
   fake_async:
     dependency: transitive
     description:
@@ -229,10 +245,10 @@ packages:
     dependency: transitive
     description:
       name: file_picker_linux
-      sha256: "9c870771500c758eb46506c98532c3ee60e6e51d0a62dcde24a849ef213ea5ce"
+      sha256: e7db600f50672ce5ebbe422ac0906e0f3d2a476188cc93e7126afee12bf08063
       url: "https://pub.dev"
     source: hosted
-    version: "2.0.1"
+    version: "2.0.0"
   file_picker_platform_interface:
     dependency: transitive
     description:
@@ -280,6 +296,14 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  flutter_plugin_android_lifecycle:
+    dependency: transitive
+    description:
+      name: flutter_plugin_android_lifecycle
+      sha256: "3854fe5e3bff0b113c658f260b90c95dea17c92db0f2addeac2e343dd9969785"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.35"
   flutter_riverpod:
     dependency: "direct main"
     description:
@@ -311,6 +335,78 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  geoclue:
+    dependency: transitive
+    description:
+      name: geoclue
+      sha256: c2a998c77474fc57aa00c6baa2928e58f4b267649057a1c76738656e9dbd2a7f
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.1"
+  geolocator:
+    dependency: "direct main"
+    description:
+      name: geolocator
+      sha256: "4e41ad6bc072364ff01822531dac47936c065e5bf8f928f240a25bb51256ada0"
+      url: "https://pub.dev"
+    source: hosted
+    version: "14.1.1"
+  geolocator_android:
+    dependency: transitive
+    description:
+      name: geolocator_android
+      sha256: "1be90ea8aaaf9db8e7816b4fe0387f082ee8b5cf03355912dad90fb0a75717fa"
+      url: "https://pub.dev"
+    source: hosted
+    version: "5.1.1+1"
+  geolocator_apple:
+    dependency: transitive
+    description:
+      name: geolocator_apple
+      sha256: "853803d6bb1713c094e935b4a5ae5f19c0308acf81da13fa9ff84fb4c70c0b73"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.3.14"
+  geolocator_linux:
+    dependency: transitive
+    description:
+      name: geolocator_linux
+      sha256: "3da7420f11c3496511a5bd3c18fd67b88e5659f12e46b7ce00a788f6996e850a"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.6"
+  geolocator_platform_interface:
+    dependency: transitive
+    description:
+      name: geolocator_platform_interface
+      sha256: b640b6b687b14c66f51fe1130b1c2e8babbd408e0158052b92006b6675ca77fc
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.4.0"
+  geolocator_web:
+    dependency: transitive
+    description:
+      name: geolocator_web
+      sha256: "19e485a0f8d6a88abcf9c53cba3a4105e14b7435ed8ac1c108c067b938fe8429"
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.1.4"
+  geolocator_windows:
+    dependency: transitive
+    description:
+      name: geolocator_windows
+      sha256: "175435404d20278ffd220de83c2ca293b73db95eafbdc8131fe8609be1421eb6"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.5"
+  geotypes:
+    dependency: transitive
+    description:
+      name: geotypes
+      sha256: "5bedf57de92283133dd221e363812ef50eaaba414f0823b1974ef7d84b86991f"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.2"
   glob:
     dependency: transitive
     description:
@@ -335,6 +431,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.3.2"
+  gsettings:
+    dependency: transitive
+    description:
+      name: gsettings
+      sha256: "1b0ce661f5436d2db1e51f3c4295a49849f03d304003a7ba177d01e3a858249c"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.8"
   hooks:
     dependency: transitive
     description:
@@ -412,6 +516,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.0"
+  json_annotation:
+    dependency: transitive
+    description:
+      name: json_annotation
+      sha256: "2a743920d81b7910627f68ee2c9ac1fc0bfee32b9fc3403587d7c6791ca12f80"
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.12.0"
   leak_tracker:
     dependency: transitive
     description:
@@ -460,6 +572,38 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.3.0"
+  mapbox_maps_flutter:
+    dependency: "direct main"
+    description:
+      name: mapbox_maps_flutter
+      sha256: d0ea428ccadb5bca1bcd14f80f3ba8495938a77777ea322437aaea7853f5b0a0
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.0.0"
+  mapbox_maps_flutter_mobile:
+    dependency: transitive
+    description:
+      name: mapbox_maps_flutter_mobile
+      sha256: "9cc7755efd94fbf7a930bf13ef14eae9908b5c3f771749601385c0fcba53fd0c"
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.0.0"
+  mapbox_maps_flutter_platform_interface:
+    dependency: transitive
+    description:
+      name: mapbox_maps_flutter_platform_interface
+      sha256: "4d4bdee57b452256ad463fbdef2a5a968a824c0af40c31d20925d5ae88b7b268"
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.0.0"
+  mapbox_maps_flutter_web:
+    dependency: transitive
+    description:
+      name: mapbox_maps_flutter_web
+      sha256: c74ff15810af52fe5c812649e40f088128e8b3c4c156a8cca4b4b7800ae0e786
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.0.0"
   maplibre_gl:
     dependency: "direct main"
     description:
@@ -548,6 +692,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.0"
+  package_info_plus:
+    dependency: transitive
+    description:
+      name: package_info_plus
+      sha256: "73ef2cd5c11a7548f9b7f6fc2a4f6113de2e64aa2a70de63feede95548822908"
+      url: "https://pub.dev"
+    source: hosted
+    version: "10.2.2"
+  package_info_plus_platform_interface:
+    dependency: transitive
+    description:
+      name: package_info_plus_platform_interface
+      sha256: db762cb2f4f25ee60fb6359773861b0f199e00b90d237bd85a76a1e806b46ef4
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.1.0"
   path:
     dependency: transitive
     description:
@@ -668,6 +828,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.1"
+  rbush:
+    dependency: transitive
+    description:
+      name: rbush
+      sha256: "48b683421b4afb43a642f82c6aa31911e54f3069143d31c7d33cbe329df13403"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.1.1"
   record_use:
     dependency: transitive
     description:
@@ -745,6 +913,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.1"
+  sweepline_intersections:
+    dependency: transitive
+    description:
+      name: sweepline_intersections
+      sha256: a665c707200a4f07140a4029b41a7c4883beb3f04322cd8e08ebf650f69e1176
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.4"
   sync_http:
     dependency: transitive
     description:
@@ -769,6 +945,30 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.7.12"
+  turf:
+    dependency: transitive
+    description:
+      name: turf
+      sha256: "607db17ebb5ed83c00d822059e2542094abf6dc76fa1365dceddfee1d9492c5f"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.14"
+  turf_equality:
+    dependency: transitive
+    description:
+      name: turf_equality
+      sha256: f0f44ffe389547941358e0d3d4a747db2bd56115b32ff1cede5e5bdf3126a3e2
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.0"
+  turf_pip:
+    dependency: transitive
+    description:
+      name: turf_pip
+      sha256: ba4fd414baffd5d7b30880658ad6db82461c49ec023f8ffd0c23d398ad8b14be
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.2"
   typed_data:
     dependency: transitive
     description:

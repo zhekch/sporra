@@ -16,11 +16,11 @@ The verification section separates simulator evidence from source inspection.
 | Dark basemap | Present: native CARTO Dark |
 | Light basemap | Present: native CARTO Voyager |
 | Terrain basemap | Present: shared server style; dark colour treatment |
-| Satellite basemap | Present: shared Esri fallback style; token-backed Mapbox variant differs |
-| Mapbox Standard 3D | Missing: MapLibre cannot render Standard style imports |
-| Automatic sun / dawn / dusk lighting | Missing with the 3D engine |
+| Satellite basemap | Added in 0.11.0: native Mapbox Standard Satellite with a public token; shared Esri fallback without one |
+| Mapbox Standard 3D | Added in 0.11.0: second native SDK, Standard terrain, buildings, facades and zoom-gated landmarks; production tiles require account token validation |
+| Automatic sun / dawn / dusk lighting | Added: web solar calculation, device location/time-zone fallback, Day / Night / Auto controls |
 | Snow modes and particles | Missing |
-| Basemap token settings and validation | Shared account token editor under Settings → Map layers; validation and native Standard 3D remain missing |
+| Basemap token settings and validation | Added: checks public token access to Standard before saving; rejects secret tokens; clearing restores free basemaps |
 | Camera pan, zoom, pitch, bearing | Present; native gesture physics differ |
 | Three primary mobile buttons: search, menu, locate | Corrected: three vertical buttons |
 | Compass only when rotated or tilted | Corrected: conditional compass |
@@ -281,3 +281,10 @@ Menu and map screenshots were inspected; the airport-load screenshot is over
 the activity fixture and does not establish airport icon/label visual parity.
 Live Strava/Home Assistant credentials, external browser handoff and physical
 background tracking were not exercised in this pass.
+
+Flutter 0.11.0 Mapbox verification: Flutter unit/widget tests, server tests and
+iOS simulator compilation. The independent simulator integration test passed,
+exercising native style layers, image sources, hit queries, coordinates, bounds, camera and
+snapshot APIs against a local style. These checks do not verify remote Standard
+tile availability or physical-device rendering for an account token. Snow
+remains missing.

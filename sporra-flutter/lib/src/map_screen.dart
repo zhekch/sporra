@@ -1,3 +1,6 @@
+import 'native_map.dart';
+import 'mapbox_view.dart';
+import 'mapbox.dart' as mb;
 import 'rail_style.dart';
 
 import 'dart:async';
@@ -70,7 +73,8 @@ class MapScreen extends ConsumerStatefulWidget {
 
 class _MapScreenState extends ConsumerState<MapScreen>
     with WidgetsBindingObserver {
-  MapLibreMapController? map;
+  NativeMapController? map;
+  Timer? sunTimer;
   final painter = BlobPainter();
   Future<void> patchLayer(String id, LayerProperties properties) =>
       map!.setLayerProperties(id, LayerPatch(properties));
@@ -126,10 +130,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
   String? resolvedStyle;
   final stroke = <Offset>[];
   Offset? pointer;
-  Future<void> resolveStyle(AppState app, String name) async {
+  Future<void> resolveStyle(AppState app, String name, String identity) async {
     try {
       final data = await app.api.get('/api/render/style?name=$name');
-      if (mounted && requestedStyle == name) {
+      if (mounted && requestedStyle == identity) {
         setState(() {
           loaded = false;
           generation++;
@@ -212,6 +216,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         setState(() {
           locating = false;
           location = point;
+          updateSun();
         });
       }
     } on PlatformException catch (e) {
@@ -219,9 +224,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
         setState(() => mapError = e.message);
       }
     } on MissingPluginException {
-      // A callback from a departing platform view cannot focus the replacement.
+      // The old platform view may have departed.
+    } catch (e) {
+      if (mounted && token == generation) {
+        setState(() => mapError = 'Location unavailable: $e');
+      }
     } finally {
       focusingLocation = false;
+      if (mounted && locating && loaded && token != generation) {
+        unawaited(focusLocation());
+      }
     }
   }
 
@@ -499,9 +511,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   Future<String?> below() async {
+    if (map!.box != null) return null;
     final ids = await map!.getLayerIds();
     for (final id in ids) {
-      if ('$id'.contains('label') || '$id'.contains('place')) return '$id';
+      if (id.contains('label') || id.contains('place')) return id;
     }
     return null;
   }
@@ -512,6 +525,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       app.api.revision,
       app.routes,
       app.style,
+      app.accentTheme,
       app.stackIds,
       app.selectedRoute,
       app.activity?['route']['id'],
@@ -542,7 +556,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           .where((f) => f['properties']['id'] != app.activity!['route']['id'])
           .toList();
     }
-    final light = app.style == 'voyager';
+    final light = app.accentTheme == 'light';
     for (final f in data['features'] as List) {
       final props = f['properties'] as Map;
       final hex = '${props['color']}';
@@ -1289,10 +1303,33 @@ class _MapScreenState extends ConsumerState<MapScreen>
     );
   }
 
+  void updateSun() => ref
+      .read(appProvider)
+      .refreshSun(latitude: location?.latitude, longitude: location?.longitude);
+  void styleLoaded() {
+    generation++;
+    sources.clear();
+    layers.clear();
+    renderedView = null;
+    routesView = null;
+    routesUpdated = null;
+    trackView = null;
+    activityView = null;
+    activityLinesView = null;
+    overlaysView = null;
+    outlineView = null;
+    photosView = null;
+    fade?.cancel();
+    loaded = true;
+    unawaited(focusLocation());
+    unawaited(refresh());
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    sunTimer = Timer.periodic(const Duration(minutes: 1), (_) => updateSun());
   }
 
   @override
@@ -1302,6 +1339,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       unawaited(ref.read(appProvider).api.flushCache());
     } else if (state == AppLifecycleState.resumed) {
       setState(() => locating = true);
+      updateSun();
       unawaited(focusLocation());
       unawaited(refresh());
     }
@@ -1312,6 +1350,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     WidgetsBinding.instance.removeObserver(this);
     generation++;
     tapRequest++;
+    sunTimer?.cancel();
     dismissToast();
     fade?.cancel();
     super.dispose();
@@ -1338,13 +1377,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
         });
       }
     }
-    if (requestedStyle != app.style) {
+    final nativeStyle = mb.effectiveBasemap(app.style, app.mapboxToken);
+    final styleIdentity =
+        '${app.style}:${app.isMapbox}:${app.isMapbox ? app.mapboxToken : ''}';
+    if (requestedStyle != styleIdentity) {
       loaded = false;
       generation++;
-      requestedStyle = app.style;
+      requestedStyle = styleIdentity;
       resolvedStyle = null;
-      if (app.style == 'terrain' || app.style == 'satellite') {
-        unawaited(resolveStyle(app, app.style));
+      if (!app.isMapbox &&
+          (nativeStyle == 'terrain' || nativeStyle == 'satellite')) {
+        unawaited(resolveStyle(app, nativeStyle, styleIdentity));
       }
     }
 
@@ -1377,63 +1420,73 @@ class _MapScreenState extends ConsumerState<MapScreen>
           mapSize = constraints.biggest;
           return Stack(
             children: [
-              MapLibreMap(
-                key: const ValueKey('sporra-map'),
-                styleString: resolvedStyle ?? mapStyle(app.style),
-                initialCameraPosition: camera,
-                trackCameraPosition: true,
-                featureTapsTriggersMapClick: true,
-                myLocationEnabled: locationEnabled,
-                myLocationTrackingMode: locating
-                    ? MyLocationTrackingMode.tracking
-                    : MyLocationTrackingMode.none,
-                myLocationRenderMode: locationEnabled
-                    ? MyLocationRenderMode.compass
-                    : MyLocationRenderMode.normal,
-                scaleControlEnabled: true,
-                attributionButtonPosition: AttributionButtonPosition.bottomLeft,
-                attributionButtonMargins: math.Point(
-                  12,
-                  MediaQuery.paddingOf(context).bottom + 8,
+              if (app.isMapbox)
+                MapboxView(
+                  key: ValueKey('mapbox:${app.mapboxToken}'),
+                  token: app.mapboxToken,
+                  satellite: app.style == 'satellite',
+                  light: app.lightPreset,
+                  camera: camera,
+                  onCreated: (c) {
+                    map = c;
+                    loaded = false;
+                    generation++;
+                    sources.clear();
+                    layers.clear();
+                  },
+                  onLoaded: styleLoaded,
+                  onCamera: (p) {
+                    camera = p;
+                  },
+                  onIdle: () => unawaited(refresh()),
+                  onTap: (p, pixel) => unawaited(tap(p, pixel: pixel)),
+                  onError: (message) {
+                    if (mounted) setState(() => mapError = message);
+                  },
+                )
+              else
+                MapLibreMap(
+                  key: const ValueKey('sporra-map'),
+                  styleString: resolvedStyle ?? mapStyle(nativeStyle),
+                  initialCameraPosition: camera,
+                  trackCameraPosition: true,
+                  featureTapsTriggersMapClick: true,
+                  myLocationEnabled: locationEnabled,
+                  myLocationTrackingMode: locating
+                      ? MyLocationTrackingMode.tracking
+                      : MyLocationTrackingMode.none,
+                  myLocationRenderMode: locationEnabled
+                      ? MyLocationRenderMode.compass
+                      : MyLocationRenderMode.normal,
+                  scaleControlEnabled: true,
+                  attributionButtonPosition:
+                      AttributionButtonPosition.bottomLeft,
+                  attributionButtonMargins: math.Point(
+                    12,
+                    MediaQuery.paddingOf(context).bottom + 8,
+                  ),
+                  onMapCreated: (c) {
+                    generation++;
+                    loaded = false;
+                    sources.clear();
+                    layers.clear();
+                    map = NativeMapController.libre(c);
+                  },
+                  onStyleLoadedCallback: styleLoaded,
+                  onCameraIdle: () => unawaited(refresh()),
+                  onCameraMove: (p) {
+                    camera = p;
+                    if (p.tilt > 60) {
+                      unawaited(map!.moveCamera(CameraUpdate.tiltTo(60)));
+                    }
+                  },
+                  onUserLocationUpdated: (p) {
+                    location = p.position;
+                    updateSun();
+                    unawaited(focusLocation());
+                  },
+                  onMapClick: (pixel, p) => unawaited(tap(p, pixel: pixel)),
                 ),
-                onMapCreated: (c) {
-                  generation++;
-                  loaded = false;
-                  sources.clear();
-                  layers.clear();
-                  map = c;
-                },
-                onStyleLoadedCallback: () {
-                  generation++;
-                  sources.clear();
-                  layers.clear();
-                  renderedView = null;
-                  routesView = null;
-                  routesUpdated = null;
-                  trackView = null;
-                  activityView = null;
-                  activityLinesView = null;
-                  overlaysView = null;
-                  outlineView = null;
-                  photosView = null;
-                  fade?.cancel();
-                  loaded = true;
-                  unawaited(focusLocation());
-                  unawaited(refresh());
-                },
-                onCameraIdle: () => unawaited(refresh()),
-                onCameraMove: (p) {
-                  camera = p;
-                  if (p.tilt > 60) {
-                    unawaited(map!.moveCamera(CameraUpdate.tiltTo(60)));
-                  }
-                },
-                onUserLocationUpdated: (p) {
-                  location = p.position;
-                  unawaited(focusLocation());
-                },
-                onMapClick: (pixel, p) => unawaited(tap(p, pixel: pixel)),
-              ),
               if (app.editing && !app.clearingRegion)
                 Positioned.fill(
                   child: GestureDetector(

@@ -34,7 +34,15 @@ Menus and cards use the web app’s neutral glass surfaces and backdrop blur.
 The detailed feature-by-feature comparison is in
 [FLUTTER_WEB_PARITY.md](../FLUTTER_WEB_PARITY.md).
 
-This is an early port. Advanced export layouts, Komoot tour import, Mapbox Standard 3D,
+For 3D maps, open **Settings → Map layers → Mapbox public token** and paste
+an existing public (`pk.`) token from your Mapbox account. The app checks it
+before saving it to your Sporra account and switching to 3D. Appearance offers
+**2D**, **Satellite**, and **3D**; satellite uses Mapbox Standard Satellite while
+a token is saved, and Esri imagery otherwise. **Day**, **Night**, and **Auto**
+control lighting; Auto follows the sun at your location, or your time zone until
+a location is available. Clearing the token restores the free basemaps.
+
+This is an early port. Advanced export layouts,
 full administration and complete visual/localization
 parity still need work. Simulator location, HealthKit and photo availability
 are limited by the simulator's configured data.
@@ -44,6 +52,13 @@ are limited by the simulator's configured data.
 ```sh
 flutter analyze
 flutter test
+```
+
+The independent native Mapbox smoke test uses an in-memory style and a dummy
+token; it requires no server or Mapbox account:
+
+```sh
+flutter test integration_test/mapbox_test.dart -d <simulator-id>
 ```
 
 The integration test additionally needs a disposable server at port 3209 with

@@ -1,3 +1,5 @@
+import 'package:sporra_flutter/src/native_map.dart';
+
 import 'dart:convert';
 
 import 'package:flutter/cupertino.dart';
@@ -134,7 +136,11 @@ void main() {
             home: Scaffold(
               body: Builder(
                 builder: (context) => TextButton(
-                  onPressed: () => showSporraSearch(context, app, _UnusedMap()),
+                  onPressed: () => showSporraSearch(
+                    context,
+                    app,
+                    NativeMapController.libre(_UnusedMap()),
+                  ),
                   child: const Text('Open'),
                 ),
               ),

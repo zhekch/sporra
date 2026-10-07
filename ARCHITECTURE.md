@@ -10103,3 +10103,35 @@ Location focus is armed through native tracking until a valid position and loade
 style are available, also querying the native last position after style load and
 foreground resume. Focus clears only after the camera operation completes, and
 the location button uses the same guarded path.
+
+
+### Flutter Mapbox (0.11.0)
+
+MapLibre stays the renderer for CARTO, Terrain and tokenless Esri satellite.
+`MapboxView` uses the official Mapbox Flutter SDK for Standard and Standard
+Satellite, following the [Mapbox style configuration API](https://docs.mapbox.com/flutter/maps/guides/styles/set-a-style/).
+Engine switches retain the last camera; Standard/satellite switches reuse the
+Mapbox view and reload its style. Style identity includes token changes. A
+render generation invalidates pending viewport replies and resets all installed
+source/layer caches after style loading.
+
+`NativeMapController` adapts the shared overlay pipeline to each SDK. MapLibre
+layer properties serialize into the style specification's paint/layout groups;
+Mapbox layers use the same slots as the web: bottom for visited ground, middle
+for activity lines, top for selections and reference overlays. Activity, trip
+and selection lines use ground elevation references to retain their resolution
+over terrain. Emissive strengths keep app-owned overlays readable at night. Blob PNGs update native image sources in place;
+camera updates, screen conversion, feature hit tests and snapshots use the
+same adapter. Native tests load an in-memory style with explicit slots, so
+SDK verification does not require a production Mapbox credential.
+
+Only public pk. tokens are accepted. The editor fetches Standard directly from
+Mapbox with a 15-second timeout before writing the shared mapboxToken account
+preference. Clearing it returns 3D to Dark and satellite to Esri. Lighting is
+stored as mapboxLight (Day, Night or Auto); Auto uses the same solar elevation
+algorithm and ±6° thresholds as src/sun.js, updated each minute, on location
+focus and foreground resume. The latest device fix is retained in memory;
+before a fix, the time-zone longitude at latitude zero is used. Light/dark
+accents and route contrast follow the resolved preset. Terrain stays at real
+exaggeration 1 through all zooms, DEM maxzoom 14; landmarks begin at zoom 15.
+The current native SDK permits pitch up to 85°. Snow is outside this change.
