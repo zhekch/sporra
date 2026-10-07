@@ -1621,7 +1621,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                           HapticFeedback.lightImpact();
                                           showSporraSearch(context, app, map!);
                                         },
-                                  icon: const Icon(CupertinoIcons.search),
+                                  icon: const SFIcon(
+                                    'magnifyingglass',
+                                    fallback: CupertinoIcons.search,
+                                  ),
                                 ),
                                 IconButton(
                                   tooltip: 'Menu',
@@ -1634,8 +1637,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                       map,
                                     );
                                   },
-                                  icon: const Icon(
-                                    CupertinoIcons.line_horizontal_3,
+                                  icon: const SFIcon(
+                                    'line.3.horizontal',
+                                    fallback: CupertinoIcons.line_horizontal_3,
                                   ),
                                 ),
                                 IconButton(
@@ -1648,7 +1652,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                     });
                                     unawaited(focusLocation());
                                   },
-                                  icon: const Icon(CupertinoIcons.location),
+                                  icon: SFIcon(
+                                    locating ? 'location.fill' : 'location',
+                                    fallback: locating
+                                        ? CupertinoIcons.location_fill
+                                        : CupertinoIcons.location,
+                                  ),
                                 ),
                               ],
                             ),

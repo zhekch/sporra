@@ -583,14 +583,17 @@ Future<void> showMenuSheet(
             section('Explore and manage'),
             ListTile(
               leading: const SFIcon(
-                'chart.bar',
-                fallback: CupertinoIcons.chart_bar,
+                'chart.bar.fill',
+                fallback: CupertinoIcons.chart_bar_fill,
               ),
               title: const Text('Activities and statistics'),
               onTap: () => showStats(context, a),
             ),
             ListTile(
-              leading: const SFIcon('camera', fallback: CupertinoIcons.camera),
+              leading: const SFIcon(
+                'camera.fill',
+                fallback: CupertinoIcons.camera_fill,
+              ),
               title: const Text('Save map picture'),
               onTap: map == null
                   ? null
@@ -603,7 +606,10 @@ Future<void> showMenuSheet(
                     }),
             ),
             ListTile(
-              leading: const SFIcon('gearshape', fallback: CupertinoIcons.gear),
+              leading: const SFIcon(
+                'gearshape.fill',
+                fallback: CupertinoIcons.gear_solid,
+              ),
               title: const Text('Settings'),
               onTap: () => showSettings(context, a),
             ),

@@ -10239,3 +10239,8 @@ Photo headers count stills and videos separately and omit the header divider.
 The grid uses one, two, or three columns according to item count, shrink-wraps
 small galleries, and scrolls within the existing panel height cap for large ones.
 Trip/day map banners omit their category eyebrow and retain the date/name.
+
+The primary map controls use native SF Symbols: magnifyingglass,
+line.3.horizontal, and location (location.fill while native location tracking
+is armed). Explore and manage uses filled chart.bar, camera, and gearshape
+symbols, with corresponding Cupertino fallbacks.

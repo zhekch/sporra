@@ -24,6 +24,13 @@ void main() {
       'chevron.right',
       'point.bottomleft.forward.to.arrow.triangle.scurvepath.fill',
       'hand.point.up.left.fill',
+      'magnifyingglass',
+      'line.3.horizontal',
+      'location',
+      'location.fill',
+      'chart.bar.fill',
+      'camera.fill',
+      'gearshape.fill',
     ]) {
       final bytes = await SFIcon.channel.invokeMethod<List<int>>('render', {
         'name': name,
