@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
+import 'package:maplibre_gl/maplibre_gl.dart';
 
 import 'blob.dart';
 
@@ -166,3 +167,11 @@ Set<int> activityHitIds(
   }
   return ids;
 }
+
+CameraPosition locationCamera(LatLng point, CameraPosition current) =>
+    CameraPosition(
+      target: point,
+      zoom: 13.6,
+      tilt: current.tilt,
+      bearing: current.bearing,
+    );

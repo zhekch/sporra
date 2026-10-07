@@ -218,6 +218,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   bool focusingLocation = false;
+  int locationFocusGeneration = 0;
   Future<void> focusLocation() async {
     final controller = map;
     if (!mounted ||
@@ -229,6 +230,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
     final token = generation;
     focusingLocation = true;
+    locationFocusGeneration++;
     try {
       final point = location ?? await controller.requestMyLocationLatLng();
       if (point == null ||
@@ -239,7 +241,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
           !identical(map, controller)) {
         return;
       }
-      await controller.animateCamera(CameraUpdate.newLatLngZoom(point, 13.6));
+      final destination = locationCamera(point, camera);
+      // A focus jump has one render level; animation frames must not request
+      // or paint the coarse levels between startup and the location zoom.
+      await controller.moveCamera(CameraUpdate.newCameraPosition(destination));
+      camera = destination;
       if (mounted && token == generation) {
         setState(() {
           locating = false;
@@ -259,6 +265,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
     } finally {
       focusingLocation = false;
+      if (mounted && loaded && token == generation) unawaited(refresh());
       if (mounted && locating && loaded && token != generation) {
         unawaited(focusLocation());
       }
@@ -299,7 +306,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   Future<void> refresh() async {
-    if (!mounted || !loaded || map == null) return;
+    if (!mounted || !loaded || map == null || focusingLocation) return;
     if (refreshing) {
       pending = true;
       return;
@@ -311,6 +318,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     try {
       if (!mounted || token != generation) return;
       final renderRevision = app.revision;
+      final focusToken = locationFocusGeneration;
       final controller = map!;
       final viewport = await controller.getVisibleRegion();
       if (!mounted ||
@@ -319,7 +327,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           !loaded) {
         return;
       }
-      final zoom = controller.cameraPosition?.zoom ?? 8;
+      final zoom = camera.zoom;
       final level = app.detail == 'tiny'
           ? 0
           : app.detail == 'region'
@@ -333,6 +341,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       final view = jsonEncode([
         generation,
         app.api.revision,
+        locationFocusGeneration,
         app.renderQuery(level),
         app.ground,
         app.revision,
@@ -389,7 +398,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
       if (level < 6) {
         data['rows'] = cellsInBounds(data['rows'] as List, bounds);
       }
-      if (!mounted || token != generation || renderRevision != app.revision) {
+      if (!mounted ||
+          token != generation ||
+          renderRevision != app.revision ||
+          focusingLocation ||
+          focusToken != locationFocusGeneration) {
         pending = true;
         return;
       }
@@ -431,7 +444,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
           h,
           app.mode != 'flat',
         );
-        if (!mounted || token != generation || renderRevision != app.revision) {
+        if (!mounted ||
+            token != generation ||
+            renderRevision != app.revision ||
+            focusingLocation ||
+            focusToken != locationFocusGeneration) {
           pending = true;
           return;
         }
@@ -1458,6 +1475,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
   @override
   void initState() {
     super.initState();
+    final preferences = ref.read(appProvider).mapPreferences;
+    camera = CameraPosition(
+      target: camera.target,
+      zoom: camera.zoom,
+      tilt: preferences.tilt,
+      bearing: preferences.bearing,
+    );
     WidgetsBinding.instance.addObserver(this);
     sunTimer = Timer.periodic(const Duration(minutes: 1), (_) => updateSun());
   }
@@ -1469,6 +1493,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       if (state == AppLifecycleState.paused) setState(() => locating = false);
       ref.read(appProvider).api.cancelPrefetch();
       unawaited(ref.read(appProvider).api.flushCache());
+      unawaited(ref.read(appProvider).mapPreferences.flush());
     } else if (state == AppLifecycleState.resumed) {
       updateSun();
       unawaited(refresh());
@@ -1577,6 +1602,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   onCamera: (p) {
                     app.api.cancelPrefetch();
                     camera = p;
+                    app.rememberPerspective(p.tilt, p.bearing);
                   },
                   onIdle: () => unawaited(refresh()),
                   onTap: (p, pixel) => unawaited(tap(p, pixel: pixel)),
@@ -1617,6 +1643,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   onCameraMove: (p) {
                     app.api.cancelPrefetch();
                     camera = p;
+                    app.rememberPerspective(p.tilt, p.bearing);
                     if (p.tilt > 60) {
                       unawaited(map!.moveCamera(CameraUpdate.tiltTo(60)));
                     }

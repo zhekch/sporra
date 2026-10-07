@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'api.dart';
+import 'map_preferences.dart';
 import 'native.g.dart';
 
 final appProvider = ChangeNotifierProvider((ref) => AppState());
@@ -18,6 +19,7 @@ class AppState extends ChangeNotifier {
     this.api.onMapDataChanged = changed;
   }
   final SporraApi api;
+  final mapPreferences = MapPreferences();
   final native = SporraNative();
   Map<String, dynamic> device = {};
   Map<String, dynamic> prefs = {};
@@ -326,6 +328,10 @@ class AppState extends ChangeNotifier {
   Future<void> restoreCache() async {
     try {
       final directory = await getApplicationSupportDirectory();
+      await mapPreferences.restore(
+        File('${directory.path}/map-preferences.json'),
+        '${api.server}\n${user!["username"]}',
+      );
       await api.restore(
         File('${directory.path}/responses.json'),
         '${user!['username']}',
@@ -347,7 +353,9 @@ class AppState extends ChangeNotifier {
     );
     accent =
         '${(prefs['accents'] as Map?)?['dark'] ?? prefs['accent'] ?? '#60acff'}';
+    style = mb.effectiveBasemap(mapPreferences.style, mapboxToken);
     refreshSun();
+    setStyle(style);
     mode = '${prefs['heatMode'] ?? 'flat'}';
     if (!['flat', 'visits', 'oldest', 'type'].contains(mode)) mode = 'flat';
   }
@@ -409,9 +417,17 @@ class AppState extends ChangeNotifier {
 
   void setStyle(String value) {
     style = mb.effectiveBasemap(value, mapboxToken);
+    mapPreferences.style = style;
+    mapPreferences.save();
     accent =
         '${(prefs['accents'] as Map?)?[accentTheme] ?? prefs['accent'] ?? '#60acff'}';
     changed();
+  }
+
+  void rememberPerspective(double tilt, double bearing) {
+    mapPreferences.tilt = tilt;
+    mapPreferences.bearing = bearing;
+    mapPreferences.save();
   }
 
   Future<void> saveAppearance() async {

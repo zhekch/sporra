@@ -10307,3 +10307,19 @@ quota to retain tile packs near browsed places across launches. Native prefetch
 zoom delta 2 requests an overview before detailed tiles. Storage and eviction stay
 with the SDK. MapLibre retains its existing ambient cache. This does not promise
 all visited basemaps offline; cold snapshots require their first download.
+
+
+### Location focus and device map preferences (Flutter 0.17.1)
+
+Location focus now sets the destination camera directly at zoom 13.6 instead of
+animating through coarser levels. Refreshes defer while focus obtains the location
+and moves the camera, then paint the destination viewport. Old in-flight cell
+responses cannot paint during focus. The focus camera explicitly retains tilt
+and bearing; regular panning and zooming continue to follow the level ladder.
+
+Basemap/theme, tilt and bearing persist in map-preferences.json in Application
+Support, scoped to the server and account. Restore runs before preferences and
+map creation; writes debounce for 500 ms and flush when the app becomes inactive.
+A damaged file falls back to the default view. The Mapbox-token fallback still
+applies, and the explicit compass reset remains available. Saving view preferences
+does not invalidate cell snapshots or require a server call.
