@@ -4,6 +4,8 @@
 #   sporra-webserver/scripts/restart.sh              port 3001
 #   sporra-webserver/scripts/restart.sh --no-pull    skip the git pull
 #   sporra-webserver/scripts/restart.sh --nightly    track nightly, then restart
+#   sporra-webserver/scripts/restart.sh --main       track main, then restart
+#   sporra-webserver/scripts/restart.sh --web-only   keep only the web deployment
 #   PORT=8080 sporra-webserver/scripts/restart.sh    somewhere else
 #
 # Run it from anywhere; it finds its own folder. That is the whole point of it
@@ -42,17 +44,30 @@ cd "$here/.."
 
 port="${PORT:-3001}"
 pull=1
-nightly=0
-case "${1:-}" in
-  --no-pull) pull=0 ;;
-  --nightly) nightly=1 ;;
-  "") ;;
-  *)
-    echo "unknown option: ${1}" >&2
-    echo "   --no-pull skips the git pull; --nightly tracks origin/nightly" >&2
-    exit 1
-    ;;
-esac
+branch=""
+web_only=0
+for option in "$@"; do
+  case "$option" in
+    --no-pull) pull=0 ;;
+    --nightly|--main)
+      if [[ -n "$branch" ]]; then
+        echo "choose only one of --main and --nightly" >&2
+        exit 1
+      fi
+      branch="${option#--}"
+      ;;
+    --web-only) web_only=1 ;;
+    *)
+      echo "unknown option: $option" >&2
+      echo "   options: --no-pull, --nightly, --main, --web-only" >&2
+      exit 1
+      ;;
+  esac
+done
+if [[ -n "$branch" && $pull == 0 ]]; then
+  echo "--no-pull cannot be combined with a branch switch" >&2
+  exit 1
+fi
 
 # `npm install` below rewrites package-lock.json often enough — a different npm
 # or node version on this machine is all it takes — and leaves it dirty. The
@@ -78,33 +93,45 @@ restore_lockfile() {
   fi
 }
 
-if [[ $nightly == 1 ]]; then
-  # The test machine is one clone, and `git pull` follows whatever branch that
-  # clone is on. Moving it onto nightly here is how a tryout gets updated
-  # without being merged to main first. Main is still what ships.
-  #
-  # The first run creates the local branch from origin. Later runs only fast-
-  # forward it, so a commit made on the box still stops the restart instead of
-  # being rewound to make the script succeed.
-  #
-  # This has to be on main as well as nightly. The machine that is still on
-  # main receives the command by an ordinary restart; one run of it is the
-  # switch. A plain restart after that keeps pulling nightly.
+if [[ $web_only == 1 ]]; then
+  # Opt in only on a deployment clone: developers need the native folders.
+  # Sparse checkout alone saves disk space, but still downloads every blob.
+  # The promisor filter makes future fetches omit file contents until needed.
   restore_lockfile
-  echo "→ fetching nightly"
-  git fetch origin nightly
-  if git show-ref --verify --quiet refs/heads/nightly; then
-    git switch nightly
-  else
-    git switch --track origin/nightly
+  if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    echo "commit or restore tracked changes before enabling --web-only" >&2
+    exit 1
   fi
-  git branch --set-upstream-to=origin/nightly nightly
+  echo "→ configuring web-only checkout"
+  git -C "$(git rev-parse --show-toplevel)" sparse-checkout set --cone sporra-webserver
+  git config remote.origin.promisor true
+  git config remote.origin.partialclonefilter blob:none
 fi
 
-if [[ $pull == 1 ]]; then
+if [[ -n "$branch" ]]; then
+  restore_lockfile
+  echo "→ fetching $branch"
+  # A single-branch clone needs a persistent fetch mapping before Git will
+  # recognize the new remote ref as a tracking branch (and pull it later).
+  refspec="+refs/heads/$branch:refs/remotes/origin/$branch"
+  if ! git config --get-all remote.origin.fetch | grep -Fxq -- "$refspec"; then
+    git remote set-branches --add origin "$branch"
+  fi
+  git fetch --no-tags origin "refs/heads/$branch:refs/remotes/origin/$branch"
+  if git show-ref --verify --quiet "refs/heads/$branch"; then
+    git switch "$branch"
+  else
+    git switch --track -c "$branch" "origin/$branch"
+  fi
+  git branch --set-upstream-to="origin/$branch" "$branch"
+  echo "→ updating $branch"
+  git merge --ff-only --no-stat "origin/$branch"
+elif [[ $pull == 1 ]]; then
+  # A diffstat reads changed blobs even outside the sparse checkout. Suppress
+  # it so native-only changes do not trigger downloads just to count lines.
   restore_lockfile
   echo "→ pulling"
-  git pull --ff-only
+  git pull --ff-only --no-tags --no-stat
 fi
 
 echo "→ installing"
