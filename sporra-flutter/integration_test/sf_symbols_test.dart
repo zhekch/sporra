@@ -22,6 +22,8 @@ void main() {
       'link',
       'arrow.triangle.2.circlepath',
       'chevron.right',
+      'point.bottomleft.forward.to.arrow.triangle.scurvepath.fill',
+      'hand.point.up.left.fill',
     ]) {
       final bytes = await SFIcon.channel.invokeMethod<List<int>>('render', {
         'name': name,

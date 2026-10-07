@@ -305,10 +305,32 @@ void main() {
         image.dispose();
       });
     }
+    final impacts = <dynamic>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'HapticFeedback.vibrate') {
+          impacts.add(call.arguments);
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
     showMenuSheet(context, app, () {}, null);
     await tester.pumpAndSettle();
     expect(clip(), activityCorners);
     expect(border().borderRadius, activityCorners);
+    await tester.tap(find.text('Appearance'));
+    await tester.pumpAndSettle();
+    expect(impacts, ['HapticFeedbackType.lightImpact']);
+    await tester.tap(find.text('Appearance'));
+    await tester.pumpAndSettle();
+    expect(impacts, ['HapticFeedbackType.lightImpact']);
     Navigator.of(context).pop();
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);

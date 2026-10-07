@@ -228,11 +228,17 @@ class DisclosureTile extends StatefulWidget {
     required this.children,
     this.subtitle,
     this.trailing,
+    this.tilePadding,
+    this.shape,
+    this.trailingWidth,
     this.initiallyExpanded = false,
     this.onExpansionChanged,
   });
   final Widget title;
   final Widget? subtitle, trailing;
+  final EdgeInsetsGeometry? tilePadding;
+  final ShapeBorder? shape;
+  final double? trailingWidth;
   final List<Widget> children;
   final bool initiallyExpanded;
   final ValueChanged<bool>? onExpansionChanged;
@@ -258,8 +264,17 @@ class _DisclosureTileState extends State<DisclosureTile> {
   Widget build(BuildContext context) => ExpansionTile(
     title: widget.title,
     subtitle: widget.subtitle,
+    tilePadding: widget.tilePadding,
+    shape: widget.shape,
     initiallyExpanded: expanded,
-    trailing: widget.trailing ?? DisclosureChevron(expanded: expanded),
+    trailing:
+        widget.trailing ??
+        (widget.trailingWidth == null
+            ? DisclosureChevron(expanded: expanded)
+            : SizedBox(
+                width: widget.trailingWidth,
+                child: Center(child: DisclosureChevron(expanded: expanded)),
+              )),
     onExpansionChanged: (open) {
       setState(() => expanded = open);
       widget.onExpansionChanged?.call(open);

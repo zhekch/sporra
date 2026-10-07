@@ -28,6 +28,7 @@ void main() {
           home: Scaffold(
             body: ListView(
               children: [
+                Builder(builder: (context) => phoneSyncTile(context, app)),
                 ConnectorSettings(app: app, kind: 'strava', inline: true),
                 ConnectorSettings(app: app, kind: 'ha', inline: true),
               ],
@@ -37,6 +38,13 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Not connected'), findsNothing);
+      final actionX = tester.getCenter(find.byTooltip('Sync phone')).dx;
+      for (final arrow in find.byType(DisclosureChevron).evaluate()) {
+        expect(
+          tester.getCenter(find.byWidget(arrow.widget)).dx,
+          closeTo(actionX, 0.1),
+        );
+      }
       await tester.tap(find.text('Strava'));
       await tester.pumpAndSettle();
       expect(find.text('Not connected'), findsOneWidget);
@@ -47,6 +55,10 @@ void main() {
         closeTo(tester.getCenter(find.byTooltip('Connect Strava')).dy, 1),
       );
       expect(find.byIcon(CupertinoIcons.link), findsOneWidget);
+      expect(
+        tester.getCenter(find.byTooltip('Connect Strava')).dx,
+        closeTo(actionX, 0.1),
+      );
     },
   );
   testWidgets(

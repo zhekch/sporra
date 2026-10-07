@@ -1628,21 +1628,23 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                   tooltip: 'Search',
                                   onPressed: map == null
                                       ? null
-                                      : () => showSporraSearch(
-                                          context,
-                                          app,
-                                          map!,
-                                        ),
+                                      : () {
+                                          HapticFeedback.lightImpact();
+                                          showSporraSearch(context, app, map!);
+                                        },
                                   icon: const Icon(CupertinoIcons.search),
                                 ),
                                 IconButton(
                                   tooltip: 'Menu',
-                                  onPressed: () => showMenuSheet(
-                                    context,
-                                    app,
-                                    () => unawaited(refresh()),
-                                    map,
-                                  ),
+                                  onPressed: () {
+                                    HapticFeedback.lightImpact();
+                                    showMenuSheet(
+                                      context,
+                                      app,
+                                      () => unawaited(refresh()),
+                                      map,
+                                    );
+                                  },
                                   icon: const Icon(
                                     CupertinoIcons.line_horizontal_3,
                                   ),
@@ -1650,6 +1652,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                 IconButton(
                                   tooltip: 'Your location',
                                   onPressed: () {
+                                    HapticFeedback.lightImpact();
                                     setState(() {
                                       locationEnabled = true;
                                       locating = true;

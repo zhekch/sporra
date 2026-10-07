@@ -171,6 +171,20 @@ void main() {
       expect(find.textContaining('hidden trips'), findsNothing);
       final field = tester.widget<TextField>(find.byType(TextField));
       expect(field.decoration!.border, InputBorder.none);
+      expect(
+        field.decoration!.hintText,
+        'Search for trips, activities or places',
+      );
+      expect(find.byIcon(CupertinoIcons.search), findsNothing);
+      expect(find.byIcon(CupertinoIcons.xmark), findsNothing);
+      final popup = tester.getRect(find.byType(Glass));
+      final calendar = tester.getRect(find.byTooltip('Calendar'));
+      expect(calendar.top - popup.top, 24);
+      expect(popup.right - calendar.right, 24);
+      expect(
+        tester.getRect(find.byType(TextField)).center.dy,
+        closeTo(calendar.center.dy, 1),
+      );
       await tester.tap(find.byTooltip('Calendar'));
       await tester.pumpAndSettle();
       expect(find.byType(VisitCalendar), findsOneWidget);
@@ -321,11 +335,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Alice'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
-    final account = find.widgetWithText(ChoiceChip, 'Account');
+    final account = find.widgetWithText(ChoiceChip, 'Backups');
     await tester.ensureVisible(account);
     await tester.tap(account);
     await tester.pumpAndSettle();
     expect(find.text('Back up now on the server'), findsOneWidget);
+    expect(find.text('Delete account'), findsNothing);
+    expect(find.text('Sign out'), findsNothing);
     expect(find.text('Settings'), findsOneWidget);
     final importTab = find.widgetWithText(ChoiceChip, 'Import');
     await tester.ensureVisible(importTab);
@@ -345,6 +361,23 @@ void main() {
     await tester.tap(personal);
     await tester.pumpAndSettle();
     expect(find.widgetWithText(ChoiceChip, 'Edit'), findsNothing);
+    expect(find.text('Delete account'), findsOneWidget);
+    expect(find.text('Sign out'), findsOneWidget);
+    expect(find.widgetWithText(ChoiceChip, 'Account'), findsNothing);
+    expect(
+      find.ancestor(of: find.text('Sign out'), matching: find.byType(ListView)),
+      findsNothing,
+    );
+    final versions = find.textContaining('iOS version:');
+    expect(
+      tester.getBottomLeft(find.text('Sign out')).dy,
+      lessThan(tester.getTopLeft(versions).dy),
+    );
+    expect(
+      tester.getTopLeft(versions).dy -
+          tester.getBottomLeft(find.text('Sign out')).dy,
+      lessThan(50),
+    );
     expect(find.text('MANUAL EDIT'), findsOneWidget);
     expect(find.text('Edit on the map'), findsOneWidget);
     final originalSize = tester.view.physicalSize;

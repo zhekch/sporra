@@ -64,6 +64,7 @@ Future<void> panel(
   double height = 0.62,
   bool fullscreen = false,
   bool showHeader = true,
+  bool showHeaderDivider = true,
 }) async {
   final app = ProviderScope.containerOf(
     context,
@@ -204,7 +205,8 @@ Future<void> panel(
                                   ],
                                 ),
                               ),
-                            if (showHeader) const Divider(height: 1),
+                            if (showHeader && showHeaderDivider)
+                              const Divider(height: 1),
                             Flexible(
                               child:
                                   NotificationListener<
@@ -320,6 +322,10 @@ Future<void> showMenuSheet(
           children: [
             DisclosureTile(
               title: const Text('Appearance'),
+              shape: const Border(),
+              onExpansionChanged: (expanded) {
+                if (expanded) HapticFeedback.lightImpact();
+              },
               children: [
                 ChoiceRow(
                   label: 'Basemap',
@@ -501,7 +507,7 @@ Future<void> showMenuSheet(
             GlassSwitch(
               title: const Text('Trails'),
               leading: const SFIcon(
-                'figure.walk',
+                'point.bottomleft.forward.to.arrow.triangle.scurvepath.fill',
                 fallback: CupertinoIcons.map,
               ),
               value: a.trails,
@@ -510,18 +516,21 @@ Future<void> showMenuSheet(
                 a.changed();
               },
             ),
+            GlassSwitch(
+              title: const Text('Interactable'),
+              leading: const SFIcon(
+                'hand.point.up.left.fill',
+                fallback: CupertinoIcons.hand_point_left_fill,
+              ),
+              value: a.cellInfo,
+              onChanged: (v) {
+                a.cellInfo = v;
+                a.changed();
+              },
+            ),
             DisclosureTile(
               title: const Text('Overlay options'),
               children: [
-                GlassSwitch(
-                  title: const Text('Places answer a tap'),
-                  value: a.cellInfo,
-                  onChanged: (v) {
-                    a.cellInfo = v;
-                    a.changed();
-                  },
-                ),
-
                 ListTile(
                   title: const Text('Activity colours and visibility'),
                   leading: const SFIcon(
@@ -601,6 +610,7 @@ Future<void> showMenuSheet(
         );
       },
     ),
+    showHeaderDivider: false,
   );
 }
 
@@ -1028,35 +1038,32 @@ class _SearchState extends State<_Search> {
   Widget build(BuildContext context) => Column(
     children: [
       Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24),
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
         child: Row(
           children: [
             Expanded(
               child: TextField(
                 autofocus: false,
-                decoration: InputDecoration(
-                  hintText: 'Trips, activities or places',
+                textAlignVertical: TextAlignVertical.center,
+                decoration: const InputDecoration(
+                  hintText: 'Search for trips, activities or places',
+                  hintMaxLines: 1,
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
+                  contentPadding: EdgeInsets.symmetric(vertical: 12),
                   filled: false,
-                  prefixIcon: const Icon(CupertinoIcons.search),
-                  suffixIcon: IconButton(
-                    icon: const Icon(CupertinoIcons.calendar),
-                    tooltip: 'Calendar',
-                    onPressed: () {
-                      FocusScope.of(context).unfocus();
-                      setState(() => calendarOpen = !calendarOpen);
-                    },
-                  ),
                 ),
                 onChanged: search,
               ),
             ),
             IconButton(
-              tooltip: 'Close',
-              onPressed: () => Navigator.pop(context),
-              icon: const Icon(CupertinoIcons.xmark),
+              tooltip: 'Calendar',
+              icon: const SFIcon('calendar', fallback: CupertinoIcons.calendar),
+              onPressed: () {
+                FocusScope.of(context).unfocus();
+                setState(() => calendarOpen = !calendarOpen);
+              },
             ),
           ],
         ),
@@ -1756,62 +1763,11 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
                 ),
               ),
             ],
-            if (tab == 'Account') ...[
-              if (app.user?['admin'] == true ||
-                  app.user?['isAdmin'] == true) ...[
-                section('Backups'),
-                backupList(app),
-              ],
-              ListTile(
-                title: const Text(
-                  'Delete account',
-                  style: TextStyle(color: CupertinoColors.systemRed),
-                ),
-                leading: const Icon(CupertinoIcons.trash),
-                onTap: app.busy
-                    ? null
-                    : () async {
-                        if (!await confirmRemoval(
-                          context,
-                          'Delete your account?',
-                          'All your visited ground, activities, connections and sessions will be permanently removed. Existing server backups are retained.',
-                        )) {
-                          return;
-                        }
-                        if (!context.mounted) return;
-                        final password = await askText(
-                          context,
-                          'Confirm your password',
-                          '',
-                          obscure: true,
-                        );
-                        if (password == null || password.isEmpty) return;
-                        await app.run(() async {
-                          await app.api.post('/api/account/delete', {
-                            'password': password,
-                          });
-                          await app.native.signOut();
-                          app.api.clear();
-                          app.user = null;
-                          app.prefs = {};
-                          app.changed();
-                          if (context.mounted) {
-                            Navigator.of(context).popUntil((r) => r.isFirst);
-                          }
-                        });
-                      },
-              ),
-              ListTile(
-                title: const Text('Sign out'),
-                leading: const SFIcon(
-                  'rectangle.portrait.and.arrow.right',
-                  fallback: CupertinoIcons.square_arrow_right,
-                ),
-                onTap: () async {
-                  Navigator.pop(context);
-                  await app.signOut();
-                },
-              ),
+            if (tab == 'Backups' &&
+                (app.user?['admin'] == true ||
+                    app.user?['isAdmin'] == true)) ...[
+              section('Backups'),
+              backupList(app),
             ],
             if (tab == 'Map layers') ...[
               ChoiceRow(
@@ -1886,6 +1842,65 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
   ),
   fullscreen: true,
 );
+Widget accountActions(BuildContext context, AppState app) => AnimatedBuilder(
+  animation: app,
+  builder: (context, _) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      ListTile(
+        title: const Text(
+          'Delete account',
+          style: TextStyle(color: CupertinoColors.systemRed),
+        ),
+        leading: const SFIcon('trash', fallback: CupertinoIcons.trash),
+        onTap: app.busy
+            ? null
+            : () async {
+                if (!await confirmRemoval(
+                  context,
+                  'Delete your account?',
+                  'All your visited ground, activities, connections and sessions will be permanently removed. Existing server backups are retained.',
+                )) {
+                  return;
+                }
+                if (!context.mounted) return;
+                final password = await askText(
+                  context,
+                  'Confirm your password',
+                  '',
+                  obscure: true,
+                );
+                if (password == null || password.isEmpty) return;
+                await app.run(() async {
+                  await app.api.post('/api/account/delete', {
+                    'password': password,
+                  });
+                  await app.native.signOut();
+                  app.api.clear();
+                  app.user = null;
+                  app.prefs = {};
+                  app.changed();
+                  if (context.mounted) {
+                    Navigator.of(context).popUntil((r) => r.isFirst);
+                  }
+                });
+              },
+      ),
+      ListTile(
+        title: const Text('Sign out'),
+        leading: const SFIcon(
+          'rectangle.portrait.and.arrow.right',
+          fallback: CupertinoIcons.square_arrow_right,
+        ),
+        onTap: () async {
+          Navigator.pop(context);
+          await app.signOut();
+        },
+      ),
+    ],
+  ),
+);
+
 Widget phoneSyncTile(BuildContext context, AppState app) => ListTile(
   title: Text('${app.device['deviceName'] ?? 'iPhone'}'),
   leading: const SFIcon(
@@ -2791,7 +2806,7 @@ class _SettingsTabsState extends State<SettingsTabs> {
                   widget.app.user?['isAdmin'] == true)
                 'Administration',
               'App settings',
-              'Account',
+              'Backups',
             ])
               Padding(
                 padding: const EdgeInsets.only(right: 6),
@@ -2806,6 +2821,7 @@ class _SettingsTabsState extends State<SettingsTabs> {
       ),
       const Divider(height: 1),
       Expanded(child: widget.childBuilder(tab)),
+      if (tab == 'Personal') accountActions(context, widget.app),
       Padding(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
         child: Column(
@@ -3076,6 +3092,8 @@ class _ConnectorSettingsState extends State<ConnectorSettings> {
           ? DisclosureTile(
               key: ValueKey('connector-${widget.kind}'),
               title: Text(service),
+              tilePadding: const EdgeInsets.symmetric(horizontal: 20),
+              trailingWidth: 48,
               initiallyExpanded: connected && link!['enabled'] == true,
               children: [content],
             )

@@ -10213,3 +10213,19 @@ The phone row edits the persisted native deviceName and exposes an icon sync
 action. Map controls and the place overlay have separate stable keys, and place
 dismissal skips Dismissible's resize phase to preserve the control anchor until
 the normal padding animation returns the controls to their resting position.
+
+The main Map overlays section includes the Interactable place-tap switch. Sync
+disclosures share the action buttons' 48-point trailing width and 20-point inset
+so their chevrons align with sync/connect icons. Account deletion and sign-out
+are pinned above the version footer on Personal; Backups contains only backup
+controls. The Personal fields scroll independently of those bottom actions.
+
+The Search popup uses a single text field and calendar action without a search
+or close glyph. Its header has equal 24-point top and side insets; the calendar
+is outside the input decoration so its position follows that shared inset.
+
+Your map omits the panel header divider, and its Appearance disclosure overrides
+the expanded ExpansionTile border so opening it adds no separating line.
+Opening Appearance also triggers a light haptic; collapsing it does not.
+The main Location, Menu, and Search buttons trigger the same light impact on
+activation. A disabled Search button has no feedback.
