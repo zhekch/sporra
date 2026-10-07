@@ -47,6 +47,71 @@ final graph = <String, dynamic>{
   ],
 };
 void main() {
+  testWidgets('landscape activity shows readings and graph without scrolling', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(852, 393);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final app = AppState()
+      ..activityMetric = 'speed'
+      ..activity = {
+        'route': {
+          'id': 1,
+          'name': 'Evening walk',
+          'sport': 'Walking',
+          'firstAt': 1789747200,
+          'elevUp': 9,
+        },
+        'summary': {
+          'distance': '1.4 km',
+          'duration': '1 h',
+          'averageSpeed': '1.4 km/h',
+        },
+        'graphs': {
+          'speed': graph,
+          'elev': {...graph, 'metric': 'elev'},
+        },
+      };
+    addTearDown(app.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: webTheme(),
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.bottomLeft,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: ConstrainedBox(
+                constraints: activityOverlayConstraints(
+                  const Size(852, 393),
+                  EdgeInsets.zero,
+                ),
+                child: ActivityCard(app: app, onZoom: () {}),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getSize(find.byType(ActivityCard)).width, 426);
+    expect(
+      tester.getSize(find.byType(ActivityCard)).height,
+      greaterThan(393 * activityCardHeightShare),
+    );
+    final scrollable = tester.state<ScrollableState>(
+      find.byType(Scrollable).first,
+    );
+    expect(scrollable.position.maxScrollExtent, 0);
+    expect(find.text('Distance'), findsOneWidget);
+    expect(find.byType(ActivityGraph), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    expect(mapControlsAlignment(const Size(852, 393)), Alignment.bottomRight);
+    expect(mapControlsAlignment(const Size(393, 852)), Alignment.bottomRight);
+  });
+
   testWidgets(
     'card resists initial pull, stays fixed upward and dismisses downward',
     (tester) async {

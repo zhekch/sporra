@@ -47,6 +47,24 @@ const connectionRetryDelay = Duration(seconds: 2);
 
 const activityCardMaxHeight = 430.0;
 const activityCardHeightShare = 0.64;
+const landscapeActivityWidthShare = 0.5;
+
+BoxConstraints activityOverlayConstraints(Size viewport, EdgeInsets safeArea) =>
+    BoxConstraints(
+      maxWidth: viewport.width > viewport.height
+          ? viewport.width * landscapeActivityWidthShare
+          : 440,
+      maxHeight: viewport.width > viewport.height
+          ? math.max(0, viewport.height - safeArea.top - 24)
+          : math.min(
+              activityCardMaxHeight,
+              viewport.height * activityCardHeightShare,
+            ),
+    );
+Alignment mapControlsAlignment(Size viewport) =>
+    viewport.width > viewport.height || viewport.width < 600
+    ? Alignment.bottomRight
+    : Alignment.topLeft;
 
 const styles = {
   'dark': 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
@@ -1633,9 +1651,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 SafeArea(
                   key: const ValueKey('map-controls'),
                   child: Align(
-                    alignment: constraints.maxWidth < 600
-                        ? Alignment.bottomRight
-                        : Alignment.topLeft,
+                    alignment: mapControlsAlignment(constraints.biggest),
                     child: AnimatedPadding(
                       duration: MediaQuery.disableAnimationsOf(context)
                           ? Duration.zero
@@ -1894,12 +1910,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         bottom: 12,
                       ),
                       child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: 440,
-                          maxHeight: math.min(
-                            activityCardMaxHeight,
-                            constraints.maxHeight * activityCardHeightShare,
-                          ),
+                        constraints: activityOverlayConstraints(
+                          constraints.biggest,
+                          MediaQuery.paddingOf(context),
                         ),
                         child: Measured(
                           key: ValueKey((

@@ -8759,10 +8759,13 @@ The native appearance uses the web's neutral glass recipe: RGB 38 at 54%
 opacity, a 26 px backdrop blur, a fine white edge and 20 px corners. Sheets
 have a transparent background, so the backdrop filter can see the map.
 Appearance choices use compact segmented controls; toggles use Cupertino
-switches. Portrait controls occupy the bottom-right corner and lift above
-an open activity card. Activity cards remain in the map's widget stack,
+switches. Portrait and landscape controls occupy the bottom-right corner and lift above
+an open place pill. Controls are hidden while an activity card is open. Activity cards remain in the map's widget stack,
 allowing the exposed native map to receive taps while the graph is open.
-Their maximum height is 430 logical pixels, capped at 64% of the viewport.
+In portrait their maximum height is 430 logical pixels, capped at 64% of the
+viewport. In landscape cards occupy half the viewport width and may use the
+remaining height between 12-pixel top/bottom insets and the top safe area.
+Landscape readings use 12-pixel spacing so the summary and graph fit together.
 
 Area drawing supplies only polygon features to its fill source. The API's
 `k:2` boundary lines are distinct geometry, not candidate fill features.
@@ -10270,3 +10273,6 @@ last/next run, size, counters, errors, folder and downloadable files. Saving use
 or failed outcomes. Import uses equal-width 48-point file/link buttons; the link
 button is shown only while the input contains text and hides after successful
 import. The file-import subtitle is removed.
+
+Train track options in Flutter Settings appear only while Train tracks is on,
+matching the conditional airport category controls.

@@ -79,7 +79,11 @@ class ActivityCard extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(18, 14, 18, 4),
                   child: Wrap(
-                    spacing: 22,
+                    spacing:
+                        MediaQuery.orientationOf(context) ==
+                            Orientation.landscape
+                        ? 12
+                        : 22,
                     runSpacing: 8,
                     children: [
                       _reading('Distance', '${summary['distance']}'),

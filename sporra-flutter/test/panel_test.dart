@@ -199,6 +199,13 @@ void main() {
       expect(find.byType(ChoiceChip), findsNWidgets(5));
       await tester.tap(find.widgetWithText(ChoiceChip, 'Map layers'));
       await tester.pumpAndSettle();
+      expect(find.text('Train track options'), findsNothing);
+      await tester.tap(find.text('Train tracks'));
+      await tester.pumpAndSettle();
+      expect(find.text('Train track options'), findsOneWidget);
+      await tester.tap(find.text('Train tracks'));
+      await tester.pumpAndSettle();
+      expect(find.text('Train track options'), findsNothing);
       expect(find.text('Basemap'), findsNothing);
       expect(find.text('Mapbox public token'), findsOneWidget);
       expect(find.text('Home'), findsNothing);

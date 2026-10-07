@@ -487,7 +487,7 @@ Future<void> showMenuSheet(
               },
             ),
             GlassSwitch(
-              title: const Text('Rail'),
+              title: const Text('Rails'),
               leading: const SFIcon(
                 'tram.fill',
                 fallback: CupertinoIcons.tram_fill,
@@ -1737,7 +1737,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
                   app.changed();
                 },
               ),
-              RailSettings(app: app),
+              if (app.rail) RailSettings(app: app),
               GlassSwitch(
                 title: const Text('Waymarked trails'),
                 value: app.trails,
