@@ -73,6 +73,21 @@ void main() {
     expect(tester.takeException(), isNull);
     tester.view.physicalSize = originalSize;
     await tester.pumpAndSettle();
+    final segment = find.byType(CupertinoSlidingSegmentedControl<int>);
+    expect(
+      tester
+          .getTopLeft(
+            find.descendant(of: segment, matching: find.text('Activities')),
+          )
+          .dx,
+      lessThan(
+        tester
+            .getTopLeft(
+              find.descendant(of: segment, matching: find.text('Statistics')),
+            )
+            .dx,
+      ),
+    );
     expect(find.text('Morning walk'), findsOneWidget);
     expect(find.byType(ActivityMiniature), findsOneWidget);
     expect(find.byType(SvgPicture), findsOneWidget);
@@ -90,7 +105,7 @@ void main() {
     expect(find.text('Morning walk'), findsOneWidget);
     await tester.tap(find.text('By app'));
     await tester.pumpAndSettle();
-    expect(find.text('Apple Health · 1'), findsOneWidget);
+    expect(find.text('Apple health · 1'), findsOneWidget);
     await tester.tap(find.text('Statistics'));
     await tester.pumpAndSettle();
     expect(find.text('Ground covered'), findsOneWidget);
@@ -234,7 +249,7 @@ void main() {
           }
           if (request.url.path == '/api/sources') {
             return http.Response(
-              '{"sources":[{"key":"gpx","label":"GPX track","cells":20,"routes":2}]}',
+              '{"sources":[{"key":"gpx","label":"GPX track","cells":20,"routes":2},{"key":"apple-health","cells":5,"routes":1}]}',
               200,
             );
           }
@@ -288,6 +303,8 @@ void main() {
     await tester.tap(sources);
     await tester.pumpAndSettle();
     expect(find.text('GPX track'), findsOneWidget);
+    expect(find.text('Apple health'), findsOneWidget);
+    expect(find.text('apple-health'), findsNothing);
     expect(find.text('Manage sources'), findsNothing);
     expect(find.text('Settings'), findsOneWidget);
     final sync = find.widgetWithText(ChoiceChip, 'Sync');

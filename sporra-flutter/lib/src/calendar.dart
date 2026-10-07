@@ -191,7 +191,7 @@ class _VisitCalendarState extends State<VisitCalendar> {
                       ? Colors.transparent
                       : (visit['routes'] as num? ?? 0) > 0
                       ? const Color(0xffffcf4d)
-                      : const Color(0xff60acff),
+                      : Colors.white,
                 ),
               ),
             ],

@@ -1,3 +1,4 @@
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:sporra_flutter/src/api.dart';
@@ -10,6 +11,15 @@ import 'package:sporra_flutter/src/appearance.dart';
 import 'package:sporra_flutter/src/state.dart';
 
 void main() {
+  setUp(
+    () => PackageInfo.setMockInitialValues(
+      appName: 'Sporra',
+      packageName: 'com.zhekch.sporra.flutter',
+      version: '0.12.0',
+      buildNumber: '16',
+      buildSignature: '',
+    ),
+  );
   testWidgets('Settings reads the live server version on each opening', (
     tester,
   ) async {
@@ -35,6 +45,16 @@ void main() {
     await tester.pumpWidget(settings());
     await tester.pumpAndSettle();
     expect(find.text('Server version: 0.134.0'), findsOneWidget);
+    expect(find.text('iOS version: 0.12.0 (16)'), findsOneWidget);
+    expect(find.textContaining('Signed in as'), findsNothing);
+    final footer = tester.getTopLeft(find.text('iOS version: 0.12.0 (16)'));
+    expect(
+      footer.dy,
+      greaterThan(tester.getBottomLeft(find.byType(ChoiceChip).first).dy),
+    );
+    await tester.tap(find.text('Map layers'));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.text('iOS version: 0.12.0 (16)')), footer);
     version = '0.135.0';
     await tester.pumpWidget(const SizedBox());
     await tester.pumpWidget(settings());

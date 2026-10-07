@@ -288,3 +288,12 @@ exercising native style layers, image sources, hit queries, coordinates, bounds,
 snapshot APIs against a local style. These checks do not verify remote Standard
 tile availability or physical-device rendering for an account token. Snow
 remains missing.
+
+
+Flutter 0.12.0 menu polish: white ring loading animation and interface accents;
+compact main-menu footer removal, one Appearance heading and right-facing
+disclosures; persistent iOS/server version footer in Settings; Activities on
+the left of Statistics; Apple health source formatting in both app groups
+and Settings. Unit/widget checks cover ordering, footer placement and source
+labels; simulator screenshots inspect the menu, appearance, Settings, Sources,
+Activities and loading states against mock data.

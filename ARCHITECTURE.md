@@ -10135,3 +10135,16 @@ before a fix, the time-zone longitude at latitude zero is used. Light/dark
 accents and route contrast follow the resolved preset. Terrain stays at real
 exaggeration 1 through all zooms, DEM maxzoom 14; landmarks begin at zoom 15.
 The current native SDK permits pitch up to 85°. Snow is outside this change.
+
+
+Flutter 0.12.0 replaces loading indicators with a steady white ring and rotating
+arc, with a labelled variant for initial map loading and asynchronous lists.
+Reduced motion stops the rotation. Material and Cupertino interface accents
+are white. The main menu removes its preview footer and duplicate Appearance
+section; its disclosures use right-facing chevrons and no inherited list padding.
+Settings keeps installed iOS version/build (from PackageInfo) and live server
+version together outside the scrollable categories, at the bottom of the screen.
+The account name/version header and category preview footers are removed.
+Activities occupies the left segment and remains the initial page. A shared
+source display helper renders apple-health and Apple Health as Apple health in
+activity app groups and Settings sources without changing stored source keys.

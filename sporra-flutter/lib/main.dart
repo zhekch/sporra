@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'src/state.dart';
+import 'src/loading.dart';
 import 'src/appearance.dart';
 import 'src/map_screen.dart';
 
@@ -43,7 +44,9 @@ class _RootScreenState extends ConsumerState<RootScreen> {
   Widget build(BuildContext context) {
     final app = ref.watch(appProvider);
     if (!app.ready) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        body: Center(child: LoadingIndicator(label: 'Loading your map…')),
+      );
     }
     return app.user == null ? const LoginScreen() : const MapScreen();
   }
@@ -87,7 +90,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.blur_on, size: 72, color: Color(0xff60acff)),
+                  const Icon(Icons.blur_on, size: 72, color: Colors.white),
                   const SizedBox(height: 20),
                   Text(
                     'Your world,\nremembered.',
@@ -132,7 +135,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           ? const SizedBox(
                               height: 20,
                               width: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              child: LoadingIndicator(showLabel: false),
                             )
                           : Text(register ? 'Create account' : 'Sign in'),
                     ),

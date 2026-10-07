@@ -1,3 +1,4 @@
+import 'loading.dart';
 import 'native_map.dart';
 import 'mapbox_view.dart';
 import 'mapbox.dart' as mb;
@@ -991,7 +992,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           const CircleLayerProperties(
             circleColor: '#ffffff',
             circleRadius: 5,
-            circleStrokeColor: '#60acff',
+            circleStrokeColor: '#ffffff',
             circleStrokeWidth: 2,
           ),
         );
@@ -1487,6 +1488,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   },
                   onMapClick: (pixel, p) => unawaited(tap(p, pixel: pixel)),
                 ),
+              if (!loaded && mapError == null)
+                const Positioned.fill(
+                  child: IgnorePointer(
+                    child: Center(
+                      child: LoadingIndicator(label: 'Loading your map…'),
+                    ),
+                  ),
+                ),
               if (app.editing && !app.clearingRegion)
                 Positioned.fill(
                   child: GestureDetector(
@@ -1527,7 +1536,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         pointer,
                         app.brushAction == 'erase'
                             ? Colors.orangeAccent
-                            : Colors.lightBlueAccent,
+                            : Colors.white,
                         math.max(
                           4,
                           app.brushSize *
@@ -1657,7 +1666,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                               icon: Icon(
                                 Icons.brush,
                                 color: app.brushAction == 'paint'
-                                    ? Colors.lightBlueAccent
+                                    ? Colors.white
                                     : null,
                               ),
                             ),
@@ -1671,7 +1680,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                               icon: Icon(
                                 Icons.auto_fix_normal,
                                 color: app.brushAction == 'erase'
-                                    ? Colors.lightBlueAccent
+                                    ? Colors.white
                                     : null,
                               ),
                             ),

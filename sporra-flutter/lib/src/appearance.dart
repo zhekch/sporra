@@ -15,10 +15,17 @@ RoundedSuperellipseBorder menuShape(BuildContext context) =>
 
 ThemeData webTheme({double menuRadius = 24}) {
   const surface = Color(0xff262626);
-  const accent = Color(0xff60acff);
+  const accent = Colors.white;
   return ThemeData(
     brightness: Brightness.dark,
     platform: TargetPlatform.iOS,
+    cupertinoOverrideTheme: const CupertinoThemeData(
+      brightness: Brightness.dark,
+      primaryColor: Colors.white,
+    ),
+    progressIndicatorTheme: const ProgressIndicatorThemeData(
+      color: Colors.white,
+    ),
     useMaterial3: false,
     fontFamily: '.SF Pro Text',
     scaffoldBackgroundColor: const Color(0xff0b0b0b),

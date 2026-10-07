@@ -1,3 +1,7 @@
+import 'loading.dart';
+
+import 'package:package_info_plus/package_info_plus.dart';
+
 import 'native_map.dart';
 
 import 'dart:convert';
@@ -305,11 +309,12 @@ Future<void> showMenuSheet(
         final a = ref.watch(appProvider);
         return ListView(
           shrinkWrap: true,
+          padding: EdgeInsets.zero,
           children: [
             ExpansionTile(
               title: const Text('Appearance'),
+              trailing: const Icon(CupertinoIcons.chevron_right, size: 18),
               children: [
-                section('Appearance'),
                 ChoiceRow(
                   label: 'Basemap',
                   value: a.style == 'mapbox'
@@ -484,6 +489,7 @@ Future<void> showMenuSheet(
             ),
             ExpansionTile(
               title: const Text('Overlay options'),
+              trailing: const Icon(CupertinoIcons.chevron_right, size: 18),
               children: [
                 GlassSwitch(
                   title: const Text('Places answer a tap'),
@@ -563,13 +569,6 @@ Future<void> showMenuSheet(
               title: const Text('Settings'),
               onTap: () => showSettings(context, a),
             ),
-            const Padding(
-              padding: EdgeInsets.all(24),
-              child: Text(
-                'Sporra Preview · 0.10.0',
-                style: TextStyle(color: Colors.white38),
-              ),
-            ),
           ],
         );
       },
@@ -615,7 +614,7 @@ class _AsyncListState extends State<AsyncList> {
         );
       }
       if (!snapshot.hasData) {
-        return const Center(child: CircularProgressIndicator());
+        return const Center(child: LoadingIndicator());
       }
       return widget.builder(context, snapshot.data);
     },
@@ -627,7 +626,7 @@ Future<void> showStats(BuildContext context, AppState app) => panel(
   'Activities',
   DefaultTabController(
     length: 2,
-    initialIndex: 1,
+    initialIndex: 0,
     child: Column(
       children: [
         Builder(
@@ -644,11 +643,11 @@ Future<void> showStats(BuildContext context, AppState app) => panel(
                     children: const {
                       0: Padding(
                         padding: EdgeInsets.symmetric(horizontal: 12),
-                        child: Text('Statistics'),
+                        child: Text('Activities'),
                       ),
                       1: Padding(
                         padding: EdgeInsets.symmetric(horizontal: 12),
-                        child: Text('Activities'),
+                        child: Text('Statistics'),
                       ),
                     },
                     onValueChanged: (value) {
@@ -662,7 +661,7 @@ Future<void> showStats(BuildContext context, AppState app) => panel(
         ),
         Expanded(
           child: TabBarView(
-            children: [statisticsList(app), activitiesList(app)],
+            children: [activitiesList(app), statisticsList(app)],
           ),
         ),
       ],
@@ -830,6 +829,15 @@ Widget coverageValue(Map area, String sort) {
   );
 }
 
+String sourceDisplayName(dynamic key, {dynamic label}) {
+  final name = '${label ?? key}';
+  if ('$key'.toLowerCase() == 'apple-health' ||
+      name.toLowerCase().replaceAll('-', ' ') == 'apple health') {
+    return 'Apple health';
+  }
+  return name;
+}
+
 class _Sources extends StatefulWidget {
   const _Sources({required this.app});
   final AppState app;
@@ -852,7 +860,9 @@ class _SourcesState extends State<_Sources> {
           children: [
             for (final source in data['sources']) ...[
               GlassSwitch(
-                title: Text('${source['label'] ?? source['key']}'),
+                title: Text(
+                  sourceDisplayName(source['key'], label: source['label']),
+                ),
                 subtitle: Text(
                   '${source['cells']} cells · ${source['routes']} activities',
                 ),
@@ -1542,7 +1552,7 @@ class _PhotoGalleryState extends State<PhotoGallery> {
             : Center(
                 child: s.hasError
                     ? Text('${s.error}')
-                    : const CircularProgressIndicator(),
+                    : const LoadingIndicator(showLabel: false),
               ),
       ),
     ),
@@ -1846,10 +1856,6 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               ),
               ImportLinks(app: app),
             ],
-            const ListTile(
-              title: Text('Sporra Preview'),
-              subtitle: Text('0.10.0 · Native map for iOS'),
-            ),
           ],
         );
       },
@@ -2158,7 +2164,7 @@ Widget activitiesList(AppState app) {
                     '${bucket.key.isEmpty
                         ? 'Unspecified'
                         : group == 'app'
-                        ? ((data['sourceLabels'] as Map?)?[bucket.key] ?? bucket.key)
+                        ? sourceDisplayName(bucket.key, label: (data['sourceLabels'] as Map?)?[bucket.key])
                         : bucket.key} · ${bucket.value.length}',
                   ),
                   children: [
@@ -2655,10 +2661,21 @@ class SettingsTabs extends StatefulWidget {
 class _SettingsTabsState extends State<SettingsTabs> {
   String tab = 'Personal';
   late final Future<String?> serverVersion;
+  late final Future<String?> iosVersion;
   @override
   void initState() {
     super.initState();
     serverVersion = readServerVersion();
+    iosVersion = readIosVersion();
+  }
+
+  Future<String?> readIosVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      return '${info.version} (${info.buildNumber})';
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<String?> readServerVersion() async {
@@ -2671,35 +2688,21 @@ class _SettingsTabsState extends State<SettingsTabs> {
     }
   }
 
+  Widget versionLine(String label, Future<String?> value) => Align(
+    alignment: Alignment.centerLeft,
+    child: FutureBuilder<String?>(
+      future: value,
+      builder: (context, snapshot) => Text(
+        '$label: ${snapshot.connectionState == ConnectionState.done ? snapshot.data ?? 'unavailable' : 'checking…'}',
+        style: const TextStyle(fontSize: 11, color: Colors.white54),
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) => Column(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text(
-            'Signed in as ${widget.app.user?['username'] ?? ''}',
-            style: const TextStyle(color: Colors.white60),
-          ),
-        ),
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: FutureBuilder<String?>(
-            future: serverVersion,
-            builder: (context, snapshot) => Text(
-              snapshot.connectionState != ConnectionState.done
-                  ? 'Server version: checking…'
-                  : 'Server version: ${snapshot.data ?? 'unavailable'}',
-              style: const TextStyle(fontSize: 11, color: Colors.white54),
-            ),
-          ),
-        ),
-      ),
       SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -2729,7 +2732,18 @@ class _SettingsTabsState extends State<SettingsTabs> {
         ),
       ),
       const Divider(height: 1),
-      Flexible(child: widget.childBuilder(tab)),
+      Expanded(child: widget.childBuilder(tab)),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            versionLine('iOS version', iosVersion),
+            const SizedBox(height: 3),
+            versionLine('Server version', serverVersion),
+          ],
+        ),
+      ),
     ],
   );
 }
@@ -2835,7 +2849,7 @@ class _ConnectorSettingsState extends State<ConnectorSettings> {
       if (loading) {
         return const Padding(
           padding: EdgeInsets.all(32),
-          child: Center(child: CupertinoActivityIndicator()),
+          child: Center(child: LoadingIndicator(showLabel: false)),
         );
       }
       if (failure != null) {
@@ -3090,7 +3104,7 @@ class _ImportLinksState extends State<ImportLinks> {
         CupertinoButton(
           onPressed: busy ? null : submit,
           child: busy
-              ? const CupertinoActivityIndicator()
+              ? const LoadingIndicator(showLabel: false)
               : const Text('Import links'),
         ),
         if (message != null) Text(message!),
