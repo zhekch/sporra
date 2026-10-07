@@ -1,4 +1,5 @@
 import 'loading.dart';
+import 'sf_icon.dart';
 
 import 'package:flutter/services.dart';
 
@@ -280,8 +281,11 @@ Future<void> showInfo(BuildContext context, Map<String, dynamic> info) => panel(
     shrinkWrap: true,
     children: [
       ListTile(
-        leading: Icon(
-          info['visited'] == true ? Icons.check_circle : Icons.circle_outlined,
+        leading: SFIcon(
+          info['visited'] == true ? 'checkmark.circle' : 'circle',
+          fallback: info['visited'] == true
+              ? CupertinoIcons.checkmark_circle
+              : CupertinoIcons.circle,
         ),
         title: Text(
           info['visited'] == true ? 'You have been here' : 'Not visited yet',
@@ -451,6 +455,10 @@ Future<void> showMenuSheet(
             section('Map overlays'),
             GlassSwitch(
               title: const Text('Activities'),
+              leading: const SFIcon(
+                'figure.run',
+                fallback: CupertinoIcons.sportscourt,
+              ),
               value: a.routes,
               onChanged: (v) {
                 a.routes = v;
@@ -459,6 +467,7 @@ Future<void> showMenuSheet(
             ),
             GlassSwitch(
               title: const Text('Photos'),
+              leading: const SFIcon('photo', fallback: CupertinoIcons.photo),
               value: a.photos,
               onChanged: (v) {
                 a.photos = v;
@@ -467,6 +476,10 @@ Future<void> showMenuSheet(
             ),
             GlassSwitch(
               title: const Text('Rail'),
+              leading: const SFIcon(
+                'tram.fill',
+                fallback: CupertinoIcons.tram_fill,
+              ),
               value: a.rail,
               onChanged: (v) {
                 a.rail = v;
@@ -475,6 +488,10 @@ Future<void> showMenuSheet(
             ),
             GlassSwitch(
               title: const Text('Airports'),
+              leading: const SFIcon(
+                'airplane',
+                fallback: CupertinoIcons.airplane,
+              ),
               value: a.airports,
               onChanged: (v) {
                 a.airports = v;
@@ -483,6 +500,10 @@ Future<void> showMenuSheet(
             ),
             GlassSwitch(
               title: const Text('Trails'),
+              leading: const SFIcon(
+                'figure.walk',
+                fallback: CupertinoIcons.map,
+              ),
               value: a.trails,
               onChanged: (v) {
                 a.trails = v;
@@ -503,7 +524,10 @@ Future<void> showMenuSheet(
 
                 ListTile(
                   title: const Text('Activity colours and visibility'),
-                  leading: const Icon(Icons.palette_outlined),
+                  leading: const SFIcon(
+                    'paintpalette',
+                    fallback: CupertinoIcons.paintbrush,
+                  ),
                   trailing: const Icon(CupertinoIcons.chevron_right, size: 18),
                   onTap: () => showActivityStyle(context, a),
                 ),
@@ -548,12 +572,15 @@ Future<void> showMenuSheet(
             ),
             section('Explore and manage'),
             ListTile(
-              leading: const Icon(Icons.bar_chart),
+              leading: const SFIcon(
+                'chart.bar',
+                fallback: CupertinoIcons.chart_bar,
+              ),
               title: const Text('Activities and statistics'),
               onTap: () => showStats(context, a),
             ),
             ListTile(
-              leading: const Icon(Icons.photo_camera_outlined),
+              leading: const SFIcon('camera', fallback: CupertinoIcons.camera),
               title: const Text('Save map picture'),
               onTap: map == null
                   ? null
@@ -566,7 +593,7 @@ Future<void> showMenuSheet(
                     }),
             ),
             ListTile(
-              leading: const Icon(Icons.settings_outlined),
+              leading: const SFIcon('gearshape', fallback: CupertinoIcons.gear),
               title: const Text('Settings'),
               onTap: () => showSettings(context, a),
             ),
@@ -1070,8 +1097,8 @@ class _SearchState extends State<_Search> {
                             )
                           : Icon(
                               r['kind'] == 'trip'
-                                  ? Icons.luggage_outlined
-                                  : Icons.place_outlined,
+                                  ? CupertinoIcons.bag
+                                  : CupertinoIcons.placemark,
                               size: 22,
                             ),
                       title: Text('${r['name']}'),
@@ -1476,7 +1503,12 @@ Future<void> showPhotos(
                     children: [
                       Image.memory(s.data!, fit: BoxFit.cover),
                       if (items[i]['video'] == true)
-                        const Center(child: Icon(Icons.play_circle_fill)),
+                        const Center(
+                          child: SFIcon(
+                            'play.circle.fill',
+                            fallback: CupertinoIcons.play_circle_fill,
+                          ),
+                        ),
                     ],
                   )
                 : const ColoredBox(color: Colors.white12),
@@ -1543,7 +1575,10 @@ class _PhotoGalleryState extends State<PhotoGallery> {
                         onPressed: () => widget.app.native.playVideo(
                           widget.photos[i]['index'],
                         ),
-                        icon: const Icon(Icons.play_circle_fill),
+                        icon: const SFIcon(
+                          'play.circle.fill',
+                          fallback: CupertinoIcons.play_circle_fill,
+                        ),
                       ),
                     ),
                 ],
@@ -1576,29 +1611,9 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
           return ListView(
             key: ValueKey('settings-$tab'),
             children: [
-              ListTile(
-                title: const Text('Your phone'),
-                subtitle: Text('${d['deviceName'] ?? 'iPhone'}'),
-                leading: const Icon(CupertinoIcons.device_phone_portrait),
-                trailing: CupertinoButton(
-                  onPressed: app.busy ? null : app.sync,
-                  child: const Text('Sync now'),
-                ),
-              ),
-              DisclosureTile(
-                title: const Text('Strava'),
-                initiallyExpanded: true,
-                children: [
-                  ConnectorSettings(app: app, kind: 'strava', inline: true),
-                ],
-              ),
-              DisclosureTile(
-                title: const Text('Home Assistant'),
-                initiallyExpanded: true,
-                children: [
-                  ConnectorSettings(app: app, kind: 'ha', inline: true),
-                ],
-              ),
+              phoneSyncTile(context, app),
+              ConnectorSettings(app: app, kind: 'strava', inline: true),
+              ConnectorSettings(app: app, kind: 'ha', inline: true),
             ],
           );
         }
@@ -1661,7 +1676,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               ListTile(
                 title: const Text('Clear cache'),
                 subtitle: const Text('Reload map data and photo thumbnails'),
-                leading: const Icon(Icons.cleaning_services_outlined),
+                leading: const SFIcon('trash', fallback: CupertinoIcons.trash),
                 onTap: app.busy
                     ? null
                     : () => app.run(() async {
@@ -1676,7 +1691,10 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               fact('Queued locations', d['pending'] ?? 0),
               ListTile(
                 title: const Text('Sync now'),
-                leading: const Icon(Icons.sync),
+                leading: const SFIcon(
+                  'arrow.triangle.2.circlepath',
+                  fallback: CupertinoIcons.arrow_2_circlepath,
+                ),
                 onTap: app.busy ? null : app.sync,
               ),
               if ('${d['error'] ?? ''}'.isNotEmpty)
@@ -1689,7 +1707,10 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               section('Personal'),
               section('Manual edit'),
               ListTile(
-                leading: const Icon(Icons.edit_outlined),
+                leading: const SFIcon(
+                  'pencil',
+                  fallback: CupertinoIcons.pencil,
+                ),
                 title: const Text('Edit on the map'),
                 onTap: () {
                   app.editing = true;
@@ -1703,7 +1724,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
                 subtitle: Text(
                   '${app.prefs['home']?['name'] ?? 'Guess from your visits'}',
                 ),
-                leading: const Icon(Icons.home_outlined),
+                leading: const SFIcon('house', fallback: CupertinoIcons.house),
                 onTap: () => chooseHome(context, app),
               ),
               ListTile(
@@ -1782,7 +1803,10 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               ),
               ListTile(
                 title: const Text('Sign out'),
-                leading: const Icon(Icons.logout),
+                leading: const SFIcon(
+                  'rectangle.portrait.and.arrow.right',
+                  fallback: CupertinoIcons.square_arrow_right,
+                ),
                 onTap: () async {
                   Navigator.pop(context);
                   await app.signOut();
@@ -1862,6 +1886,35 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
   ),
   fullscreen: true,
 );
+Widget phoneSyncTile(BuildContext context, AppState app) => ListTile(
+  title: Text('${app.device['deviceName'] ?? 'iPhone'}'),
+  leading: const SFIcon(
+    'iphone',
+    fallback: CupertinoIcons.device_phone_portrait,
+  ),
+  onTap: app.busy
+      ? null
+      : () async {
+          final name = await askText(
+            context,
+            'Rename phone',
+            '${app.device['deviceName'] ?? 'iPhone'}',
+          );
+          if (name != null && name.isNotEmpty) {
+            await configure(app, {'deviceName': name});
+          }
+        },
+  trailing: IconButton(
+    tooltip: 'Sync phone',
+    onPressed: app.busy ? null : app.sync,
+    icon: const SFIcon(
+      'arrow.triangle.2.circlepath',
+      fallback: CupertinoIcons.arrow_2_circlepath,
+      size: 20,
+    ),
+  ),
+);
+
 Future<void> configure(AppState app, Map<String, dynamic> patch) =>
     app.run(() async {
       app.device = Map<String, dynamic>.from(
@@ -1877,7 +1930,10 @@ Widget backupList(AppState app) => AsyncList(
     children: [
       ListTile(
         title: const Text('Back up now on the server'),
-        leading: const Icon(Icons.backup),
+        leading: const SFIcon(
+          'externaldrive',
+          fallback: CupertinoIcons.archivebox,
+        ),
         onTap: () => app.run(() async {
           await app.api.post('/api/backup/run', {});
         }),
@@ -1888,7 +1944,10 @@ Widget backupList(AppState app) => AsyncList(
           subtitle: Text(
             '${((backup['size'] as num) / 1024 / 1024).toStringAsFixed(1)} MB',
           ),
-          leading: const Icon(Icons.download),
+          leading: const SFIcon(
+            'arrow.down.to.line',
+            fallback: CupertinoIcons.arrow_down_to_line,
+          ),
           onTap: () => app.run(() async {
             final name = '${backup['name']}';
             final bytes = await app.api.download(
@@ -1952,7 +2011,10 @@ Future<void> showActivityDetails(
           if (activityLink(route['link']) case final Uri link)
             ListTile(
               title: const Text('Open original activity'),
-              leading: const Icon(Icons.open_in_new),
+              leading: const SFIcon(
+                'arrow.up.right.square',
+                fallback: CupertinoIcons.square_arrow_up,
+              ),
               onTap: () => app.run(() async {
                 if (!await launchUrl(
                   link,
@@ -1968,7 +2030,10 @@ Future<void> showActivityDetails(
                   ? 'Show all activities'
                   : 'Show only this activity',
             ),
-            leading: const Icon(Icons.route_outlined),
+            leading: const SFIcon(
+              'point.topleft.down.curvedto.point.bottomright.up',
+              fallback: CupertinoIcons.map,
+            ),
             onTap: () {
               app.selectedRoute = app.selectedRoute == route['id']
                   ? null
@@ -1985,7 +2050,7 @@ Future<void> showActivityDetails(
           }.entries)
             ListTile(
               title: Text('Edit ${field.value.toLowerCase()}'),
-              leading: const Icon(Icons.edit_outlined),
+              leading: const SFIcon('pencil', fallback: CupertinoIcons.pencil),
               onTap: app.busy
                   ? null
                   : () async {
@@ -2210,7 +2275,10 @@ Future<void> showAirport(BuildContext context, Map<String, dynamic> airport) =>
             if (activityLink(link['url']) case final Uri url)
               ListTile(
                 title: Text('${link['label']}'),
-                leading: const Icon(Icons.open_in_new),
+                leading: const SFIcon(
+                  'arrow.up.right.square',
+                  fallback: CupertinoIcons.square_arrow_up,
+                ),
                 onTap: () async {
                   await launchUrl(url, mode: LaunchMode.externalApplication);
                 },
@@ -2563,7 +2631,10 @@ Future<void> showActivityStyle(BuildContext context, AppState app) => panel(
             ),
             ListTile(
               title: const Text('Random colors'),
-              leading: const Icon(Icons.shuffle),
+              leading: const SFIcon(
+                'shuffle',
+                fallback: CupertinoIcons.shuffle,
+              ),
               onTap: a.busy || sports.isEmpty
                   ? null
                   : () => a.run(() => a.randomActivityColors(sports)),
@@ -2577,8 +2648,8 @@ Future<void> showActivityStyle(BuildContext context, AppState app) => panel(
                       : 'Show activity',
                   icon: Icon(
                     a.activityVisible(sport)
-                        ? Icons.visibility_outlined
-                        : Icons.visibility_off_outlined,
+                        ? CupertinoIcons.eye
+                        : CupertinoIcons.eye_slash,
                   ),
                   onPressed: a.busy
                       ? null
@@ -2618,7 +2689,10 @@ Future<void> showActivityStyle(BuildContext context, AppState app) => panel(
               ),
             ListTile(
               title: const Text('Reset activity appearance'),
-              leading: const Icon(Icons.restart_alt),
+              leading: const SFIcon(
+                'arrow.counterclockwise',
+                fallback: CupertinoIcons.arrow_counterclockwise,
+              ),
               onTap: a.busy
                   ? null
                   : () => a.run(
@@ -2807,6 +2881,24 @@ class _ConnectorSettingsState extends State<ConnectorSettings> {
   AppState get app => widget.app;
   String get path => '/api/${widget.kind}';
   bool get strava => widget.kind == 'strava';
+  String get service => strava ? 'Strava' : 'Home Assistant';
+  Future<void> connect() async {
+    if (strava) {
+      await setupStrava(context, app);
+    } else {
+      await setupHomeAssistant(context, app);
+    }
+    if (mounted) await reload();
+  }
+
+  Future<void> syncService() => app.run(() async {
+    try {
+      await app.api.post('$path/sync', {});
+      app.changed();
+    } finally {
+      if (mounted) await reload();
+    }
+  });
 
   @override
   void initState() {
@@ -2845,6 +2937,12 @@ class _ConnectorSettingsState extends State<ConnectorSettings> {
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: app,
     builder: (context, _) {
+      if (loading && widget.inline) {
+        return ListTile(
+          title: Text(service),
+          trailing: const LoadingIndicator(showLabel: false),
+        );
+      }
       if (loading) {
         return const Padding(
           padding: EdgeInsets.all(32),
@@ -2858,34 +2956,36 @@ class _ConnectorSettingsState extends State<ConnectorSettings> {
         );
       }
       final connected = link != null && (!strava || link!['connected'] == true);
-      return ListView(
+      final content = ListView(
         shrinkWrap: true,
         physics: widget.inline ? const NeverScrollableScrollPhysics() : null,
         children: [
           if (app.error != null) ListTile(title: Text(app.error!)),
           ListTile(
             title: Text(connected ? 'Connected' : 'Not connected'),
-            subtitle: Text(
-              strava
-                  ? '${link?['athlete'] ?? ''}'
-                  : '${link?['baseUrl'] ?? ''}',
+            subtitle: connected
+                ? Text(
+                    strava
+                        ? '${link?['athlete'] ?? ''}'
+                        : '${link?['baseUrl'] ?? ''}',
+                  )
+                : null,
+            trailing: IconButton(
+              tooltip: '${connected ? 'Sync' : 'Connect'} $service',
+              onPressed: app.busy
+                  ? null
+                  : connected
+                  ? syncService
+                  : connect,
+              icon: SFIcon(
+                connected ? 'arrow.triangle.2.circlepath' : 'link',
+                fallback: connected
+                    ? CupertinoIcons.arrow_2_circlepath
+                    : CupertinoIcons.link,
+                size: 20,
+              ),
             ),
           ),
-          if (!connected)
-            ListTile(
-              title: const Text('Connect'),
-              leading: const Icon(Icons.link),
-              onTap: app.busy
-                  ? null
-                  : () async {
-                      if (strava) {
-                        await setupStrava(context, app);
-                      } else {
-                        await setupHomeAssistant(context, app);
-                      }
-                      await reload();
-                    },
-            ),
           if (link != null) ...[
             GlassSwitch(
               title: const Text('Sync automatically'),
@@ -2947,27 +3047,12 @@ class _ConnectorSettingsState extends State<ConnectorSettings> {
             ),
             if ('${link!['lastError'] ?? ''}'.isNotEmpty)
               ListTile(title: Text('${link!['lastError']}')),
-            if (connected)
-              ListTile(
-                title: const Text('Sync now'),
-                leading: const Icon(Icons.sync),
-                onTap: app.busy
-                    ? null
-                    : () => app.run(() async {
-                        try {
-                          await app.api.post('$path/sync', {});
-                          app.changed();
-                        } finally {
-                          await reload();
-                        }
-                      }),
-              ),
             ListTile(
               title: const Text(
                 'Disconnect',
                 style: TextStyle(color: CupertinoColors.systemRed),
               ),
-              leading: const Icon(Icons.link_off),
+              leading: const SFIcon('link', fallback: CupertinoIcons.link),
               onTap: app.busy
                   ? null
                   : () async {
@@ -2987,6 +3072,14 @@ class _ConnectorSettingsState extends State<ConnectorSettings> {
           ],
         ],
       );
+      return widget.inline
+          ? DisclosureTile(
+              key: ValueKey('connector-${widget.kind}'),
+              title: Text(service),
+              initiallyExpanded: connected && link!['enabled'] == true,
+              children: [content],
+            )
+          : content;
     },
   );
 }

@@ -1,3 +1,4 @@
+import 'sf_icon.dart';
 import 'loading.dart';
 import 'place_card.dart';
 import 'native_map.dart';
@@ -1569,6 +1570,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 ),
               if (!app.menuOpen && !app.editing && app.activity == null)
                 SafeArea(
+                  key: const ValueKey('map-controls'),
                   child: Align(
                     alignment: constraints.maxWidth < 600
                         ? Alignment.bottomRight
@@ -1681,8 +1683,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                 app.brushAction = 'paint';
                                 app.changed();
                               },
-                              icon: Icon(
-                                Icons.brush,
+                              icon: SFIcon(
+                                'paintbrush',
+                                fallback: CupertinoIcons.paintbrush,
                                 color: app.brushAction == 'paint'
                                     ? Colors.white
                                     : null,
@@ -1745,7 +1748,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                       app.undo = null;
                                       app.changed();
                                     }),
-                              icon: const Icon(Icons.undo),
+                              icon: const SFIcon(
+                                'arrow.uturn.backward',
+                                fallback: CupertinoIcons.arrow_uturn_left,
+                              ),
                             ),
                             IconButton(
                               tooltip: 'Done editing',
@@ -1753,7 +1759,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                 app.editing = false;
                                 app.changed();
                               },
-                              icon: const Icon(Icons.check),
+                              icon: const SFIcon(
+                                'checkmark',
+                                fallback: CupertinoIcons.check_mark,
+                              ),
                             ),
                           ],
                         ),
@@ -1763,6 +1772,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 ),
               if (placeInfo != null && !app.menuOpen && !app.editing)
                 SafeArea(
+                  key: const ValueKey('place-overlay'),
                   child: Align(
                     alignment: Alignment.bottomCenter,
                     child: Padding(
@@ -1777,6 +1787,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           },
                           child: Dismissible(
                             key: const ValueKey('place-card'),
+                            resizeDuration: null,
                             direction: DismissDirection.down,
                             onDismissed: (_) => setState(() {
                               tapRequest++;
@@ -2007,7 +2018,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
                       padding: const EdgeInsets.only(top: 16),
                       child: Glass(
                         child: TextButton.icon(
-                          icon: const Icon(Icons.close, size: 18),
+                          icon: const SFIcon(
+                            'xmark',
+                            fallback: CupertinoIcons.xmark,
+                            size: 18,
+                          ),
                           label: Text(
                             app.clearingRegion
                                 ? 'Tap a region to clear · Cancel'

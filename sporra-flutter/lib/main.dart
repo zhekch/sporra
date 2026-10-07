@@ -1,4 +1,7 @@
+import 'src/sf_icon.dart';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -90,7 +93,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.blur_on, size: 72, color: Colors.white),
+                  const SFIcon(
+                    'globe',
+                    fallback: CupertinoIcons.globe,
+                    size: 72,
+                    color: Colors.white,
+                  ),
                   const SizedBox(height: 20),
                   Text(
                     'Your world,\nremembered.',

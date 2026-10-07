@@ -121,10 +121,13 @@ class _PlaceCardState extends State<PlaceCard> {
                                             ),
                                           ),
                                           const SizedBox(width: 6),
-                                          DisclosureChevron(
-                                            expanded: expanded,
-                                            size: 12,
-                                            color: Colors.white60,
+                                          Transform.translate(
+                                            offset: const Offset(0, 1.5),
+                                            child: DisclosureChevron(
+                                              expanded: expanded,
+                                              size: 12,
+                                              color: Colors.white60,
+                                            ),
                                           ),
                                         ],
                                       ),

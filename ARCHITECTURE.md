@@ -10201,3 +10201,15 @@ connectionRetryDelay (2 s). App error toasts use the same delay and read the cur
 error when it expires. Changed error text does not restart a continuing failure's
 window. Socket/client/timeout messages are replaced by a readable connection
 message. Background timers are cancelled when the map screen is disposed.
+
+
+Flutter iOS icons use SFIcon, backed by the sporra/symbols method channel. UIKit
+renders installed SF Symbols as transparent PNGs at the requested device scale;
+Flutter caches each symbol/size/scale and applies the current icon color. Other
+platforms and unavailable symbols use Cupertino fallbacks. Sync sections fetch
+connector status before choosing their initial expansion: disconnected or
+disabled services start collapsed. Status and connect/sync action share a row.
+The phone row edits the persisted native deviceName and exposes an icon sync
+action. Map controls and the place overlay have separate stable keys, and place
+dismissal skips Dismissible's resize phase to preserve the control anchor until
+the normal padding animation returns the controls to their resting position.

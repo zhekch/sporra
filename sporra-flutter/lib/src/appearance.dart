@@ -1,3 +1,5 @@
+import 'sf_icon.dart';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
@@ -108,17 +110,19 @@ class GlassSwitch extends StatelessWidget {
     super.key,
     required this.title,
     this.subtitle,
+    this.leading,
     required this.value,
     required this.onChanged,
   });
   final Widget title;
-  final Widget? subtitle;
+  final Widget? subtitle, leading;
   final bool value;
   final ValueChanged<bool>? onChanged;
   @override
   Widget build(BuildContext context) => ListTile(
     title: title,
     subtitle: subtitle,
+    leading: leading,
     trailing: Transform.scale(
       scale: 0.8,
       child: CupertinoSwitch(
@@ -208,7 +212,12 @@ class DisclosureChevron extends StatelessWidget {
         ? Duration.zero
         : const Duration(milliseconds: 220),
     curve: Curves.easeInOut,
-    child: Icon(CupertinoIcons.chevron_right, size: size, color: color),
+    child: SFIcon(
+      'chevron.right',
+      fallback: CupertinoIcons.chevron_right,
+      size: size,
+      color: color,
+    ),
   );
 }
 
