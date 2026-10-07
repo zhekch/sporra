@@ -67,3 +67,5 @@ assert.equal(routeFeatures(copies, {}, [10]).features[0].id, folded.routes[0].id
 assert.equal(activityStats(copies).distance, '62.7 km', 'copies count only once');
 assert.equal(copies.length, 3, 'imports remain stored');
 console.log('native duplicate folding: shared browser selection, map, stacks and totals passed');
+
+assert.equal(activityStats([{ ...measured, source: 'apple-health' }]).sourceLabels['apple-health'], 'Apple Health', 'activity groups use shared source names');

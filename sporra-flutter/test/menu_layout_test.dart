@@ -34,7 +34,7 @@ void main() {
             );
           }
           return http.Response(
-            '{"routes":[{"id":"1","name":"Morning walk","sport":"Walk","firstAt":1,"lengthM":100,"thumb":"0,100 50,0 100,75|0,0 20,20"}],"distance":"100 m","years":[]}',
+            '{"routes":[{"id":"1","name":"Morning walk","sport":"Walk","source":"apple-health","firstAt":1,"lengthM":100,"thumb":"0,100 50,0 100,75|0,0 20,20"}],"distance":"100 m","years":[],"sourceLabels":{"apple-health":"Apple Health"}}',
             200,
           );
         }),
@@ -62,6 +62,15 @@ void main() {
       tester.getSize(scaffold),
       tester.view.physicalSize / tester.view.devicePixelRatio,
     );
+    final originalSize = tester.view.physicalSize;
+    tester.view.physicalSize =
+        const Size(844, 390) * tester.view.devicePixelRatio;
+    addTearDown(tester.view.resetPhysicalSize);
+    await tester.pumpAndSettle();
+    expect(tester.getSize(find.byType(Scaffold).last), const Size(844, 390));
+    expect(tester.takeException(), isNull);
+    tester.view.physicalSize = originalSize;
+    await tester.pumpAndSettle();
     expect(find.text('Morning walk'), findsOneWidget);
     expect(find.byType(ActivityMiniature), findsOneWidget);
     expect(find.byType(SvgPicture), findsOneWidget);
@@ -77,6 +86,9 @@ void main() {
     await tester.tap(find.text('Walk · 1'));
     await tester.pumpAndSettle();
     expect(find.text('Morning walk'), findsOneWidget);
+    await tester.tap(find.text('By app'));
+    await tester.pumpAndSettle();
+    expect(find.text('Apple Health · 1'), findsOneWidget);
     await tester.tap(find.text('Statistics'));
     await tester.pumpAndSettle();
     expect(find.text('Ground covered'), findsOneWidget);
@@ -204,12 +216,19 @@ void main() {
     final app = AppState(
       api: SporraApi(
         client: MockClient((request) async {
+          if (request.url.path == '/api/import/link') {
+            expect(
+              jsonDecode(request.body)['links'],
+              'https://www.komoot.com/tour/123456',
+            );
+            return http.Response('{"imported":20,"routes":1}', 200);
+          }
           if (request.url.path == '/api/health') {
             return http.Response('{"app":"sporra","version":"test"}', 200);
           }
           if (request.url.path == '/api/sources') {
             return http.Response(
-              '{"sources":[{"key":"gpx","cells":20,"routes":2}]}',
+              '{"sources":[{"key":"gpx","label":"GPX track","cells":20,"routes":2}]}',
               200,
             );
           }
@@ -251,17 +270,18 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Off'));
     await tester.pumpAndSettle();
-    expect(find.byType(CupertinoActionSheet), findsOneWidget);
+    expect(find.byType(CupertinoActionSheet), findsNothing);
+    expect(find.text('Significant changes'), findsOneWidget);
     expect(find.text('Background location'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
     expect(app.menuOpen, isTrue);
-    await tester.tap(find.text('Cancel'));
+    await tester.tapAt(const Offset(5, 100));
     await tester.pumpAndSettle();
     final sources = find.widgetWithText(ChoiceChip, 'Sources');
     await tester.ensureVisible(sources);
     await tester.tap(sources);
     await tester.pumpAndSettle();
-    expect(find.text('gpx'), findsOneWidget);
+    expect(find.text('GPX track'), findsOneWidget);
     expect(find.text('Manage sources'), findsNothing);
     expect(find.text('Settings'), findsOneWidget);
     final sync = find.widgetWithText(ChoiceChip, 'Sync');
@@ -284,6 +304,33 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Back up now on the server'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
+    final importTab = find.widgetWithText(ChoiceChip, 'Import');
+    await tester.ensureVisible(importTab);
+    await tester.tap(importTab);
+    await tester.pumpAndSettle();
+    expect(find.text('Import files'), findsOneWidget);
+    expect(find.text('Import Komoot links'), findsOneWidget);
+    await tester.enterText(
+      find.byType(TextField),
+      'https://www.komoot.com/tour/123456',
+    );
+    await tester.tap(find.text('Import links'));
+    await tester.pumpAndSettle();
+    expect(find.text('Imported 20 cells and 1 activity.'), findsOneWidget);
+    final personal = find.widgetWithText(ChoiceChip, 'Personal');
+    await tester.ensureVisible(personal);
+    await tester.tap(personal);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ChoiceChip, 'Edit'), findsNothing);
+    expect(find.text('MANUAL EDIT'), findsOneWidget);
+    expect(find.text('Edit on the map'), findsOneWidget);
+    final originalSize = tester.view.physicalSize;
+    tester.view.physicalSize =
+        const Size(844, 390) * tester.view.devicePixelRatio;
+    await tester.pumpAndSettle();
+    expect(tester.getSize(find.byType(Scaffold).last), const Size(844, 390));
+    tester.view.physicalSize = originalSize;
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 }

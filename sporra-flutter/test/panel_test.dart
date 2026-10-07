@@ -157,7 +157,7 @@ void main() {
       expect(find.text('Only the new panel'), findsNothing);
       showSettings(context, app);
       await tester.pumpAndSettle();
-      expect(find.byType(ChoiceChip), findsNWidgets(8));
+      expect(find.byType(ChoiceChip), findsNWidgets(7));
       await tester.tap(find.widgetWithText(ChoiceChip, 'Map layers'));
       await tester.pumpAndSettle();
       expect(find.text('Mapbox public token'), findsOneWidget);

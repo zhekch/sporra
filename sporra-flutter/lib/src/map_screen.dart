@@ -12,6 +12,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
@@ -129,7 +130,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     try {
       final data = await app.api.get('/api/render/style?name=$name');
       if (mounted && requestedStyle == name) {
-        setState(() => resolvedStyle = jsonEncode(data));
+        setState(() {
+          loaded = false;
+          generation++;
+          resolvedStyle = jsonEncode(data);
+        });
       }
     } catch (e) {
       if (mounted) setState(() => mapError = 'Basemap unavailable: $e');
@@ -181,6 +186,45 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
   }
 
+  bool focusingLocation = false;
+  Future<void> focusLocation() async {
+    final controller = map;
+    if (!mounted ||
+        !loaded ||
+        !locating ||
+        controller == null ||
+        focusingLocation) {
+      return;
+    }
+    final token = generation;
+    focusingLocation = true;
+    try {
+      final point = location ?? await controller.requestMyLocationLatLng();
+      if (point == null ||
+          !mounted ||
+          !loaded ||
+          token != generation ||
+          !identical(map, controller)) {
+        return;
+      }
+      await controller.animateCamera(CameraUpdate.newLatLngZoom(point, 13.6));
+      if (mounted && token == generation) {
+        setState(() {
+          locating = false;
+          location = point;
+        });
+      }
+    } on PlatformException catch (e) {
+      if (e.code != 'LOCATION_UNAVAILABLE' && mounted && token == generation) {
+        setState(() => mapError = e.message);
+      }
+    } on MissingPluginException {
+      // A callback from a departing platform view cannot focus the replacement.
+    } finally {
+      focusingLocation = false;
+    }
+  }
+
   Future<void> refresh() async {
     if (!mounted || !loaded || map == null) return;
     if (refreshing) {
@@ -193,8 +237,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
     try {
       if (!mounted || token != generation) return;
       final renderRevision = app.revision;
-      final viewport = await map!.getVisibleRegion();
-      final zoom = map!.cameraPosition?.zoom ?? 8;
+      final controller = map!;
+      final viewport = await controller.getVisibleRegion();
+      if (!mounted ||
+          token != generation ||
+          !identical(map, controller) ||
+          !loaded) {
+        return;
+      }
+      final zoom = controller.cameraPosition?.zoom ?? 8;
       final level = app.detail == 'tiny'
           ? 0
           : app.detail == 'region'
@@ -435,7 +486,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
       await updatePlaceOutline();
       if (mounted) setState(() => mapError = null);
     } catch (e) {
-      if (mounted) setState(() => mapError = '$e');
+      if (mounted && token == generation && loaded) {
+        setState(() => mapError = '$e');
+      }
     } finally {
       refreshing = false;
       if (pending) {
@@ -1249,6 +1302,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       unawaited(ref.read(appProvider).api.flushCache());
     } else if (state == AppLifecycleState.resumed) {
       setState(() => locating = true);
+      unawaited(focusLocation());
       unawaited(refresh());
     }
   }
@@ -1285,6 +1339,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
     }
     if (requestedStyle != app.style) {
+      loaded = false;
+      generation++;
       requestedStyle = app.style;
       resolvedStyle = null;
       if (app.style == 'terrain' || app.style == 'satellite') {
@@ -1322,12 +1378,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
           return Stack(
             children: [
               MapLibreMap(
-                key: ValueKey((app.style, resolvedStyle)),
+                key: const ValueKey('sporra-map'),
                 styleString: resolvedStyle ?? mapStyle(app.style),
                 initialCameraPosition: camera,
                 trackCameraPosition: true,
                 featureTapsTriggersMapClick: true,
                 myLocationEnabled: locationEnabled,
+                myLocationTrackingMode: locating
+                    ? MyLocationTrackingMode.tracking
+                    : MyLocationTrackingMode.none,
                 myLocationRenderMode: locationEnabled
                     ? MyLocationRenderMode.compass
                     : MyLocationRenderMode.normal,
@@ -1345,7 +1404,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   map = c;
                 },
                 onStyleLoadedCallback: () {
+                  generation++;
+                  sources.clear();
+                  layers.clear();
+                  renderedView = null;
+                  routesView = null;
+                  routesUpdated = null;
+                  trackView = null;
+                  activityView = null;
+                  activityLinesView = null;
+                  overlaysView = null;
+                  outlineView = null;
+                  photosView = null;
+                  fade?.cancel();
                   loaded = true;
+                  unawaited(focusLocation());
                   unawaited(refresh());
                 },
                 onCameraIdle: () => unawaited(refresh()),
@@ -1357,12 +1430,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 },
                 onUserLocationUpdated: (p) {
                   location = p.position;
-                  if (locating && location != null) {
-                    locating = false;
-                    map?.animateCamera(
-                      CameraUpdate.newLatLngZoom(location!, 13.6),
-                    );
-                  }
+                  unawaited(focusLocation());
                 },
                 onMapClick: (pixel, p) => unawaited(tap(p, pixel: pixel)),
               ),
@@ -1500,24 +1568,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                 IconButton(
                                   tooltip: 'Your location',
                                   onPressed: () {
-                                    if (!locationEnabled) {
-                                      setState(() {
-                                        locationEnabled = true;
-                                        locating = true;
-                                      });
-                                    } else if (location != null) {
-                                      map?.animateCamera(
-                                        CameraUpdate.newLatLngZoom(
-                                          location!,
-                                          13.6,
-                                        ),
-                                      );
-                                    } else {
-                                      showToast(
-                                        context,
-                                        'Allow location access in iOS Settings.',
-                                      );
-                                    }
+                                    setState(() {
+                                      locationEnabled = true;
+                                      locating = true;
+                                    });
+                                    unawaited(focusLocation());
                                   },
                                   icon: const Icon(CupertinoIcons.location),
                                 ),

@@ -33,6 +33,12 @@ ThemeData webTheme({double menuRadius = 24}) {
     splashFactory: NoSplash.splashFactory,
     highlightColor: Colors.white10,
     dividerColor: Colors.white12,
+    expansionTileTheme: const ExpansionTileThemeData(
+      textColor: Colors.white,
+      collapsedTextColor: Colors.white,
+      iconColor: Colors.white70,
+      collapsedIconColor: Colors.white70,
+    ),
     textTheme: const TextTheme(
       bodyMedium: TextStyle(fontSize: 14, height: 1.4),
       titleMedium: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),

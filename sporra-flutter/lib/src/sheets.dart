@@ -70,7 +70,7 @@ Future<void> panel(
     await showModalBottomSheet<void>(
       context: navigator.context,
       constraints: fullscreen
-          ? BoxConstraints.tightFor(width: MediaQuery.sizeOf(context).width)
+          ? const BoxConstraints(maxWidth: double.infinity)
           : null,
       isDismissible: true,
       enableDrag: !fullscreen,
@@ -545,7 +545,7 @@ Future<void> showMenuSheet(
             const Padding(
               padding: EdgeInsets.all(24),
               child: Text(
-                'Sporra Preview · 0.9.1',
+                'Sporra Preview · 0.10.0',
                 style: TextStyle(color: Colors.white38),
               ),
             ),
@@ -831,7 +831,7 @@ class _SourcesState extends State<_Sources> {
           children: [
             for (final source in data['sources']) ...[
               GlassSwitch(
-                title: Text('${source['key']}'),
+                title: Text('${source['label'] ?? source['key']}'),
                 subtitle: Text(
                   '${source['cells']} cells · ${source['routes']} activities',
                 ),
@@ -1544,6 +1544,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
         }
         if (tab == 'Sync') {
           return ListView(
+            key: ValueKey('settings-$tab'),
             children: [
               ListTile(
                 title: const Text('Your phone'),
@@ -1572,6 +1573,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
           );
         }
         return ListView(
+          key: ValueKey('settings-$tab'),
           shrinkWrap: true,
           children: [
             if (tab == 'App settings') ...[
@@ -1653,18 +1655,19 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
                   child: Text('${d['error']}'),
                 ),
             ],
-            if (tab == 'Edit')
+            if (tab == 'Personal') ...[
+              section('Personal'),
+              section('Manual edit'),
               ListTile(
                 leading: const Icon(Icons.edit_outlined),
-                title: const Text('Edit your map'),
+                title: const Text('Edit on the map'),
                 onTap: () {
                   app.editing = true;
                   app.changed();
                   Navigator.pop(context);
                 },
               ),
-            if (tab == 'Personal') ...[
-              section('Personal'),
+
               ListTile(
                 title: const Text('Home'),
                 subtitle: Text(
@@ -1815,14 +1818,17 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
             ],
             if (tab == 'Map layers' && app.airports)
               airportCategoryControls(app),
-            if (tab == 'Import')
+            if (tab == 'Import') ...[
               ListTile(
-                title: const Text('Import activities'),
+                title: const Text('Import files'),
+                subtitle: const Text('GPX, FIT, KML, Timeline or an archive'),
                 onTap: () => importFile(context, app),
               ),
+              ImportLinks(app: app),
+            ],
             const ListTile(
               title: Text('Sporra Preview'),
-              subtitle: Text('0.9.1 · Native map for iOS'),
+              subtitle: Text('0.10.0 · Native map for iOS'),
             ),
           ],
         );
@@ -2129,7 +2135,11 @@ Widget activitiesList(AppState app) {
                   key: PageStorageKey('activity-group-$group-${bucket.key}'),
                   initiallyExpanded: true,
                   title: Text(
-                    '${bucket.key.isEmpty ? 'Unspecified' : bucket.key} · ${bucket.value.length}',
+                    '${bucket.key.isEmpty
+                        ? 'Unspecified'
+                        : group == 'app'
+                        ? ((data['sourceLabels'] as Map?)?[bucket.key] ?? bucket.key)
+                        : bucket.key} · ${bucket.value.length}',
                   ),
                   children: [
                     for (final activity in bucket.value)
@@ -2679,7 +2689,6 @@ class _SettingsTabsState extends State<SettingsTabs> {
               'Personal',
               'Map layers',
               'Sources',
-              'Edit',
               'Import',
               'Sync',
               if (widget.app.user?['admin'] == true ||
@@ -2977,62 +2986,95 @@ class IOSPicker<T> extends StatelessWidget {
   final List<DropdownMenuItem<T>> items;
   final ValueChanged<T?>? onChanged;
   @override
-  Widget build(BuildContext context) {
-    final selected = items.where((item) => item.value == value).firstOrNull;
-    return CupertinoButton(
-      padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 8),
-      onPressed: onChanged == null
-          ? null
-          : () async {
-              final choice = await showCupertinoModalPopup<T>(
-                context: context,
-                builder: (context) => CupertinoTheme(
-                  data: const CupertinoThemeData(
-                    brightness: Brightness.dark,
-                    primaryColor: Colors.white,
-                  ),
-                  child: CupertinoActionSheet(
-                    actions: [
-                      for (final item in items)
-                        CupertinoActionSheetAction(
-                          onPressed: () => Navigator.pop(context, item.value),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              item.child,
-                              if (item.value == value)
-                                const Padding(
-                                  padding: EdgeInsets.only(left: 10),
-                                  child: Icon(
-                                    CupertinoIcons.check_mark,
-                                    size: 18,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                    ],
-                    cancelButton: CupertinoActionSheetAction(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Cancel'),
-                    ),
-                  ),
-                ),
-              );
-              if (choice != null && context.mounted) onChanged?.call(choice);
-            },
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          selected?.child ?? Text('$value'),
-          const SizedBox(width: 6),
-          const Icon(
-            CupertinoIcons.chevron_up_chevron_down,
-            size: 14,
-            color: Colors.white54,
-          ),
-        ],
+  Widget build(BuildContext context) => DropdownButtonHideUnderline(
+    child: DropdownButton<T>(
+      value: value,
+      items: items,
+      onChanged: onChanged,
+      dropdownColor: const Color(0xff262626),
+      borderRadius: BorderRadius.circular(18),
+      elevation: 8,
+      icon: const Icon(
+        CupertinoIcons.chevron_up_chevron_down,
+        size: 14,
+        color: Colors.white54,
       ),
-    );
+      style: const TextStyle(color: Colors.white, fontSize: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+    ),
+  );
+}
+
+class ImportLinks extends StatefulWidget {
+  const ImportLinks({super.key, required this.app});
+  final AppState app;
+  @override
+  State<ImportLinks> createState() => _ImportLinksState();
+}
+
+class _ImportLinksState extends State<ImportLinks> {
+  final text = TextEditingController();
+  String? message;
+  bool busy = false;
+  @override
+  void dispose() {
+    text.dispose();
+    super.dispose();
   }
+
+  Future<void> submit() async {
+    setState(() {
+      busy = true;
+      message = null;
+    });
+    try {
+      final result = await widget.app.api.post('/api/import/link', {
+        'links': text.text,
+      });
+      widget.app.changed();
+      if (mounted) {
+        setState(() {
+          message =
+              'Imported ${result['imported']} cells and ${result['routes']} ${result['routes'] == 1 ? 'activity' : 'activities'}.';
+          text.clear();
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => message = '$e');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.all(20),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Import Komoot links',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: text,
+          minLines: 2,
+          maxLines: 4,
+          keyboardType: TextInputType.url,
+          decoration: const InputDecoration(
+            hintText: 'Paste tour or share links',
+          ),
+        ),
+        const SizedBox(height: 8),
+        CupertinoButton(
+          onPressed: busy ? null : submit,
+          child: busy
+              ? const CupertinoActivityIndicator()
+              : const Text('Import links'),
+        ),
+        if (message != null) Text(message!),
+      ],
+    ),
+  );
 }

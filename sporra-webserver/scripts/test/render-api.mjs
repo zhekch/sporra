@@ -1,3 +1,4 @@
+import { prepareLinkImport } from '../../server/import-links.js';
 import { search as nativeSearch } from '../../server/render-geography.js';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -108,6 +109,14 @@ try {
   check(noRoutesImport.status === 200 && noRoutesImport.body.routes === 0 && (await api('GET', '/api/routes')).text === routesBeforePreview.text, 'ground-only import saves no activity routes');
   const imported = await api('POST', '/api/import/file', {name:'walk.gpx', text:gpx});
   check(imported.status===200 && imported.body.imported>0 && imported.body.routes>0, 'raw GPX imports shared cells and activity geometry');
+  const linkPoints = [{lng:8.54,lat:47.37,t:1723280400},{lng:8.542,lat:47.371,t:1723280460},{lng:8.544,lat:47.372,t:1723280520}];
+  const links = await prepareLinkImport({links:'https://www.komoot.com/tour/123456?share_token=secret'}, async ref => {
+    check(ref.id === '123456' && ref.shareToken === 'secret', 'link importer retains private-tour share token');
+    return {tour:{name:'Komoot walk'},points:linkPoints,tracks:[{name:'Komoot walk',sport:'Walking',segments:[linkPoints],firstAt:linkPoints[0].t,lastAt:linkPoints[2].t}]};
+  });
+  check(links.batches[0].cells.length > 0 && links.batches[0].routes.length > 0 && links.batches[0].routes[0].link.includes('share_token=secret'), 'link import uses shared ground and activity derivation with canonical tour link');
+  check((await api('POST','/api/import/link',{links:'https://example.com/arbitrary.gpx'})).status === 400, 'link import rejects unsupported link providers');
+  check((await api('GET','/api/sources')).body.sources.every(s => typeof s.label === 'string'), 'source lists contain shared readable names');
   const nativeRoutes = await api('GET', '/api/render/routes');
   check(nativeRoutes.status === 200 && nativeRoutes.body.features.length > 0, 'native routes return geometry with web appearance');
   const sport = nativeRoutes.body.features[0].properties.sport || '\u0000none';

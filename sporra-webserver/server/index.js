@@ -110,7 +110,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.138.0';
+export const SERVER_VERSION = '0.139.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -218,7 +218,7 @@ async function publishedVersion() {
 const scrypt = promisify(scryptCb);
 // The same folding the browser importer uses, so a fix from Home Assistant and
 // a fix from a GPX file land in the same cell and count the same way.
-import { pointsToCells, VISIT_GAP_SEC } from '../src/locations.js';
+import { pointsToCells, VISIT_GAP_SEC, sourceLabel } from '../src/locations.js';
 import { probe, ping, pullFixes, normalizeBaseUrl, isFollowableEntity, FIRST_SYNC_DAYS } from './home-assistant.js';
 import * as strava from './strava.js';
 import { userMessage } from './user-error.js';
@@ -227,6 +227,7 @@ import { userMessage } from './user-error.js';
 // Their *names* are left blank: the place-name dataset is a 2 MB browser chunk,
 // and POST /api/routes/places already exists to fill them in from the page.
 import { alignTrace, buildRoutes, guessSport, canonicalSport, routeThumb, splitOnGaps, trackName, traceSupersedes } from '../src/routes.js';
+import { prepareLinkImport } from './import-links.js';
 import { isKomootTourUrl } from '../src/komoot.js';
 // Everything above is about getting data *in*. This is the one thing that
 // copies it back out again, on a schedule, without being asked.
@@ -2951,37 +2952,47 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       return send(res, 200, { ok: true, total: cellCount(user), signature: cellsSignature(user), undo: { remove: add, rows } });
     }
 
-    if (req.method === 'POST' && pathname === '/api/import/file') {
+    if (req.method === 'POST' && (pathname === '/api/import/file' || pathname === '/api/import/link')) {
       const user = currentUser(req);
       if (!user) return send(res, 401, { error: 'not authenticated' });
       if (bigRequestsInFlight >= MAX_BIG_REQUESTS) return send(res, 503, { error: 'Busy importing something else — try again.' });
       bigRequestsInFlight++;
       try {
         const body = await readBody(req, BIG_BODY_LIMIT);
-        if (typeof body.name !== 'string' || (typeof body.text !== 'string' && typeof body.base64 !== 'string')) return send(res, 400, { error: 'name and text or base64 are required' });
-        const bytes = typeof body.text === 'string' ? Buffer.from(body.text) : Buffer.from(body.base64, 'base64');
-        let files;
-        try { files = await expand({ name: body.name.slice(0,200), arrayBuffer: async () => bytes }); }
-        catch (e) { return send(res, 400, { error: e.message }); }
-        if (files.items.length > MAX_ROUTES_PER_REQUEST || files.items.reduce((n,f) => n + f.bytes.length,0) > 64*1024*1024) return send(res, 400, { error: 'expanded archive is too large' });
-        const groups = new Map();
-        for (const file of files.items) {
-          let parsed;
-          try { parsed = parseExpanded(file.name, file.bytes); }
+        let batches, sources, fileNames;
+        if (pathname === '/api/import/link') {
+          try {
+            const prepared = await prepareLinkImport(body);
+            batches = prepared.batches; sources = prepared.sources; fileNames = prepared.files;
+          } catch (e) { return send(res, 400, { error: e.message }); }
+        } else {
+          if (typeof body.name !== 'string' || (typeof body.text !== 'string' && typeof body.base64 !== 'string')) return send(res, 400, { error: 'name and text or base64 are required' });
+          const bytes = typeof body.text === 'string' ? Buffer.from(body.text) : Buffer.from(body.base64, 'base64');
+          let files;
+          try { files = await expand({ name: body.name.slice(0,200), arrayBuffer: async () => bytes }); }
           catch (e) { return send(res, 400, { error: e.message }); }
-          if (parsed.error) return send(res, 400, { error: parsed.error });
-          const source = String(body.source ?? files.source ?? parsed.source ?? 'other').slice(0,40);
-          let group = groups.get(source);
-          if (!group) groups.set(source, group = { points: [], tracks: [] });
-          for (const point of parsed.points) group.points.push(point);
-          for (const track of parsed.tracks) group.tracks.push(track);
+          if (files.items.length > MAX_ROUTES_PER_REQUEST || files.items.reduce((n,f) => n + f.bytes.length,0) > 64*1024*1024) return send(res, 400, { error: 'expanded archive is too large' });
+          const groups = new Map();
+          for (const file of files.items) {
+            let parsed;
+            try { parsed = parseExpanded(file.name, file.bytes); }
+            catch (e) { return send(res, 400, { error: e.message }); }
+            if (parsed.error) return send(res, 400, { error: parsed.error });
+            const source = String(body.source ?? files.source ?? parsed.source ?? 'other').slice(0,40);
+            let group = groups.get(source);
+            if (!group) groups.set(source, group = { points: [], tracks: [] });
+            for (const point of parsed.points) group.points.push(point);
+            for (const track of parsed.tracks) group.tracks.push(track);
+          }
+          batches = [...groups].map(([source, group]) => ({ source, cells: pointsToCells(group.points), routes: body.includeRoutes === false ? [] : buildRoutes(group.tracks, { source, fileName: body.name }) }));
+          sources = [...groups.keys()];
+          fileNames = files.items.map(f => f.name);
         }
-        const batches = [...groups].map(([source, group]) => ({ source, cells: pointsToCells(group.points), routes: body.includeRoutes === false ? [] : buildRoutes(group.tracks, { source, fileName: body.name }) }));
         const imported = batches.reduce((n,b) => n + b.cells.length,0);
         if (!imported || imported > MAX_CELLS_PER_IMPORT) return send(res, 400, { error: imported ? 'too many cells' : 'No locations in this file.' });
         if (body.preview === true) return send(res, 200, {
           preview: true, imported, routes: batches.reduce((n, b) => n + b.routes.length, 0),
-          sources: [...groups.keys()], files: files.items.map(f => f.name),
+          sources, files: fileNames,
         });
         let routeCount = 0;
         const at = nowSec();
@@ -2996,7 +3007,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
           }
           db.exec('COMMIT');
         } catch (e) { db.exec('ROLLBACK'); throw e; }
-        return send(res, 200, { ok: true, imported, routes: routeCount, sources: [...groups.keys()], total: cellCount(user) });
+        return send(res, 200, { ok: true, imported, routes: routeCount, sources, total: cellCount(user) });
       } finally { bigRequestsInFlight--; }
     }
 
@@ -3754,6 +3765,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       return send(res, 200, {
         sources: q.sourceTally.all(user.id).map((s) => ({
           key: s.source,
+          label: sourceLabel(s.source),
           cells: s.cells,
           routes: routes.get(s.source) ?? 0,
           firstAt: s.first ?? 0,

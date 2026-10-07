@@ -1,4 +1,5 @@
 import { duplicateRoutes, routeSamples, recordedSeconds, formatDistance, formatDuration, totalLength, distanceByYear } from '../src/routes.js';
+import { sourceLabel } from '../src/locations.js';
 import { graphData } from '../src/route-graph.js';
 import { metricCollection } from '../src/route-metric.js';
 // Native clients consume the browser's palette and account preferences.
@@ -52,7 +53,7 @@ export function activityStats(routes) {
   const folded = foldedActivities(routes);
   routes = folded.routes;
   const longest = routes.reduce((best, r) => !best || r.lengthM > best.lengthM ? r : best, null);
-  return { ...folded, distance: formatDistance(totalLength(routes)),
+  return { ...folded, sourceLabels: Object.fromEntries(routes.map(r => [r.source, sourceLabel(r.source)])), distance: formatDistance(totalLength(routes)),
     duration: formatDuration(routes.reduce((sum, r) => sum + recordedSeconds(r), 0)),
     longest: longest ? { name: longest.name, distance: formatDistance(longest.lengthM) } : null,
     years: distanceByYear(routes).map(([year, value]) => ({ year, value, label: formatDistance(value) })),

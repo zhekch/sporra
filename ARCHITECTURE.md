@@ -10082,3 +10082,24 @@ sync connectors, administration and account backups are embedded directly in
 their Settings categories. Connector lists disable their inner scrolling when
 embedded so the Settings tab owns the scroll. Input, authorization, file selection
 and destructive confirmations retain their necessary dialogs/system flows.
+
+
+Flutter 0.10.0 restores anchored dropdown pickers with rounded neutral surfaces
+and compact chevrons. Expanded menu headings remain white. Fullscreen sheets use
+unbounded width constraints and resolve their size during layout rather than
+capturing the portrait width on entry, so rotation fills the landscape viewport.
+Manual edit is a button in Personal; Settings categories reset their list scroll
+position. Import accepts files and up to ten Komoot share/tour links. Server
+0.139.0 adds /api/import/link, using the web's fetchTour, pointsToCells and
+buildRoutes, then the existing preview/transaction path. Share tokens and canonical
+activity links survive import; unsupported providers are rejected. Source lists
+and activity summaries provide the web's sourceLabel readings for native display.
+
+Basemap changes now update one persistent native map rather than replacing its
+platform-view key. That replacement could leave refresh awaiting a disposed
+map#getVisibleRegion channel. Style loading invalidates render generations and
+layer caches; refresh checks the captured controller after its viewport await.
+Location focus is armed through native tracking until a valid position and loaded
+style are available, also querying the native last position after style load and
+foreground resume. Focus clears only after the camera operation completes, and
+the location button uses the same guarded path.
