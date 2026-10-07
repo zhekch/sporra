@@ -1,3 +1,4 @@
+import 'photo_markers.dart';
 import 'sf_icon.dart';
 import 'loading.dart';
 import 'place_card.dart';
@@ -983,44 +984,27 @@ class _MapScreenState extends ConsumerState<MapScreen>
             photosView != (generation, app.photoItems, app.track))) {
       final photos = app.photosInTrack(await app.readPhotos());
 
-      await geoSource('photos', {
-        'type': 'FeatureCollection',
-        'features': photos
-            .map(
-              (p) => {
-                'type': 'Feature',
-                'properties': p,
-                'geometry': {
-                  'type': 'Point',
-                  'coordinates': [p['lng'], p['lat']],
-                },
-              },
-            )
-            .toList(),
-      });
-      if (!layers.contains('photos-pins')) {
-        await map!.addCircleLayer(
+      if (sources.contains('photos')) {
+        await map!.setGeoJsonSource(
           'photos',
-          'photos-pins',
-          const CircleLayerProperties(
-            circleColor: '#ffffff',
-            circleRadius: 5,
-            circleStrokeColor: '#ffffff',
-            circleStrokeWidth: 2,
-          ),
+          photoSource(photos).data as Map<String, dynamic>,
         );
+      } else {
+        await map!.addSource('photos', photoSource(photos));
+        sources.add('photos');
       }
-      layers.add('photos-pins');
+      if (!layers.contains('photos-pins')) {
+        await map!.addCircleLayer('photos', 'photos-pins', photoPinStyle);
+        layers.add('photos-pins');
+      }
+      if (!layers.contains('photos-counts')) {
+        await map!.addSymbolLayer('photos', 'photos-counts', photoCountStyle);
+        layers.add('photos-counts');
+      }
       photosView = (generation, app.photoItems, app.track);
     }
-    if (layers.contains('photos-pins')) {
-      await patchLayer(
-        'photos-pins',
-        CircleLayerProperties(
-          circleOpacity: app.photos ? 1 : 0,
-          circleStrokeOpacity: app.photos ? 1 : 0,
-        ),
-      );
+    for (final id in ['photos-pins', 'photos-counts']) {
+      if (layers.contains(id)) await map!.setLayerVisibility(id, app.photos);
     }
     overlaysView = view;
   }
@@ -1187,13 +1171,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
         }
         if (results[1].isNotEmpty) {
           setState(() => placeInfo = null);
-          await showPhotos(
-            context,
-            app,
-            indices: results[1]
-                .map((f) => (f['properties']['index'] as num).toInt())
-                .toSet(),
+          final controller = map!;
+          final indices = await photoHitIndices(
+            [nearestPhotoHit(results[1], point.latitude, point.longitude)],
+            (cluster, limit, offset) => controller.getClusterLeaves(
+              'photos',
+              cluster,
+              limit: limit,
+              offset: offset,
+            ),
           );
+          if (!mounted || request != tapRequest) return;
+          await showPhotos(context, app, indices: indices);
           return;
         }
         if (results[2].isNotEmpty) {
@@ -1927,16 +1916,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
-                                        Text(
-                                          app.trackDay == null ? 'TRIP' : 'DAY',
-                                          style: const TextStyle(
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w600,
-                                            letterSpacing: 1.2,
-                                            color: Colors.white54,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 3),
                                         Text(
                                           '${app.track!['label'] ?? app.track!['name']}',
                                           maxLines: 1,

@@ -1,3 +1,4 @@
+import 'photo_markers.dart';
 import 'loading.dart';
 import 'sf_icon.dart';
 
@@ -1472,59 +1473,72 @@ Future<void> showPhotos(
   BuildContext context,
   AppState app, {
   Set<int>? indices,
-}) => panel(
-  context,
-  'Photos',
-  AsyncList(
-    load: () async {
-      final items = app.photosInTrack(await app.readPhotos());
-      return indices == null
-          ? items
-          : items.where((p) => indices.contains(p['index'])).toList();
-    },
-    builder: (context, items) {
-      if ((items as List).isEmpty) {
-        return const Center(
-          child: Text('No located photos. Check access in iOS Settings.'),
-        );
-      }
-      return GridView.builder(
-        padding: const EdgeInsets.all(16),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          crossAxisSpacing: 4,
-          mainAxisSpacing: 4,
-        ),
-        itemCount: items.length,
-        itemBuilder: (context, i) => GestureDetector(
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => PhotoGallery(app: app, photos: items, index: i),
-            ),
-          ),
-          child: FutureBuilder(
-            future: app.thumbnail(items[i]['index'], 256),
-            builder: (_, s) => s.hasData
-                ? Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image.memory(s.data!, fit: BoxFit.cover),
-                      if (items[i]['video'] == true)
-                        const Center(
-                          child: SFIcon(
-                            'play.circle.fill',
-                            fallback: CupertinoIcons.play_circle_fill,
-                          ),
-                        ),
-                    ],
-                  )
-                : const ColoredBox(color: Colors.white12),
-          ),
-        ),
+}) async {
+  final available = app.photosInTrack(await app.readPhotos());
+  final items = indices == null
+      ? available
+      : available.where((p) => indices.contains(p['index'])).toList();
+  if (!context.mounted) return;
+  await panel(
+    context,
+    photoCountTitle(items),
+    PhotoGrid(app: app, items: items),
+    showHeaderDivider: false,
+  );
+}
+
+class PhotoGrid extends StatelessWidget {
+  const PhotoGrid({super.key, required this.app, required this.items});
+  final AppState app;
+  final List<dynamic> items;
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(24),
+        child: Text('No located photos. Check access in iOS Settings.'),
       );
-    },
-  ),
-);
+    }
+    return GridView.builder(
+      shrinkWrap: true,
+      padding: const EdgeInsets.all(16),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: items.length.clamp(1, 3),
+        crossAxisSpacing: 4,
+        mainAxisSpacing: 4,
+      ),
+      itemCount: items.length,
+      itemBuilder: (context, i) => GestureDetector(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => PhotoGallery(app: app, photos: items, index: i),
+          ),
+        ),
+        child: FutureBuilder(
+          future: app.thumbnail(
+            items[i]['index'],
+            items.length < 3 ? 1024 : 512,
+          ),
+          builder: (_, s) => s.hasData
+              ? Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.memory(s.data!, fit: BoxFit.cover),
+                    if (items[i]['video'] == true)
+                      const Center(
+                        child: SFIcon(
+                          'play.circle.fill',
+                          fallback: CupertinoIcons.play_circle_fill,
+                        ),
+                      ),
+                  ],
+                )
+              : const ColoredBox(color: Colors.white12),
+        ),
+      ),
+    );
+  }
+}
 
 class PhotoGallery extends StatefulWidget {
   const PhotoGallery({

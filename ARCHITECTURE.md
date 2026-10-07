@@ -10229,3 +10229,13 @@ the expanded ExpansionTile border so opening it adds no separating line.
 Opening Appearance also triggers a light haptic; collapsing it does not.
 The main Location, Menu, and Search buttons trigger the same light impact on
 activation. A disabled Search button has no feedback.
+
+Flutter photo sources now cluster within 36 source pixels through zoom 24, keeping
+coincident media grouped at maximum zoom. White circular badges show point_count
+or 1 for a single asset, with dark centered count labels. Both native adapters
+page cluster leaves in batches of 500; tapping opens the full nearest hit
+group without changing the camera. Circle and count layers share visibility.
+Photo headers count stills and videos separately and omit the header divider.
+The grid uses one, two, or three columns according to item count, shrink-wraps
+small galleries, and scrolls within the existing panel height cap for large ones.
+Trip/day map banners omit their category eyebrow and retain the date/name.

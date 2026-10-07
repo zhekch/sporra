@@ -158,6 +158,32 @@ class NativeMapController {
         .toList();
   }
 
+  Future<List<dynamic>> getClusterLeaves(
+    String source,
+    Map<String, dynamic> cluster, {
+    int limit = 500,
+    int offset = 0,
+  }) async {
+    if (libre != null) {
+      return libre!.getClusterLeaves(
+        source,
+        (cluster['properties']['cluster_id'] as num).toInt(),
+        limit: limit,
+        offset: offset,
+      );
+    }
+    final result = await box!.getGeoJsonClusterLeaves(
+      source,
+      Map<String?, Object?>.from(cluster),
+      limit,
+      offset,
+    );
+    if (result.featureCollection == null) {
+      throw StateError(result.value ?? 'Photo group could not be read.');
+    }
+    return result.featureCollection!.whereType<Map>().toList();
+  }
+
   Future<void> addSource(String id, SourceProperties props) async {
     if (libre != null) return libre!.addSource(id, props);
     final p = props.toJson();
