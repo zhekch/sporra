@@ -243,228 +243,235 @@ Future<void> showMenuSheet(
         return ListView(
           shrinkWrap: true,
           children: [
-            section('Appearance'),
-            ChoiceRow(
-              label: 'Basemap',
-              value: a.style == 'satellite' ? 'satellite' : 'flat',
-              choices: const {'flat': '2D', 'satellite': 'Satellite'},
-              onChanged: (v) => a.setStyle(v == 'flat' ? 'dark' : v),
-            ),
-            if (a.style != 'satellite')
-              ChoiceRow(
-                label: 'Theme',
-                value: a.style,
-                choices: const {
-                  'dark': 'Dark',
-                  'terrain': 'Terrain',
-                  'voyager': 'Light',
-                },
-                onChanged: a.setStyle,
-              ),
-            ChoiceRow(
-              label: 'Detail',
-              value: a.detail,
-              choices: const {
-                'tiny': 'Tiniest',
-                'auto': 'Auto',
-                'region': 'Region',
-                'country': 'Country',
-              },
-              onChanged: (v) {
-                a.detail = v;
-                a.changed();
-              },
-            ),
-            ChoiceRow(
-              label: 'Colouring',
-              value: a.mode,
-              onReselected: () {
-                a.ground = !a.ground;
-                a.changed();
-              },
-              choices: const {
-                'flat': 'Single',
-                'visits': 'Visits',
-                'oldest': 'First seen',
-                'type': 'Type',
-              },
-              onChanged: (v) {
-                a.ground = v != a.mode || !a.ground;
-                a.mode = v;
-                a.changed();
-                a.run(a.saveAppearance);
-              },
-            ),
-            GlassSwitch(
-              title: const Text('Visited ground'),
-              value: a.ground,
-              onChanged: (v) {
-                a.ground = v;
-                a.changed();
-              },
-            ),
-            if (a.mode == 'flat')
-              ListTile(
-                title: const Text('Map colour'),
-                trailing: ColorDot(a.accent),
-                onTap: () async {
-                  final color = await chooseColor(context, a.accent);
-                  if (color != null) {
-                    a.accent = color;
-                    a.changed();
-                    await a.run(a.saveAppearance);
-                  }
-                },
-              ),
-            if (a.mode == 'visits' || a.mode == 'oldest')
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 8,
+            ExpansionTile(
+              title: const Text('Appearance'),
+              children: [
+                section('Appearance'),
+                ChoiceRow(
+                  label: 'Basemap',
+                  value: a.style == 'satellite' ? 'satellite' : 'flat',
+                  choices: const {'flat': '2D', 'satellite': 'Satellite'},
+                  onChanged: (v) => a.setStyle(v == 'flat' ? 'dark' : v),
                 ),
-                child: Column(
-                  children: [
-                    Container(
-                      height: 12,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(6),
-                        gradient: LinearGradient(
-                          colors: a.mode == 'visits'
-                              ? const [
-                                  Color(0xff2b3a6b),
-                                  Color(0xff39a0a0),
-                                  Color(0xfff2d049),
-                                  Color(0xffe4562f),
-                                ]
-                              : const [
-                                  Color(0xff5c2a3f),
-                                  Color(0xffcf8560),
-                                  Color(0xff79c39b),
-                                ],
-                        ),
-                      ),
+                if (a.style != 'satellite')
+                  ChoiceRow(
+                    label: 'Theme',
+                    value: a.style,
+                    choices: const {
+                      'dark': 'Dark',
+                      'terrain': 'Terrain',
+                      'voyager': 'Light',
+                    },
+                    onChanged: a.setStyle,
+                  ),
+                ChoiceRow(
+                  label: 'Detail',
+                  value: a.detail,
+                  choices: const {
+                    'tiny': 'Tiniest',
+                    'auto': 'Auto',
+                    'region': 'Region',
+                    'country': 'Country',
+                  },
+                  onChanged: (v) {
+                    a.detail = v;
+                    a.changed();
+                  },
+                ),
+                ChoiceRow(
+                  label: 'Colouring',
+                  value: a.mode,
+                  onReselected: () {
+                    a.ground = !a.ground;
+                    a.changed();
+                  },
+                  choices: const {
+                    'flat': 'Single',
+                    'visits': 'Visits',
+                    'oldest': 'First seen',
+                    'type': 'Type',
+                  },
+                  onChanged: (v) {
+                    a.ground = v != a.mode || !a.ground;
+                    a.mode = v;
+                    a.changed();
+                    a.run(a.saveAppearance);
+                  },
+                ),
+                GlassSwitch(
+                  title: const Text('Visited ground'),
+                  value: a.ground,
+                  onChanged: (v) {
+                    a.ground = v;
+                    a.changed();
+                  },
+                ),
+                if (a.mode == 'flat')
+                  ListTile(
+                    title: const Text('Map colour'),
+                    trailing: ColorDot(a.accent),
+                    onTap: () async {
+                      final color = await chooseColor(context, a.accent);
+                      if (color != null) {
+                        a.accent = color;
+                        a.changed();
+                        await a.run(a.saveAppearance);
+                      }
+                    },
+                  ),
+                if (a.mode == 'visits' || a.mode == 'oldest')
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 8,
                     ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    child: Column(
                       children: [
-                        Text(a.mode == 'visits' ? 'Rare' : 'Long ago'),
-                        Text(a.mode == 'visits' ? 'Often' : 'Lately'),
+                        Container(
+                          height: 12,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(6),
+                            gradient: LinearGradient(
+                              colors: a.mode == 'visits'
+                                  ? const [
+                                      Color(0xff2b3a6b),
+                                      Color(0xff39a0a0),
+                                      Color(0xfff2d049),
+                                      Color(0xffe4562f),
+                                    ]
+                                  : const [
+                                      Color(0xff5c2a3f),
+                                      Color(0xffcf8560),
+                                      Color(0xff79c39b),
+                                    ],
+                            ),
+                          ),
+                        ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(a.mode == 'visits' ? 'Rare' : 'Long ago'),
+                            Text(a.mode == 'visits' ? 'Often' : 'Lately'),
+                          ],
+                        ),
                       ],
                     ),
-                  ],
-                ),
-              ),
-            section('Your map'),
-            GlassSwitch(
-              title: const Text('Places answer a tap'),
-              value: a.cellInfo,
-              onChanged: (v) {
-                a.cellInfo = v;
-                a.changed();
-              },
+                  ),
+              ],
             ),
+            section('Map overlays'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  FilterChip(
+                    label: const Text('Routes'),
+                    avatar: const Icon(Icons.route_outlined, size: 18),
+                    selected: a.routes,
+                    onSelected: (v) {
+                      a.routes = v;
+                      a.changed();
+                    },
+                  ),
+                  FilterChip(
+                    label: const Text('Photos'),
+                    avatar: const Icon(Icons.photo_outlined, size: 18),
+                    selected: a.photos,
+                    onSelected: (v) {
+                      a.photos = v;
+                      a.changed();
+                    },
+                  ),
+                  FilterChip(
+                    label: const Text('Rail'),
+                    avatar: const Icon(Icons.train_outlined, size: 18),
+                    selected: a.rail,
+                    onSelected: (v) {
+                      a.rail = v;
+                      a.changed();
+                    },
+                  ),
+                  FilterChip(
+                    label: const Text('Airports'),
+                    avatar: const Icon(Icons.flight_outlined, size: 18),
+                    selected: a.airports,
+                    onSelected: (v) {
+                      a.airports = v;
+                      a.changed();
+                    },
+                  ),
+                  FilterChip(
+                    label: const Text('Trails'),
+                    avatar: const Icon(Icons.hiking, size: 18),
+                    selected: a.trails,
+                    onSelected: (v) {
+                      a.trails = v;
+                      a.changed();
+                    },
+                  ),
+                ],
+              ),
+            ),
+            ExpansionTile(
+              title: const Text('Overlay options'),
+              children: [
+                GlassSwitch(
+                  title: const Text('Places answer a tap'),
+                  value: a.cellInfo,
+                  onChanged: (v) {
+                    a.cellInfo = v;
+                    a.changed();
+                  },
+                ),
 
-            GlassSwitch(
-              title: const Text('Activities'),
-              value: a.routes,
-              onChanged: (v) {
-                a.routes = v;
-                a.changed();
-              },
-            ),
-            ListTile(
-              title: const Text('Activity colours and visibility'),
-              leading: const Icon(Icons.palette_outlined),
-              trailing: const Icon(CupertinoIcons.chevron_right, size: 18),
-              onTap: () => showActivityStyle(context, a),
-            ),
-            GlassSwitch(
-              title: const Text('Photo pins'),
-              subtitle: const Text('Pictures stay on your phone'),
-              value: a.photos,
-              onChanged: (v) {
-                a.photos = v;
-                a.changed();
-              },
-            ),
-            ListTile(
-              title: const Text('Browse activities'),
-              leading: const Icon(Icons.route_outlined),
-              onTap: () => showActivities(context, a, map),
-            ),
-            ListTile(
-              title: const Text('Photos'),
-              leading: const Icon(Icons.photo_library_outlined),
-              onTap: () => showPhotos(context, a),
-            ),
-            section('Reference overlays'),
-            GlassSwitch(
-              title: const Text('Train tracks'),
-              value: a.rail,
-              onChanged: (v) {
-                a.rail = v;
-                a.changed();
-              },
-            ),
-            GlassSwitch(
-              title: const Text('Airports'),
-              value: a.airports,
-              onChanged: (v) {
-                a.airports = v;
-                a.changed();
-              },
-            ),
-            if (a.airports) airportCategoryControls(a),
-            GlassSwitch(
-              title: const Text('Waymarked trails'),
-              value: a.trails,
-              onChanged: (v) {
-                a.trails = v;
-                a.changed();
-              },
-            ),
-            if (a.trails) ...[
-              ChoiceRow(
-                label: 'Trail theme',
-                value: a.trailTheme,
-                choices: const {
-                  'hiking': 'Hiking',
-                  'cycling': 'Cycling',
-                  'mtb': 'MTB',
-                  'slopes': 'Slopes',
-                },
-                onChanged: (value) {
-                  a.trailTheme = value;
-                  a.changed();
-                },
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Row(
-                  children: [
-                    const Text('Strength'),
-                    Expanded(
-                      child: CupertinoSlider(
-                        value: a.trailStrength,
-                        min: 0.2,
-                        max: 1,
-                        onChanged: (value) {
-                          a.trailStrength = value;
-                          a.changed();
-                        },
-                      ),
-                    ),
-                    Text('${(a.trailStrength * 100).round()}%'),
-                  ],
+                ListTile(
+                  title: const Text('Activity colours and visibility'),
+                  leading: const Icon(Icons.palette_outlined),
+                  trailing: const Icon(CupertinoIcons.chevron_right, size: 18),
+                  onTap: () => showActivityStyle(context, a),
                 ),
-              ),
-            ],
-            section('Explore and manage'),
-            ListTile(
-              leading: const Icon(CupertinoIcons.calendar),
-              title: const Text('Trips and calendar'),
-              onTap: map == null ? null : () => showTrips(context, a, map),
+                if (a.airports) airportCategoryControls(a),
+                if (a.trails) ...[
+                  ChoiceRow(
+                    label: 'Trail theme',
+                    value: a.trailTheme,
+                    choices: const {
+                      'hiking': 'Hiking',
+                      'cycling': 'Cycling',
+                      'mtb': 'MTB',
+                      'slopes': 'Slopes',
+                    },
+                    onChanged: (value) {
+                      a.trailTheme = value;
+                      a.changed();
+                    },
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      children: [
+                        const Text('Strength'),
+                        Expanded(
+                          child: CupertinoSlider(
+                            value: a.trailStrength,
+                            min: 0.2,
+                            max: 1,
+                            onChanged: (value) {
+                              a.trailStrength = value;
+                              a.changed();
+                            },
+                          ),
+                        ),
+                        Text('${(a.trailStrength * 100).round()}%'),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
             ),
+            section('Explore and manage'),
             ListTile(
               leading: const Icon(Icons.bar_chart),
               title: const Text('Statistics'),
@@ -578,96 +585,112 @@ class _AsyncListState extends State<AsyncList> {
   );
 }
 
-Future<void> showStats(BuildContext context, AppState app) {
+Future<void> showStats(BuildContext context, AppState app) => panel(
+  context,
+  'Statistics',
+  DefaultTabController(
+    length: 2,
+    child: Column(
+      children: [
+        const TabBar(
+          tabs: [
+            Tab(text: 'Ground'),
+            Tab(text: 'Routes'),
+          ],
+        ),
+        Expanded(
+          child: TabBarView(
+            children: [statisticsList(app), activitiesList(app)],
+          ),
+        ),
+      ],
+    ),
+  ),
+);
+
+Widget statisticsList(AppState app) {
   var sort = 'area';
-  return panel(
-    context,
-    'Statistics',
-    AsyncList(
-      load: () => app.api.get('/api/stats'),
-      builder: (context, s) => StatefulBuilder(
-        builder: (context, setState) {
-          final countries = List<Map<String, dynamic>>.from(s['countries']);
-          int compare(Map a, Map b) =>
-              ((b[sort == 'area' ? 'km2' : 'pct'] as num).compareTo(
-                a[sort == 'area' ? 'km2' : 'pct'] as num,
-              ));
-          countries.sort(compare);
-          return ListView(
-            shrinkWrap: true,
-            children: [
-              fact(
-                'Ground covered',
-                '${(s['km2'] as num).toStringAsFixed(1)} km²',
-              ),
-              fact(
-                'Countries',
-                '${(s['countries'] as List).length} / ${s['countryTotal']}',
-              ),
-              fact('Days with visits', s['days']),
-              fact('Longest streak', '${s['streakDays']} days'),
-              fact('First seen', date(s['firstAt'])),
-              fact('Last seen', date(s['lastAt'])),
-              if ((s['years'] as List? ?? []).length > 1) ...[
-                section('New ground by year'),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: YearChart(
-                    entries: [
-                      for (final y in s['years'])
-                        {'year': y[0], 'value': y[1], 'label': '${y[1]} cells'},
-                    ],
-                  ),
-                ),
-              ],
-              ChoiceRow(
-                label: 'Order',
-                value: sort,
-                choices: const {'area': 'Area', 'share': 'Share'},
-                onChanged: (v) => setState(() => sort = v),
-              ),
-              section('Countries'),
-              for (final c in countries)
-                ExpansionTile(
-                  title: Text('${c['name'] ?? c['id']}'),
-                  subtitle: LinearProgressIndicator(
-                    value:
-                        ((c['pct'] as num?)?.toDouble() ?? 0).clamp(0, 100) /
-                        100,
-                    minHeight: 3,
-                  ),
-                  trailing: Text('${(c['km2'] as num).toStringAsFixed(1)} km²'),
-                  children: [
-                    fact(
-                      'Regions visited',
-                      '${(s['regions'] as List).where((r) => r['country'] == c['id']).length} / ${c['regionsTotal']}',
-                    ),
-                    for (final r
-                        in (List<Map<String, dynamic>>.from(s['regions'])
-                            .where((r) => r['country'] == c['id'])
-                            .toList()
-                          ..sort(compare)))
-                      ListTile(
-                        title: Text('${r['name']}'),
-                        subtitle: LinearProgressIndicator(
-                          value:
-                              ((r['pct'] as num?)?.toDouble() ?? 0).clamp(
-                                0,
-                                100,
-                              ) /
-                              100,
-                          minHeight: 3,
-                        ),
-                        trailing: Text(
-                          '${(r['km2'] as num).toStringAsFixed(1)} km²',
-                        ),
-                      ),
+  return AsyncList(
+    load: () => app.api.get('/api/stats'),
+    builder: (context, s) => StatefulBuilder(
+      builder: (context, setState) {
+        final countries = List<Map<String, dynamic>>.from(s['countries']);
+        int compare(Map a, Map b) => ((b[sort == 'area' ? 'km2' : 'pct'] as num)
+            .compareTo(a[sort == 'area' ? 'km2' : 'pct'] as num));
+        countries.sort(compare);
+        return ListView(
+          shrinkWrap: true,
+          children: [
+            fact(
+              'Ground covered',
+              '${(s['km2'] as num).toStringAsFixed(1)} km²',
+            ),
+            fact(
+              'Countries',
+              '${(s['countries'] as List).length} / ${s['countryTotal']}',
+            ),
+            fact('Days with visits', s['days']),
+            fact('Longest streak', '${s['streakDays']} days'),
+            fact('First seen', date(s['firstAt'])),
+            fact('Last seen', date(s['lastAt'])),
+            if ((s['years'] as List? ?? []).length > 1) ...[
+              section('New ground by year'),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: YearChart(
+                  entries: [
+                    for (final y in s['years'])
+                      {'year': y[0], 'value': y[1], 'label': '${y[1]} cells'},
                   ],
                 ),
+              ),
             ],
-          );
-        },
-      ),
+            ChoiceRow(
+              label: 'Order',
+              value: sort,
+              choices: const {'area': 'Area', 'share': 'Share'},
+              onChanged: (v) => setState(() => sort = v),
+            ),
+            section('Countries'),
+            for (final c in countries)
+              ExpansionTile(
+                title: Text('${c['name'] ?? c['id']}'),
+                subtitle: LinearProgressIndicator(
+                  value:
+                      ((c['pct'] as num?)?.toDouble() ?? 0).clamp(0, 100) / 100,
+                  minHeight: 3,
+                ),
+                trailing: Text('${(c['km2'] as num).toStringAsFixed(1)} km²'),
+                children: [
+                  fact(
+                    'Regions visited',
+                    '${(s['regions'] as List).where((r) => r['country'] == c['id']).length} / ${c['regionsTotal']}',
+                  ),
+                  for (final r
+                      in (List<Map<String, dynamic>>.from(s['regions'])
+                          .where((r) => r['country'] == c['id'])
+                          .toList()
+                        ..sort(compare)))
+                    ListTile(
+                      title: Text('${r['name']}'),
+                      subtitle: LinearProgressIndicator(
+                        value:
+                            ((r['pct'] as num?)?.toDouble() ?? 0).clamp(
+                              0,
+                              100,
+                            ) /
+                            100,
+                        minHeight: 3,
+                      ),
+                      trailing: Text(
+                        '${(r['km2'] as num).toStringAsFixed(1)} km²',
+                      ),
+                    ),
+                ],
+              ),
+          ],
+        );
+      },
     ),
   );
 }
@@ -797,10 +820,20 @@ class _SearchState extends State<_Search> {
   String? error;
   int generation = 0;
   bool busy = false;
+  bool hasQuery = false;
+  bool calendarOpen = false;
   Future<void> search(String q) async {
     final token = ++generation;
+    setState(() {
+      hasQuery = q.trim().length >= 2;
+      if (hasQuery) calendarOpen = false;
+      error = null;
+    });
     if (q.trim().length < 2) {
-      setState(() => results = []);
+      setState(() {
+        results = [];
+        busy = false;
+      });
       return;
     }
     setState(() => busy = true);
@@ -817,7 +850,7 @@ class _SearchState extends State<_Search> {
         });
       }
     } catch (e) {
-      if (mounted) setState(() => error = '$e');
+      if (mounted && token == generation) setState(() => error = '$e');
     } finally {
       if (mounted && token == generation) setState(() => busy = false);
     }
@@ -829,26 +862,14 @@ class _SearchState extends State<_Search> {
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 24),
         child: TextField(
-          autofocus: true,
+          autofocus: false,
           decoration: InputDecoration(
-            hintText: 'Places, regions, trips or activities',
+            hintText: 'Trips, routes or places',
             prefixIcon: const Icon(CupertinoIcons.search),
             suffixIcon: IconButton(
               icon: const Icon(CupertinoIcons.calendar),
-              onPressed: () async {
-                final destination = Navigator.of(context).context;
-                final selectedApp = widget.app;
-                final selectedMap = widget.map;
-                final date = await chooseDay(context, selectedApp);
-                if (date != null && destination.mounted) {
-                  await showDay(
-                    destination,
-                    selectedApp,
-                    dayKey(date),
-                    selectedMap,
-                  );
-                }
-              },
+              tooltip: 'Calendar',
+              onPressed: () => setState(() => calendarOpen = !calendarOpen),
             ),
           ),
           onChanged: search,
@@ -858,33 +879,59 @@ class _SearchState extends State<_Search> {
       if (error != null)
         Padding(padding: const EdgeInsets.all(24), child: Text(error!)),
       Expanded(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            for (final r in results)
-              ListTile(
-                title: Text('${r['name']}'),
-                subtitle: Text(
-                  '${r['kind']}${r['country'] == null ? '' : ' · ${r['country']}'}',
+        child: calendarOpen
+            ? AsyncList(
+                load: () => widget.app.api.getMany({
+                  'days': '/api/days',
+                  'trips': '/api/trips',
+                }),
+                builder: (context, data) => VisitCalendar(
+                  days: data['days']['days'],
+                  trips: data['trips']['trips'],
+                  selected: widget.app.trackDay,
+                  onPick: (day) =>
+                      showDay(context, widget.app, dayKey(day), widget.map),
                 ),
-                onTap: () {
-                  if (r['kind'] == 'route') {
-                    showRoute(
-                      context,
-                      widget.app,
-                      Map<String, dynamic>.from(r),
-                    );
-                  } else {
-                    if (r['kind'] == 'trip') {
-                      widget.app.selectTrack(trip: r['id']);
-                    }
-                    goTo(widget.map, r);
-                    Navigator.pop(context);
-                  }
-                },
+              )
+            : !hasQuery
+            ? tripsList(widget.app, widget.map)
+            : ListView(
+                shrinkWrap: true,
+                children: [
+                  if (results.isEmpty && !busy && error == null)
+                    const ListTile(title: Text('No results')),
+                  for (final r in results)
+                    ListTile(
+                      leading: r['kind'] == 'route'
+                          ? RouteMiniature(route: Map<String, dynamic>.from(r))
+                          : Icon(
+                              r['kind'] == 'trip'
+                                  ? Icons.luggage_outlined
+                                  : Icons.place_outlined,
+                              size: 22,
+                            ),
+                      title: Text('${r['name']}'),
+                      subtitle: Text(
+                        '${r['kind']}${r['country'] == null ? '' : ' · ${r['country']}'}',
+                      ),
+                      onTap: () {
+                        if (r['kind'] == 'route') {
+                          showRoute(
+                            context,
+                            widget.app,
+                            Map<String, dynamic>.from(r),
+                          );
+                        } else {
+                          if (r['kind'] == 'trip') {
+                            widget.app.selectTrack(trip: r['id']);
+                          }
+                          goTo(widget.map, r);
+                          Navigator.pop(context);
+                        }
+                      },
+                    ),
+                ],
               ),
-          ],
-        ),
       ),
     ],
   );
@@ -969,146 +1016,120 @@ Future<DateTime?> chooseDay(BuildContext context, AppState app) async {
   return selected;
 }
 
-Future<void> showTrips(
-  BuildContext context,
-  AppState app,
-  MapLibreMapController map,
-) {
+Widget tripsList(AppState app, MapLibreMapController map) {
   var showHidden = false;
-  return panel(
-    context,
-    'Trips and days',
-    AsyncList(
-      load: () => app.api
-          .getMany({'trips': '/api/trips', 'days': '/api/days'})
-          .then(
-            (data) => {
-              'trips': data['trips']['trips'],
-              'days': data['days']['days'],
-            },
-          ),
-      builder: (context, data) => StatefulBuilder(
-        builder: (context, setState) {
-          final hidden = List<String>.from(app.prefs['hiddenTrips'] ?? []);
-          final names = Map<String, dynamic>.from(app.prefs['tripNames'] ?? {});
-          return ListView(
-            shrinkWrap: true,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.calendar_month),
-                title: const Text('Choose a day'),
-                onTap: () async {
-                  final destination = Navigator.of(context).context;
-                  final d = await chooseDay(context, app);
-                  if (d != null && destination.mounted) {
-                    await showDay(
-                      destination,
-                      app,
-                      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}',
-                      map,
-                    );
-                  }
-                },
+  return AsyncList(
+    load: () => app.api
+        .getMany({'trips': '/api/trips', 'days': '/api/days'})
+        .then(
+          (data) => {
+            'trips': data['trips']['trips'],
+            'days': data['days']['days'],
+          },
+        ),
+    builder: (context, data) => StatefulBuilder(
+      builder: (context, setState) {
+        final hidden = List<String>.from(app.prefs['hiddenTrips'] ?? []);
+        final names = Map<String, dynamic>.from(app.prefs['tripNames'] ?? {});
+        return ListView(
+          shrinkWrap: true,
+          children: [
+            section('Trips'),
+            if (hidden.isNotEmpty)
+              GlassSwitch(
+                title: Text('Show ${hidden.length} hidden trips'),
+                value: showHidden,
+                onChanged: (v) => setState(() => showHidden = v),
               ),
-              section('Trips'),
-              if (hidden.isNotEmpty)
-                GlassSwitch(
-                  title: Text('Show ${hidden.length} hidden trips'),
-                  value: showHidden,
-                  onChanged: (v) => setState(() => showHidden = v),
-                ),
-              for (final t in data['trips'])
-                if (showHidden || !hidden.contains(t['id']))
-                  ListTile(
-                    title: Text('${names[t['id']] ?? t['name']}'),
-                    subtitle: Text(
-                      '${date(t['start'] ?? t['firstAt'])} – ${date(t['end'] ?? t['lastAt'])}',
-                    ),
-                    trailing: CupertinoButton(
-                      padding: const EdgeInsets.all(8),
-                      minimumSize: Size.zero,
-                      child: const Icon(CupertinoIcons.ellipsis, size: 20),
-                      onPressed: () async {
-                        final action = await showDialog<String>(
-                          context: context,
-                          builder: (context) => SimpleDialog(
-                            shape: menuShape(context),
-                            title: Text('${names[t['id']] ?? t['name']}'),
-                            children: [
-                              SimpleDialogOption(
-                                onPressed: () =>
-                                    Navigator.pop(context, 'rename'),
-                                child: const Text('Rename'),
+            for (final t in data['trips'])
+              if (showHidden || !hidden.contains(t['id']))
+                ListTile(
+                  title: Text('${names[t['id']] ?? t['name']}'),
+                  subtitle: Text(
+                    '${date(t['start'] ?? t['firstAt'])} – ${date(t['end'] ?? t['lastAt'])}',
+                  ),
+                  trailing: CupertinoButton(
+                    padding: const EdgeInsets.all(8),
+                    minimumSize: Size.zero,
+                    child: const Icon(CupertinoIcons.ellipsis, size: 20),
+                    onPressed: () async {
+                      final action = await showDialog<String>(
+                        context: context,
+                        builder: (context) => SimpleDialog(
+                          shape: menuShape(context),
+                          title: Text('${names[t['id']] ?? t['name']}'),
+                          children: [
+                            SimpleDialogOption(
+                              onPressed: () => Navigator.pop(context, 'rename'),
+                              child: const Text('Rename'),
+                            ),
+                            SimpleDialogOption(
+                              onPressed: () => Navigator.pop(context, 'reset'),
+                              child: const Text('Use derived name'),
+                            ),
+                            SimpleDialogOption(
+                              onPressed: () => Navigator.pop(context, 'hide'),
+                              child: Text(
+                                hidden.contains(t['id'])
+                                    ? 'Show trip'
+                                    : 'Hide trip',
                               ),
-                              SimpleDialogOption(
-                                onPressed: () =>
-                                    Navigator.pop(context, 'reset'),
-                                child: const Text('Use derived name'),
-                              ),
-                              SimpleDialogOption(
-                                onPressed: () => Navigator.pop(context, 'hide'),
-                                child: Text(
-                                  hidden.contains(t['id'])
-                                      ? 'Show trip'
-                                      : 'Hide trip',
-                                ),
-                              ),
-                              SimpleDialogOption(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('Cancel'),
-                              ),
-                            ],
-                          ),
+                            ),
+                            SimpleDialogOption(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('Cancel'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (action == null || !context.mounted) return;
+                      if (action == 'rename') {
+                        final name = await askText(
+                          context,
+                          'Trip name',
+                          '${names[t['id']] ?? t['name']}',
                         );
-                        if (action == null || !context.mounted) return;
-                        if (action == 'rename') {
-                          final name = await askText(
-                            context,
-                            'Trip name',
-                            '${names[t['id']] ?? t['name']}',
-                          );
-                          if (name == null) return;
-                          if (name.isEmpty) {
-                            names.remove(t['id']);
-                          } else {
-                            names[t['id']] = name;
-                          }
-                        } else if (action == 'reset') {
+                        if (name == null) return;
+                        if (name.isEmpty) {
                           names.remove(t['id']);
                         } else {
-                          if (!hidden.remove(t['id'])) hidden.add(t['id']);
+                          names[t['id']] = name;
                         }
-                        await app.run(() async {
-                          await app.patchPrefs({
-                            'tripNames': names,
-                            'hiddenTrips': hidden,
-                          });
-                          app.changed();
+                      } else if (action == 'reset') {
+                        names.remove(t['id']);
+                      } else {
+                        if (!hidden.remove(t['id'])) hidden.add(t['id']);
+                      }
+                      await app.run(() async {
+                        await app.patchPrefs({
+                          'tripNames': names,
+                          'hiddenTrips': hidden,
                         });
-                        if (context.mounted) setState(() {});
-                      },
-                    ),
-                    onTap: () {
-                      Navigator.of(context).popUntil((r) => r.isFirst);
-                      app.selectTrack(trip: t['id']);
-                      goTo(map, t);
+                        app.changed();
+                      });
+                      if (context.mounted) setState(() {});
                     },
                   ),
-              section('Recent days'),
-              for (final key
-                  in ((data['days'] as Map).keys.map((e) => '$e').toList()
-                        ..sort())
-                      .reversed
-                      .take(100))
-                ListTile(
-                  title: Text(date(key)),
-                  subtitle: Text('${data['days'][key]['routes']} activities'),
-                  onTap: () => showDay(context, app, key, map),
+                  onTap: () {
+                    Navigator.of(context).popUntil((r) => r.isFirst);
+                    app.selectTrack(trip: t['id']);
+                    goTo(map, t);
+                  },
                 ),
-            ],
-          );
-        },
-      ),
+            section('Recent days'),
+            for (final key
+                in ((data['days'] as Map).keys.map((e) => '$e').toList()
+                      ..sort())
+                    .reversed
+                    .take(100))
+              ListTile(
+                title: Text(date(key)),
+                subtitle: Text('${data['days'][key]['routes']} activities'),
+                onTap: () => showDay(context, app, key, map),
+              ),
+          ],
+        );
+      },
     ),
   );
 }
@@ -1931,109 +1952,99 @@ Future<void> showActivityDetails(
   ),
 );
 
-Future<void> showActivities(
-  BuildContext context,
-  AppState app,
-  MapLibreMapController? map,
-) {
+Widget activitiesList(AppState app) {
   var sort = 'recent', group = 'none';
-  return panel(
-    context,
-    'Activities',
-    AsyncList(
-      load: () => app.api.get('/api/render/activity-stats'),
-      builder: (context, data) => StatefulBuilder(
-        builder: (context, setState) {
-          final routes = List<Map<String, dynamic>>.from(data['routes']);
-          routes.sort(
-            (a, b) => sort == 'distance'
-                ? (b['lengthM'] as num).compareTo(a['lengthM'] as num)
-                : (((b['firstAt'] as num?) == 0 ? b['addedAt'] : b['firstAt'])
-                          as num)
-                      .compareTo(
-                        ((a['firstAt'] as num?) == 0
-                                ? a['addedAt']
-                                : a['firstAt'])
-                            as num,
-                      ),
-          );
-          final groups = <String, List<Map<String, dynamic>>>{};
-          for (final route in routes) {
-            final key = group == 'none'
-                ? ''
-                : '${route[group == 'app' ? 'source' : 'sport'] ?? ''}';
-            (groups[key] ??= []).add(route);
-          }
-          final grouped = groups.entries.toList()
-            ..sort((a, b) => b.value.length.compareTo(a.value.length));
-          return ListView(
-            shrinkWrap: true,
-            children: [
-              fact('Activities', (data['routes'] as List).length),
-              fact('Total distance', data['distance']),
-              if (data['duration'] != null)
-                fact('Time recorded', data['duration']),
-              if (data['longest'] != null)
-                fact(
-                  'Longest',
-                  '${data['longest']['distance']} · ${data['longest']['name']}',
-                ),
-              if ((data['years'] as List).length > 1) ...[
-                section('Distance by year'),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: YearChart(
-                    entries: List<Map<String, dynamic>>.from(data['years']),
-                  ),
-                ),
-              ],
-              ChoiceRow(
-                label: 'Order',
-                value: sort,
-                choices: const {'recent': 'Newest', 'distance': 'Longest'},
-                onChanged: (v) => setState(() => sort = v),
-              ),
-              ChoiceRow(
-                label: 'Group',
-                value: group,
-                choices: const {
-                  'none': 'Flat',
-                  'app': 'By app',
-                  'activity': 'By activity',
-                },
-                onChanged: (v) => setState(() => group = v),
-              ),
-              section('Your activities'),
-              for (final bucket in grouped) ...[
-                if (group != 'none')
-                  section(
-                    '${bucket.key.isEmpty ? 'Unspecified' : bucket.key} · ${bucket.value.length}',
-                  ),
-                for (final route in bucket.value)
-                  ListTile(
-                    title: Text('${route['name']}'),
-                    subtitle: Text(
-                      '${route['sport']} · ${date(route['firstAt'])}',
+  return AsyncList(
+    load: () => app.api.get('/api/render/activity-stats'),
+    builder: (context, data) => StatefulBuilder(
+      builder: (context, setState) {
+        final routes = List<Map<String, dynamic>>.from(data['routes']);
+        routes.sort(
+          (a, b) => sort == 'distance'
+              ? (b['lengthM'] as num).compareTo(a['lengthM'] as num)
+              : (((b['firstAt'] as num?) == 0 ? b['addedAt'] : b['firstAt'])
+                        as num)
+                    .compareTo(
+                      ((a['firstAt'] as num?) == 0
+                              ? a['addedAt']
+                              : a['firstAt'])
+                          as num,
                     ),
-                    trailing: const Icon(
-                      CupertinoIcons.chevron_right,
-                      size: 18,
-                    ),
-                    onTap: () {
-                      showRoute(context, app, Map<String, dynamic>.from(route));
-                    },
+        );
+        final groups = <String, List<Map<String, dynamic>>>{};
+        for (final route in routes) {
+          final key = group == 'none'
+              ? ''
+              : '${route[group == 'app' ? 'source' : 'sport'] ?? ''}';
+          (groups[key] ??= []).add(route);
+        }
+        final grouped = groups.entries.toList()
+          ..sort((a, b) => b.value.length.compareTo(a.value.length));
+        return ListView(
+          shrinkWrap: true,
+          children: [
+            fact('Activities', (data['routes'] as List).length),
+            fact('Total distance', data['distance']),
+            if (data['duration'] != null)
+              fact('Time recorded', data['duration']),
+            if (data['longest'] != null)
+              fact(
+                'Longest',
+                '${data['longest']['distance']} · ${data['longest']['name']}',
+              ),
+            if ((data['years'] as List).length > 1) ...[
+              section('Distance by year'),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: YearChart(
+                  entries: List<Map<String, dynamic>>.from(data['years']),
+                ),
+              ),
+            ],
+            ChoiceRow(
+              label: 'Order',
+              value: sort,
+              choices: const {'recent': 'Newest', 'distance': 'Longest'},
+              onChanged: (v) => setState(() => sort = v),
+            ),
+            ChoiceRow(
+              label: 'Group',
+              value: group,
+              choices: const {
+                'none': 'Flat',
+                'app': 'By app',
+                'activity': 'By activity',
+              },
+              onChanged: (v) => setState(() => group = v),
+            ),
+            section('Your activities'),
+            for (final bucket in grouped) ...[
+              if (group != 'none')
+                section(
+                  '${bucket.key.isEmpty ? 'Unspecified' : bucket.key} · ${bucket.value.length}',
+                ),
+              for (final route in bucket.value)
+                ListTile(
+                  leading: RouteMiniature(route: route),
+                  title: Text('${route['name']}'),
+                  subtitle: Text(
+                    '${route['sport']} · ${date(route['firstAt'])}',
                   ),
-              ],
-              if ((data['routes'] as List).isEmpty)
-                const ListTile(
-                  title: Text(
-                    'No activities yet. Import a file or connect a sync source.',
-                  ),
+                  trailing: const Icon(CupertinoIcons.chevron_right, size: 18),
+                  onTap: () {
+                    showRoute(context, app, Map<String, dynamic>.from(route));
+                  },
                 ),
             ],
-          );
-        },
-      ),
+            if ((data['routes'] as List).isEmpty)
+              const ListTile(
+                title: Text(
+                  'No activities yet. Import a file or connect a sync source.',
+                ),
+              ),
+          ],
+        );
+      },
     ),
   );
 }
@@ -2819,4 +2830,74 @@ class _ConnectorSettingsState extends State<ConnectorSettings> {
       );
     },
   );
+}
+
+class RouteMiniature extends StatelessWidget {
+  const RouteMiniature({super.key, required this.route});
+  final Map<String, dynamic> route;
+  @override
+  Widget build(BuildContext context) {
+    final segments = <List<Offset>>[];
+    for (final segment in route['geom'] as List? ?? []) {
+      segments.add([
+        for (final p in segment)
+          Offset((p[0] as num).toDouble(), -(p[1] as num).toDouble()),
+      ]);
+    }
+    return SizedBox(
+      width: 40,
+      height: 40,
+      child: segments.isEmpty
+          ? const Icon(Icons.route_outlined, size: 22)
+          : CustomPaint(
+              painter: _RouteMiniaturePainter(
+                segments,
+                Theme.of(context).colorScheme.primary,
+              ),
+            ),
+    );
+  }
+}
+
+class _RouteMiniaturePainter extends CustomPainter {
+  _RouteMiniaturePainter(this.segments, this.color);
+  final List<List<Offset>> segments;
+  final Color color;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final points = segments.expand((s) => s).toList();
+    if (points.isEmpty) return;
+    final left = points.map((p) => p.dx).reduce(math.min);
+    final top = points.map((p) => p.dy).reduce(math.min);
+    final width = points.map((p) => p.dx).reduce(math.max) - left;
+    final height = points.map((p) => p.dy).reduce(math.max) - top;
+    final scale =
+        (size.shortestSide - 8) / math.max(math.max(width, height), 0.000001);
+    final origin = Offset(
+      (size.width - width * scale) / 2,
+      (size.height - height * scale) / 2,
+    );
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    for (final segment in segments) {
+      final path = Path();
+      for (var i = 0; i < segment.length; i++) {
+        final p = (segment[i] - Offset(left, top)) * scale + origin;
+        if (i == 0) {
+          path.moveTo(p.dx, p.dy);
+        } else {
+          path.lineTo(p.dx, p.dy);
+        }
+      }
+      canvas.drawPath(path, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _RouteMiniaturePainter oldDelegate) =>
+      oldDelegate.segments != segments || oldDelegate.color != color;
 }

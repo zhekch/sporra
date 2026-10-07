@@ -1,3 +1,4 @@
+import { search as nativeSearch } from '../../server/render-geography.js';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -201,6 +202,10 @@ try {
   check(fineReads===readsAfterFine, 'detailed boundary requests are reused');
   await geo.regions(fineInput,{...fineOptions,bbox:[-170,-20,-160,-10]},supplyFine);
   check(fineReads===readsAfterFine, 'offscreen regions do not fetch boundary detail');
+  const ranked = await nativeSearch('Zurich',
+    [{ id: 'route-rank', name: 'Zurich walk' }],
+    [{ id: 'trip-rank', name: 'Zurich holiday', start: 1723280400, end: 1723366800 }]);
+  check(ranked[0]?.id === 'trip-rank' && ranked[1]?.id === 'route-rank' && ranked.slice(2).length > 0 && ranked.slice(2).every(r => r.kind !== 'trip' && r.kind !== 'route'), 'search ranks trips, routes, then gazetteer places');
   const place = await api('GET','/api/search?q=Z%C3%BCrich');
   check(place.status===200 && place.body.results.length>0, 'search answers gazetteer results');
   check((await api('GET','/api/locale/en')).status===200,'English locale is available');

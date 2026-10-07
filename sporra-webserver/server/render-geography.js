@@ -171,7 +171,7 @@ export async function search(query, routes = [], trips = []) {
   const named = trips.map(t => ({ ...t, kind: 'trip', rank: period ? (tripInPeriod(t, period) ? 0 : Infinity) : tripRelevance(t, fold(q)) }))
     .filter(t => Number.isFinite(t.rank)).sort((a,b) => a.rank - b.rank || b.start - a.start).slice(0,8);
   const activity = routes.filter(r => fold(r.name).includes(fold(q))).slice(0,8).map(r => ({...r, kind:'route'}));
-  return [...searchRegions(q), ...searchCountries(q), ...searchPlaces(q), ...named, ...activity];
+  return [...named, ...activity, ...searchRegions(q), ...searchCountries(q), ...searchPlaces(q)];
 }
 export function brush(body) {
   const level = body.level ?? 0;

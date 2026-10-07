@@ -10035,3 +10035,12 @@ Updates send only changed fields, allowing the server to retain credentials.
 Cache clearing invalidates in-flight response/thumbnail generations, clears
 encoded and Flutter decoded images, flushes device responses and requests a new
 map render. It preserves authentication and imported data.
+
+
+Flutter 0.7.0 consolidates the main menu into compact map overlay toggles and
+collapsed appearance/overlay options. Statistics contains Ground and Routes
+tabs; route rows draw miniature outlines from the server-provided geometry.
+Photos open from map pins. Search opens on the trip list, preserving naming
+and hiding actions, with an inline calendar toggle. Server 0.137.0 returns
+search categories in trip, route, then place order, preserving each category's
+existing relevance order. Clearing a query also cancels its pending indicator.
