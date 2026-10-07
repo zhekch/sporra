@@ -65,7 +65,7 @@ body,
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI',
     Inter, sans-serif;
-  background: #0b0b10;
+  background: #0b0b0b;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }

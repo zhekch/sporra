@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import 'toast.dart';
 import 'calendar.dart';
@@ -93,18 +94,44 @@ Future<void> panel(
               height: MediaQuery.sizeOf(context).height,
               width: MediaQuery.sizeOf(context).width,
               child: Scaffold(
-                appBar: AppBar(
-                  title: Text(title),
-                  automaticallyImplyLeading: false,
-                  actions: [
-                    IconButton(
-                      tooltip: 'Close',
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(CupertinoIcons.xmark),
+                body: Padding(
+                  padding: EdgeInsets.only(
+                    top: MediaQueryData.fromView(View.of(context)).padding.top,
+                  ),
+                  child: SafeArea(
+                    top: false,
+                    child: Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(24, 16, 16, 14),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  title,
+                                  style: const TextStyle(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: -0.7,
+                                  ),
+                                ),
+                              ),
+                              IconButton.filledTonal(
+                                tooltip: 'Close',
+                                onPressed: () => Navigator.pop(context),
+                                icon: const Icon(
+                                  CupertinoIcons.xmark,
+                                  size: 20,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Expanded(child: child),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-                body: SafeArea(top: false, child: child),
               ),
             ),
           );
@@ -395,7 +422,7 @@ Future<void> showMenuSheet(
             ),
             section('Map overlays'),
             GlassSwitch(
-              title: const Text('Routes'),
+              title: const Text('Activities'),
               value: a.routes,
               onChanged: (v) {
                 a.routes = v;
@@ -494,7 +521,7 @@ Future<void> showMenuSheet(
             section('Explore and manage'),
             ListTile(
               leading: const Icon(Icons.bar_chart),
-              title: const Text('Routes and statistics'),
+              title: const Text('Activities and statistics'),
               onTap: () => showStats(context, a),
             ),
             ListTile(
@@ -518,7 +545,7 @@ Future<void> showMenuSheet(
             const Padding(
               padding: EdgeInsets.all(24),
               child: Text(
-                'Sporra Preview · 0.8.0',
+                'Sporra Preview · 0.9.0',
                 style: TextStyle(color: Colors.white38),
               ),
             ),
@@ -576,17 +603,41 @@ class _AsyncListState extends State<AsyncList> {
 
 Future<void> showStats(BuildContext context, AppState app) => panel(
   context,
-  'Routes and statistics',
+  'Activities',
   DefaultTabController(
     length: 2,
     initialIndex: 1,
     child: Column(
       children: [
-        const TabBar(
-          tabs: [
-            Tab(text: 'Ground'),
-            Tab(text: 'Routes'),
-          ],
+        Builder(
+          builder: (context) {
+            final controller = DefaultTabController.of(context);
+            return AnimatedBuilder(
+              animation: controller.animation!,
+              builder: (context, _) => Padding(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: CupertinoSlidingSegmentedControl<int>(
+                    groupValue: controller.index,
+                    children: const {
+                      0: Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 12),
+                        child: Text('Statistics'),
+                      ),
+                      1: Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 12),
+                        child: Text('Activities'),
+                      ),
+                    },
+                    onValueChanged: (value) {
+                      if (value != null) controller.animateTo(value);
+                    },
+                  ),
+                ),
+              ),
+            );
+          },
         ),
         Expanded(
           child: TabBarView(
@@ -600,7 +651,9 @@ Future<void> showStats(BuildContext context, AppState app) => panel(
 );
 
 Widget statisticsList(AppState app) {
-  var sort = 'area';
+  var sort = 'share';
+  final showingAll = <String>{};
+  final openedCountries = <String>{};
   return AsyncList(
     load: () => app.api.get('/api/stats'),
     builder: (context, s) => StatefulBuilder(
@@ -645,13 +698,48 @@ Widget statisticsList(AppState app) {
             section('Countries'),
             for (final c in countries)
               ExpansionTile(
+                key: PageStorageKey('coverage-${c['id']}'),
+                onExpansionChanged: (open) => setState(() {
+                  if (open) {
+                    openedCountries.add(c['id']);
+                  } else {
+                    openedCountries.remove(c['id']);
+                    showingAll.remove(c['id']);
+                  }
+                }),
                 title: Text('${c['name'] ?? c['id']}'),
-                subtitle: LinearProgressIndicator(
-                  value:
-                      ((c['pct'] as num?)?.toDouble() ?? 0).clamp(0, 100) / 100,
-                  minHeight: 3,
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${(s['regions'] as List).where((r) => r['country'] == c['id']).length} of ${c['regionsTotal'] ?? 0} regions',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.white54,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    LinearProgressIndicator(
+                      value:
+                          ((c['pct'] as num?)?.toDouble() ?? 0).clamp(0, 100) /
+                          100,
+                      minHeight: 3,
+                    ),
+                  ],
                 ),
-                trailing: Text('${(c['km2'] as num).toStringAsFixed(1)} km²'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    coverageValue(c, sort),
+                    const SizedBox(width: 8),
+                    Icon(
+                      openedCountries.contains(c['id'])
+                          ? CupertinoIcons.chevron_down
+                          : CupertinoIcons.chevron_right,
+                      size: 14,
+                    ),
+                  ],
+                ),
                 children: [
                   fact(
                     'Regions visited',
@@ -659,9 +747,14 @@ Widget statisticsList(AppState app) {
                   ),
                   for (final r
                       in (List<Map<String, dynamic>>.from(s['regions'])
-                          .where((r) => r['country'] == c['id'])
-                          .toList()
-                        ..sort(compare)))
+                              .where((r) => r['country'] == c['id'])
+                              .toList()
+                            ..sort(compare))
+                          .take(
+                            showingAll.contains(c['id'])
+                                ? (s['regions'] as List).length
+                                : 8,
+                          ))
                     ListTile(
                       title: Text('${r['name']}'),
                       subtitle: LinearProgressIndicator(
@@ -673,8 +766,22 @@ Widget statisticsList(AppState app) {
                             100,
                         minHeight: 3,
                       ),
-                      trailing: Text(
-                        '${(r['km2'] as num).toStringAsFixed(1)} km²',
+                      trailing: coverageValue(r, sort),
+                    ),
+                  if ((s['regions'] as List)
+                          .where((r) => r['country'] == c['id'])
+                          .length >
+                      8)
+                    TextButton(
+                      onPressed: () => setState(() {
+                        if (!showingAll.remove(c['id'])) {
+                          showingAll.add(c['id']);
+                        }
+                      }),
+                      child: Text(
+                        showingAll.contains(c['id'])
+                            ? 'Show fewer'
+                            : 'Show all regions',
                       ),
                     ),
                 ],
@@ -683,6 +790,22 @@ Widget statisticsList(AppState app) {
         );
       },
     ),
+  );
+}
+
+Widget coverageValue(Map area, String sort) {
+  final share = '${(area['pct'] as num? ?? 0).toStringAsFixed(1)}%';
+  final covered = '${(area['km2'] as num).toStringAsFixed(1)} km²';
+  return Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.end,
+    children: [
+      Text(sort == 'share' ? share : covered),
+      Text(
+        sort == 'share' ? covered : share,
+        style: const TextStyle(fontSize: 12, color: Colors.white54),
+      ),
+    ],
   );
 }
 
@@ -858,7 +981,7 @@ class _SearchState extends State<_Search> {
               child: TextField(
                 autofocus: false,
                 decoration: InputDecoration(
-                  hintText: 'Trips, routes or places',
+                  hintText: 'Trips, activities or places',
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
@@ -915,7 +1038,9 @@ class _SearchState extends State<_Search> {
                   for (final r in results)
                     ListTile(
                       leading: r['kind'] == 'route'
-                          ? RouteMiniature(route: Map<String, dynamic>.from(r))
+                          ? ActivityMiniature(
+                              activity: Map<String, dynamic>.from(r),
+                            )
                           : Icon(
                               r['kind'] == 'trip'
                                   ? Icons.luggage_outlined
@@ -924,7 +1049,7 @@ class _SearchState extends State<_Search> {
                             ),
                       title: Text('${r['name']}'),
                       subtitle: Text(
-                        '${r['kind']}${r['country'] == null ? '' : ' · ${r['country']}'}',
+                        '${r['kind'] == 'route' ? 'activity' : r['kind']}${r['country'] == null ? '' : ' · ${r['country']}'}',
                       ),
                       onTap: () {
                         if (r['kind'] == 'route') {
@@ -1191,7 +1316,7 @@ Future<void> importFile(BuildContext context, AppState app) async {
               onChanged: (v) => source = v.trim(),
             ),
             GlassSwitch(
-              title: const Text('Include activity routes'),
+              title: const Text('Include activities'),
               value: includeRoutes,
               onChanged: (v) => setState(() => includeRoutes = v),
             ),
@@ -1242,7 +1367,7 @@ Future<void> importFile(BuildContext context, AppState app) async {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '${preview['imported']} cells · ${preview['routes']} activity routes',
+                '${preview['imported']} cells · ${preview['routes']} activities',
               ),
               const SizedBox(height: 8),
               Text('Sources: ${(preview['sources'] as List).join(', ')}'),
@@ -1685,7 +1810,7 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
               ),
             const ListTile(
               title: Text('Sporra Preview'),
-              subtitle: Text('0.8.0 · Native map for iOS'),
+              subtitle: Text('0.9.0 · Native map for iOS'),
             ),
           ],
         );
@@ -2041,31 +2166,29 @@ Widget activitiesList(AppState app) {
               label: 'Group',
               value: group,
               choices: const {
-                'none': 'Flat',
+                'none': 'None',
                 'app': 'By app',
                 'activity': 'By activity',
               },
               onChanged: (v) => setState(() => group = v),
             ),
             section('Your activities'),
-            for (final bucket in grouped) ...[
-              if (group != 'none')
-                section(
-                  '${bucket.key.isEmpty ? 'Unspecified' : bucket.key} · ${bucket.value.length}',
-                ),
-              for (final route in bucket.value)
-                ListTile(
-                  leading: RouteMiniature(route: route),
-                  title: Text('${route['name']}'),
-                  subtitle: Text(
-                    '${route['sport']} · ${date(route['firstAt'])}',
+            for (final bucket in grouped)
+              if (group == 'none') ...[
+                for (final activity in bucket.value)
+                  activityRow(context, app, activity),
+              ] else
+                ExpansionTile(
+                  key: PageStorageKey('activity-group-$group-${bucket.key}'),
+                  initiallyExpanded: true,
+                  title: Text(
+                    '${bucket.key.isEmpty ? 'Unspecified' : bucket.key} · ${bucket.value.length}',
                   ),
-                  trailing: const Icon(CupertinoIcons.chevron_right, size: 18),
-                  onTap: () {
-                    showRoute(context, app, Map<String, dynamic>.from(route));
-                  },
+                  children: [
+                    for (final activity in bucket.value)
+                      activityRow(context, app, activity),
+                  ],
                 ),
-            ],
             if ((data['routes'] as List).isEmpty)
               const ListTile(
                 title: Text(
@@ -2078,6 +2201,18 @@ Widget activitiesList(AppState app) {
     ),
   );
 }
+
+Widget activityRow(
+  BuildContext context,
+  AppState app,
+  Map<String, dynamic> activity,
+) => ListTile(
+  leading: ActivityMiniature(activity: activity),
+  title: Text('${activity['name']}'),
+  subtitle: Text('${activity['sport']} · ${date(activity['firstAt'])}'),
+  trailing: const Icon(CupertinoIcons.chevron_right, size: 18),
+  onTap: () => showRoute(context, app, activity),
+);
 
 Future<void> showAirport(BuildContext context, Map<String, dynamic> airport) =>
     panel(
@@ -2789,7 +2924,7 @@ class _ConnectorSettingsState extends State<ConnectorSettings> {
             ),
             if (strava)
               GlassSwitch(
-                title: const Text('Save activity routes'),
+                title: const Text('Save activities'),
                 value: link!['saveRoutes'] == true,
                 onChanged: app.busy ? null : (v) => update({'saveRoutes': v}),
               ),
@@ -2867,72 +3002,19 @@ class _ConnectorSettingsState extends State<ConnectorSettings> {
   );
 }
 
-class RouteMiniature extends StatelessWidget {
-  const RouteMiniature({super.key, required this.route});
-  final Map<String, dynamic> route;
+class ActivityMiniature extends StatelessWidget {
+  const ActivityMiniature({super.key, required this.activity});
+  final Map<String, dynamic> activity;
   @override
   Widget build(BuildContext context) {
-    final segments = <List<Offset>>[];
-    for (final segment in route['geom'] as List? ?? []) {
-      segments.add([
-        for (final p in segment)
-          Offset((p[0] as num).toDouble(), -(p[1] as num).toDouble()),
-      ]);
-    }
-    return SizedBox(
-      width: 40,
-      height: 40,
-      child: segments.isEmpty
-          ? const Icon(Icons.route_outlined, size: 22)
-          : CustomPaint(
-              painter: _RouteMiniaturePainter(
-                segments,
-                Theme.of(context).colorScheme.primary,
-              ),
-            ),
-    );
+    // Use the same normalized outline and segment breaks as the web SVG.
+    final segments = '${activity['thumb'] ?? ''}'
+        .split('|')
+        .where((s) => s.contains(',') && RegExp(r'^[0-9., \-]+$').hasMatch(s));
+    final svg =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-6 -6 112 112">'
+        '${segments.map((points) => '<polyline points="$points" fill="none" stroke="#ff9147" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>').join()}'
+        '</svg>';
+    return SizedBox(width: 40, height: 40, child: SvgPicture.string(svg));
   }
-}
-
-class _RouteMiniaturePainter extends CustomPainter {
-  _RouteMiniaturePainter(this.segments, this.color);
-  final List<List<Offset>> segments;
-  final Color color;
-  @override
-  void paint(Canvas canvas, Size size) {
-    final points = segments.expand((s) => s).toList();
-    if (points.isEmpty) return;
-    final left = points.map((p) => p.dx).reduce(math.min);
-    final top = points.map((p) => p.dy).reduce(math.min);
-    final width = points.map((p) => p.dx).reduce(math.max) - left;
-    final height = points.map((p) => p.dy).reduce(math.max) - top;
-    final scale =
-        (size.shortestSide - 8) / math.max(math.max(width, height), 0.000001);
-    final origin = Offset(
-      (size.width - width * scale) / 2,
-      (size.height - height * scale) / 2,
-    );
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    for (final segment in segments) {
-      final path = Path();
-      for (var i = 0; i < segment.length; i++) {
-        final p = (segment[i] - Offset(left, top)) * scale + origin;
-        if (i == 0) {
-          path.moveTo(p.dx, p.dy);
-        } else {
-          path.lineTo(p.dx, p.dy);
-        }
-      }
-      canvas.drawPath(path, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _RouteMiniaturePainter oldDelegate) =>
-      oldDelegate.segments != segments || oldDelegate.color != color;
 }

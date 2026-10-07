@@ -129,7 +129,7 @@ void main() {
       expect(writes, [
         {'enabled': false},
       ]);
-      await tester.tap(find.text('Save activity routes'));
+      await tester.tap(find.text('Save activities'));
       await tester.pumpAndSettle();
       expect(writes.last, {'saveRoutes': false});
       expect(app.error, isNull);

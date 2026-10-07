@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter_svg/flutter_svg.dart';
+
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:sporra_flutter/src/appearance.dart';
 import 'package:sporra_flutter/src/calendar.dart';
@@ -15,9 +17,11 @@ import 'package:sporra_flutter/src/state.dart';
 class _UnusedMap extends Fake implements MapLibreMapController {}
 
 void main() {
-  testWidgets('Routes and statistics opens fullscreen on routes', (
+  testWidgets('Activities opens fullscreen below the phone safe area', (
     tester,
   ) async {
+    tester.view.padding = const FakeViewPadding(top: 59);
+    addTearDown(tester.view.resetPadding);
     final app = AppState(
       api: SporraApi(
         client: MockClient((request) async {
@@ -28,7 +32,7 @@ void main() {
             );
           }
           return http.Response(
-            '{"routes":[{"id":"1","name":"Morning walk","sport":"Walk","firstAt":1,"lengthM":100,"geom":[[[8,47],[8.1,47.1],[8.2,47.05]]]}],"distance":"100 m","years":[]}',
+            '{"routes":[{"id":"1","name":"Morning walk","sport":"Walk","firstAt":1,"lengthM":100,"thumb":"0,100 50,0 100,75|0,0 20,20"}],"distance":"100 m","years":[]}',
             200,
           );
         }),
@@ -57,8 +61,21 @@ void main() {
       tester.view.physicalSize / tester.view.devicePixelRatio,
     );
     expect(find.text('Morning walk'), findsOneWidget);
-    expect(find.byType(RouteMiniature), findsOneWidget);
-    await tester.tap(find.text('Ground'));
+    expect(find.byType(ActivityMiniature), findsOneWidget);
+    expect(find.byType(SvgPicture), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Activities').first).dy,
+      greaterThanOrEqualTo(59 / tester.view.devicePixelRatio),
+    );
+    await tester.tap(find.text('By activity'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Walk · 1'));
+    await tester.pumpAndSettle();
+    expect(find.text('Morning walk'), findsNothing);
+    await tester.tap(find.text('Walk · 1'));
+    await tester.pumpAndSettle();
+    expect(find.text('Morning walk'), findsOneWidget);
+    await tester.tap(find.text('Statistics'));
     await tester.pumpAndSettle();
     expect(find.text('Ground covered'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -127,6 +144,55 @@ void main() {
       await tester.tap(find.byTooltip('Calendar'));
       await tester.pumpAndSettle();
       expect(find.text('Visible trip'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+  testWidgets(
+    'Coverage defaults to share and country rows show expandable region counts',
+    (tester) async {
+      final app = AppState(
+        api: SporraApi(
+          client: MockClient(
+            (request) async => http.Response(
+              jsonEncode({
+                'km2': 110,
+                'countryTotal': 200,
+                'days': 1,
+                'streakDays': 1,
+                'years': [],
+                'countries': [
+                  {'id': 'Large', 'km2': 100, 'pct': 1, 'regionsTotal': 10},
+                  {'id': 'Small', 'km2': 10, 'pct': 50, 'regionsTotal': 2},
+                ],
+                'regions': [
+                  {'country': 'Small', 'name': 'Canton', 'km2': 5, 'pct': 25},
+                ],
+              }),
+              200,
+            ),
+          ),
+        )..server = 'https://example.test',
+      );
+      addTearDown(app.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: webTheme(),
+          home: Scaffold(body: statisticsList(app)),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester.widgetList<ChoiceRow>(find.byType(ChoiceRow)).single.value,
+        'share',
+      );
+      await tester.scrollUntilVisible(find.text('Small'), 150);
+      expect(find.text('1 of 2 regions'), findsOneWidget);
+      expect(find.text('50.0%'), findsOneWidget);
+      expect(find.text('Canton'), findsNothing);
+      await tester.tap(find.text('Small'));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(find.text('Canton'), 150);
+      expect(find.text('25.0%'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

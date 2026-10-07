@@ -336,7 +336,7 @@ export function mountRouteInfo({ onClose, onZoom, onMore, onMetric, onScrub } = 
   function show(r, keepMetric) {
     route = r;
     scrub = -1;
-    nameEl.textContent = r.name || 'Route';
+    nameEl.textContent = r.name || 'Activity';
     // The activity and when it was. Place and source used to lead this line,
     // and the same two facts were then repeated as rows.
     const sport = r.sport ? (r.sportGuessed ? `${r.sport} (estimated)` : r.sport) : null;

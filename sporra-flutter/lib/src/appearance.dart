@@ -21,7 +21,7 @@ ThemeData webTheme({double menuRadius = 24}) {
     platform: TargetPlatform.iOS,
     useMaterial3: false,
     fontFamily: '.SF Pro Text',
-    scaffoldBackgroundColor: const Color(0xff0b0b10),
+    scaffoldBackgroundColor: const Color(0xff0b0b0b),
     colorScheme: const ColorScheme.dark(
       primary: accent,
       secondary: accent,

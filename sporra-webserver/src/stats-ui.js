@@ -71,7 +71,7 @@ export function mountStats({
   // Ground covered is the answer to "where have I been", which is the question
   // people open this panel with; share is the answer to "how much of it is
   // left", which is the one they ask second.
-  let sortBy = 'area';
+  let sortBy = 'share';
   let last = null; // the most recent stats, for re-sorting without recomputing
   // A map of one country can have a hundred regions in it, which is a scroll
   // nobody asked for on the way to the rest of the panel.
@@ -98,7 +98,7 @@ export function mountStats({
     distance: { label: 'Longest', sort: (a, b) => b.lengthM - a.lengthM },
   };
   const ROUTE_GROUPS = {
-    none: { label: 'Flat' },
+    none: { label: 'None' },
     // How you usually remember one: "that Komoot ride".
     app: { label: 'By app', of: (r) => r.source || 'unknown' },
     // "Show me the rides" is as natural a question as "show me the Komoot
@@ -394,7 +394,7 @@ export function mountStats({
     const back = document.createElement('button');
     back.type = 'button';
     back.className = 'stats-back';
-    back.textContent = '‹ All routes';
+    back.textContent = '‹ All activities';
     back.addEventListener('click', () => {
       shownRoute = null;
       editing = false;
@@ -405,7 +405,7 @@ export function mountStats({
 
     const title = document.createElement('div');
     title.className = 'stats-detail-title';
-    title.textContent = r.name || 'Route';
+    title.textContent = r.name || 'Activity';
     const sub = document.createElement('div');
     sub.className = 'stats-detail-sub';
     const place = r.place && r.place !== r.name ? r.place : null;
@@ -476,7 +476,7 @@ export function mountStats({
         if (saving) return;
         const name = nameInput.value.trim();
         if (!name) {
-          err.textContent = 'A route needs a name.';
+          err.textContent = 'An activity needs a name.';
           err.hidden = false;
           return;
         }
@@ -639,7 +639,7 @@ export function mountStats({
       }
       el.prepend(svg);
     }
-    el.querySelector('b').textContent = r.name || 'Route';
+    el.querySelector('b').textContent = r.name || 'Activity';
     // The mark hangs off the row's right edge, so it needs a lane kept clear of
     // it or it lands on top of the distance. The lane goes on every row while
     // the fold is open, not only the marked ones: the distances are a column of
@@ -666,7 +666,7 @@ export function mountStats({
     const what = showSport && r.sport ? r.sport : null;
     el.querySelector('i').textContent = [place, what, when, app].filter(Boolean).join(' · ');
     el.querySelector('.stats-route-far').textContent = formatDistance(r.lengthM);
-    el.title = 'Open this route';
+    el.title = 'Open this activity';
     el.addEventListener('click', () => {
       shownRoute = r;
       editing = false;
@@ -691,7 +691,7 @@ export function mountStats({
       const empty = document.createElement('div');
       empty.className = 'stats-loading';
       empty.textContent =
-        'No saved routes yet — import a GPX or KML track with “Save routes” ticked, or pull a tour in from Komoot under Sync.';
+        'No saved activities yet — import a GPX or KML track with “Save activities” ticked, or pull a tour in from Komoot under Sync.';
       body.append(empty);
       return;
     }
@@ -708,7 +708,7 @@ export function mountStats({
 
     const { side, main, list: rows } = columns();
     side.append(
-      row('Routes', list.length.toLocaleString()),
+      row('Activities', list.length.toLocaleString()),
       row('Total distance', formatDistance(metres), `${Math.round(metres).toLocaleString()} m`),
       row('Longest', formatDistance(longest.lengthM), longest.name),
     );
@@ -738,7 +738,7 @@ export function mountStats({
     const redraw = () => keepScroll(renderRoutes);
     main.prepend(
       headRow(
-        'Your routes',
+        'Your activities',
         sortAndGroup(
           ROUTE_SORTS, routeSort, ROUTE_GROUPS, routeGroup,
           (key) => { routeSort = key; redraw(); },
@@ -755,7 +755,7 @@ export function mountStats({
       (r) => routeRow(r, { showApp: routeGroup !== 'app', showSport: routeGroup !== 'activity' }),
       (key, group) => ({
         label: routeGroup === 'activity' ? key || 'Activity not set' : sourceLabel(key),
-        note: `${plural(group.length, 'route')} · ${formatDistance(totalLength(group))}`,
+        note: `${plural(group.length, 'activity')} · ${formatDistance(totalLength(group))}`,
         vague: key === '' || VAGUE_SOURCES.has(key),
       }),
     ));
@@ -771,8 +771,8 @@ export function mountStats({
       el.className = 'route-fold';
       const text = document.createElement('span');
       text.textContent = showFolded()
-        ? `${plural(folded, 'route')} marked above ${folded === 1 ? 'is' : 'are'} the same routes recorded multiple times.`
-        : `${plural(folded, 'route')} ${folded === 1 ? 'is duplicate' : 'are duplicates'} and are hidden.`;
+        ? `${plural(folded, 'activity')} marked above ${folded === 1 ? 'is' : 'are'} the same activities recorded multiple times.`
+        : `${plural(folded, 'activity')} ${folded === 1 ? 'is duplicate' : 'are duplicates'} and are hidden.`;
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'home-set';

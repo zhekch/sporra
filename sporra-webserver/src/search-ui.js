@@ -724,7 +724,7 @@ export function mountSearch({
       .filter((r) => fold(`${r.name} ${r.place ?? ''} ${r.sport ?? ''}`).includes(lower))
       .slice(0, 5);
     if (routeHits.length) {
-      resultsEl.append(section('Routes'));
+      resultsEl.append(section('Activities'));
       for (const r of routeHits) {
         const el = resultRow({
           icon: ICON.route,

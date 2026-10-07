@@ -10057,3 +10057,18 @@ Material's default sheet width limit; Routes is selected on entry. These screens
 close with their header button rather than a sheet drag. Location rendering is
 enabled at map creation; the first fix centers the camera at zoom 13.6. Returning
 to the foreground arms that focus again for the next location update.
+
+
+Flutter 0.9.0 fixes fullscreen header placement using the original view's top
+inset, since modal routes remove it from MediaQuery. Large left-aligned titles,
+a circular close control and Cupertino segmented statistics/activity navigation
+replace the Material app bar and underlined tabs. The scaffold and web background
+are neutral #0b0b0b. Saved tracks are called Activities throughout both interfaces;
+API paths, preference keys and storage fields remain compatible. Waymarked routes
+retain their geographic vocabulary. Activity thumbnails render the same cached
+`thumb` polylines as the web SVG, with viewBox -6 -6 112 112 and separate segments.
+The metadata list does not contain `geom`, which caused the earlier icon fallback.
+Activity/app groups collapse independently and the ungrouped choice reads None.
+Coverage opens with Share selected, shows both percentages and area, and country
+rows show visited/total regions plus a chevron. Expanded countries initially show
+eight regions with Show all/Show fewer controls, matching the web preview size.
