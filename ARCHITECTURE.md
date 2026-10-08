@@ -10331,3 +10331,11 @@ other icons keep regular weight. The location button's fill now reflects camera
 centering rather than a pending location request, with a 25 m tolerance for GPS
 jitter and native camera rounding. Both map engines update this indication on
 camera changes; moving away clears it, and focusing restores it.
+
+### Closing blur (Flutter 0.17.3)
+
+Shared panels and app dialogs wrap their foreground in `ClosingBlur`. Route
+progress drives dismissal keyframes: blur sigma is 0 at the open position, 2
+at 35% closed, 8 at 70%, and 18 at the end. Opening stays sharp. Drag dismissal
+uses the same progression, and a cancelled drag smoothly returns to sharp as
+the panel settles open. Reduce Motion disables the effect.

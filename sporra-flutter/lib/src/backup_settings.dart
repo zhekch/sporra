@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import 'appearance.dart';
+import 'closing_blur.dart';
 import 'loading.dart';
 import 'sheets.dart' show IOSPicker, fact;
 import 'state.dart';
@@ -178,38 +179,40 @@ class _BackupSettingsState extends State<BackupSettings> {
   Future<void> pickTime() async {
     await showCupertinoModalPopup<void>(
       context: context,
-      builder: (context) => Container(
-        height: 300,
-        color: const Color(0xff262626),
-        child: SafeArea(
-          top: false,
-          child: Column(
-            children: [
-              Align(
-                alignment: Alignment.centerRight,
-                child: CupertinoButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Done'),
-                ),
-              ),
-              Expanded(
-                child: CupertinoDatePicker(
-                  mode: CupertinoDatePickerMode.time,
-                  use24hFormat: MediaQuery.alwaysUse24HourFormatOf(context),
-                  initialDateTime: DateTime(
-                    2026,
-                    1,
-                    1,
-                    schedule.hour,
-                    schedule.minute,
+      builder: (context) => ClosingBlur(
+        child: Container(
+          height: 300,
+          color: const Color(0xff262626),
+          child: SafeArea(
+            top: false,
+            child: Column(
+              children: [
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: CupertinoButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Done'),
                   ),
-                  onDateTimeChanged: (time) => setState(() {
-                    schedule.hour = time.hour;
-                    schedule.minute = time.minute;
-                  }),
                 ),
-              ),
-            ],
+                Expanded(
+                  child: CupertinoDatePicker(
+                    mode: CupertinoDatePickerMode.time,
+                    use24hFormat: MediaQuery.alwaysUse24HourFormatOf(context),
+                    initialDateTime: DateTime(
+                      2026,
+                      1,
+                      1,
+                      schedule.hour,
+                      schedule.minute,
+                    ),
+                    onDateTimeChanged: (time) => setState(() {
+                      schedule.hour = time.hour;
+                      schedule.minute = time.minute;
+                    }),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
