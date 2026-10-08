@@ -10323,3 +10323,11 @@ map creation; writes debounce for 500 ms and flush when the app becomes inactive
 A damaged file falls back to the default view. The Mapbox-token fallback still
 applies, and the explicit compass reset remains available. Saving view preferences
 does not invalidate cell snapshots or require a server call.
+
+
+Flutter 0.17.2 renders the search/menu/location SF Symbols at UIKit semibold
+weight. Weight participates in the native symbol request and image cache key;
+other icons keep regular weight. The location button's fill now reflects camera
+centering rather than a pending location request, with a 25 m tolerance for GPS
+jitter and native camera rounding. Both map engines update this indication on
+camera changes; moving away clears it, and focusing restores it.

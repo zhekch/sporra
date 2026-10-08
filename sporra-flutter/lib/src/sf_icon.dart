@@ -11,13 +11,15 @@ class SFIcon extends StatelessWidget {
     required this.fallback,
     this.size,
     this.color,
+    this.weight = FontWeight.w400,
   });
   final String name;
   final IconData fallback;
   final double? size;
   final Color? color;
+  final FontWeight weight;
   static const channel = MethodChannel('sporra/symbols');
-  static final _images = <(String, double, double), Future<Uint8List?>>{};
+  static final _images = <(String, double, double, int), Future<Uint8List?>>{};
   @override
   Widget build(BuildContext context) {
     final theme = IconTheme.of(context);
@@ -29,19 +31,23 @@ class SFIcon extends StatelessWidget {
       return placeholder;
     }
     final scale = MediaQuery.devicePixelRatioOf(context);
-    final image = _images.putIfAbsent((name, dimension, scale), () async {
-      try {
-        return await channel.invokeMethod<Uint8List>('render', {
-          'name': name,
-          'size': dimension,
-          'scale': scale,
-        });
-      } on PlatformException {
-        return null;
-      } on MissingPluginException {
-        return null;
-      }
-    });
+    final image = _images.putIfAbsent(
+      (name, dimension, scale, weight.value),
+      () async {
+        try {
+          return await channel.invokeMethod<Uint8List>('render', {
+            'name': name,
+            'size': dimension,
+            'scale': scale,
+            'weight': weight.value,
+          });
+        } on PlatformException {
+          return null;
+        } on MissingPluginException {
+          return null;
+        }
+      },
+    );
     return SizedBox.square(
       dimension: dimension,
       child: FutureBuilder<Uint8List?>(

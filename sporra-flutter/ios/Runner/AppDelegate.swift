@@ -29,8 +29,17 @@ import UIKit
       guard call.method == "render", let args = call.arguments as? [String: Any],
             let name = args["name"] as? String, let size = args["size"] as? Double,
             let scale = args["scale"] as? Double, size.isFinite, scale.isFinite,
-            size > 0, size <= 128, scale > 0, scale <= 4,
-            let symbol = UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: .regular)) else {
+            size > 0, size <= 128, scale > 0, scale <= 4 else {
+        result(nil); return
+      }
+      let weight: UIImage.SymbolWeight
+      switch args["weight"] as? Int ?? 400 {
+      case 700...: weight = .bold
+      case 600..<700: weight = .semibold
+      case 500..<600: weight = .medium
+      default: weight = .regular
+      }
+      guard let symbol = UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: weight)) else {
         result(nil); return
       }
       let format = UIGraphicsImageRendererFormat()

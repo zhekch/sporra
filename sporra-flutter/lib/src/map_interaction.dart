@@ -175,3 +175,18 @@ CameraPosition locationCamera(LatLng point, CameraPosition current) =>
       tilt: current.tilt,
       bearing: current.bearing,
     );
+
+// Keep the focus indication stable across small GPS changes and camera rounding.
+bool cameraAtLocation(CameraPosition camera, LatLng? location) {
+  if (location == null) return false;
+  const radians = math.pi / 180;
+  final lat = (camera.target.latitude - location.latitude) * radians;
+  final lng = (camera.target.longitude - location.longitude) * radians;
+  final a =
+      math.pow(math.sin(lat / 2), 2) +
+      math.cos(camera.target.latitude * radians) *
+          math.cos(location.latitude * radians) *
+          math.pow(math.sin(lng / 2), 2);
+  final metres = 6371000 * 2 * math.asin(math.sqrt(a.clamp(0, 1)));
+  return metres <= 25;
+}

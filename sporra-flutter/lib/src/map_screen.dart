@@ -119,6 +119,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   LatLng? location;
   bool locationEnabled = true;
   bool locating = true;
+  bool locationFocused = false;
   CameraPosition camera = const CameraPosition(
     target: LatLng(46.95, 8.28),
     zoom: 7,
@@ -217,6 +218,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
   }
 
+  void updateCamera(CameraPosition position) {
+    camera = position;
+    final focused = cameraAtLocation(position, location);
+    if (mounted && focused != locationFocused) {
+      setState(() => locationFocused = focused);
+    }
+  }
+
   bool focusingLocation = false;
   int locationFocusGeneration = 0;
   Future<void> focusLocation() async {
@@ -250,6 +259,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         setState(() {
           locating = false;
           location = point;
+          locationFocused = true;
           updateSun();
         });
       }
@@ -1601,7 +1611,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   onLoaded: styleLoaded,
                   onCamera: (p) {
                     app.api.cancelPrefetch();
-                    camera = p;
+                    updateCamera(p);
                     app.rememberPerspective(p.tilt, p.bearing);
                   },
                   onIdle: () => unawaited(refresh()),
@@ -1642,7 +1652,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   onCameraIdle: () => unawaited(refresh()),
                   onCameraMove: (p) {
                     app.api.cancelPrefetch();
-                    camera = p;
+                    updateCamera(p);
                     app.rememberPerspective(p.tilt, p.bearing);
                     if (p.tilt > 60) {
                       unawaited(map!.moveCamera(CameraUpdate.tiltTo(60)));
@@ -1650,6 +1660,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   },
                   onUserLocationUpdated: (p) {
                     location = p.position;
+                    updateCamera(camera);
                     updateSun();
                     unawaited(focusLocation());
                   },
@@ -1778,6 +1789,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                         },
                                   icon: const SFIcon(
                                     'magnifyingglass',
+                                    weight: FontWeight.w600,
                                     fallback: CupertinoIcons.search,
                                   ),
                                 ),
@@ -1794,6 +1806,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                   },
                                   icon: const SFIcon(
                                     'line.3.horizontal',
+                                    weight: FontWeight.w600,
                                     fallback: CupertinoIcons.line_horizontal_3,
                                   ),
                                 ),
@@ -1808,8 +1821,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                     unawaited(focusLocation());
                                   },
                                   icon: SFIcon(
-                                    locating ? 'location.fill' : 'location',
-                                    fallback: locating
+                                    locationFocused
+                                        ? 'location.fill'
+                                        : 'location',
+                                    weight: FontWeight.w600,
+                                    fallback: locationFocused
                                         ? CupertinoIcons.location_fill
                                         : CupertinoIcons.location,
                                   ),

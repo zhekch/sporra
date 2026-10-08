@@ -11,6 +11,39 @@ import 'package:sporra_flutter/src/map_preferences.dart';
 import 'package:sporra_flutter/src/state.dart';
 
 void main() {
+  test('location focus stays filled near the fix and clears after a pan', () {
+    const point = LatLng(47, 8);
+    expect(
+      cameraAtLocation(const CameraPosition(target: point, zoom: 13.6), point),
+      isTrue,
+    );
+    expect(
+      cameraAtLocation(
+        const CameraPosition(target: LatLng(47.0001, 8), zoom: 13.6),
+        point,
+      ),
+      isTrue,
+    );
+    expect(
+      cameraAtLocation(
+        const CameraPosition(target: LatLng(47.001, 8), zoom: 13.6),
+        point,
+      ),
+      isFalse,
+    );
+    expect(
+      cameraAtLocation(const CameraPosition(target: point, zoom: 7), null),
+      isFalse,
+    );
+    expect(
+      cameraAtLocation(
+        const CameraPosition(target: LatLng(0, 180), zoom: 13.6),
+        const LatLng(0, -180),
+      ),
+      isTrue,
+    );
+  });
+
   test('location focus uses tiniest cell zoom and keeps perspective', () {
     final camera = locationCamera(
       const LatLng(47, 8),
