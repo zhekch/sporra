@@ -4,7 +4,6 @@ import UIKit
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var nativeHost: NativeHost?
-  private var surfacesChannel: FlutterMethodChannel?
   private var symbolsChannel: FlutterMethodChannel?
   override func application(
     _ application: UIApplication,
@@ -54,33 +53,6 @@ import UIKit
       }
       result(image.pngData().map { FlutterStandardTypedData(bytes: $0) })
     }
-    let surfaces = FlutterMethodChannel(name: "sporra/surfaces", binaryMessenger: engineBridge.applicationRegistrar.messenger())
-    surfacesChannel = surfaces
-    surfaces.setMethodCallHandler { call, result in
-      guard call.method == "capture", let args = call.arguments as? [String: Any],
-            let x = args["x"] as? Double, let y = args["y"] as? Double,
-            let width = args["width"] as? Double, let height = args["height"] as? Double,
-            let scale = args["scale"] as? Double,
-            [x, y, width, height, scale].allSatisfy({ $0.isFinite }),
-            width > 0, height > 0, scale > 0, scale <= 4,
-            let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
-              .flatMap({ $0.windows }).first(where: { $0.isKeyWindow }) else {
-        result(nil); return
-      }
-      let rect = CGRect(x: x, y: y, width: width, height: height)
-      guard window.bounds.contains(rect) else { result(nil); return }
-      let format = UIGraphicsImageRendererFormat()
-      format.scale = scale
-      format.opaque = false
-      // UIKit capture includes the native map and its UIVisualEffectView. A
-      // Flutter subtree capture omits those pixels and changes the glass tint.
-      let image = UIGraphicsImageRenderer(size: rect.size, format: format).image { context in
-        context.cgContext.translateBy(x: -rect.minX, y: -rect.minY)
-        window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-      }
-      result(image.pngData().map { FlutterStandardTypedData(bytes: $0) })
-    }
-
 
   }
   override func applicationDidEnterBackground(_ application: UIApplication) {

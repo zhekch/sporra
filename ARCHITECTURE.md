@@ -10332,46 +10332,6 @@ centering rather than a pending location request, with a 25 m tolerance for GPS
 jitter and native camera rounding. Both map engines update this indication on
 camera changes; moving away clears it, and focusing restores it.
 
-### Closing blur (Flutter 0.17.3)
-
-Shared panels and app dialogs wrap their foreground in `ClosingBlur`. Route
-progress drives dismissal keyframes: blur sigma is 0 at the open position, 2
-at 35% closed, 8 at 70%, and 18 at the end. Opening stays sharp. Drag dismissal
-uses the same progression, and a cancelled drag smoothly returns to sharp as
-the panel settles open. Reduce Motion disables the effect.
-
-Flutter 0.17.4 samples transparency outside the filtered surface (`TileMode.decal`)
-to let foreground blur extend outside its original bounds. The shared
-bottom-sheet route leaves clipping disabled; ordinary painted surfaces feather
-correctly, but live glass backdrop compositing still showed a hard outline on
-the physical iPhone.
-
-Flutter 0.17.6 reverts the temporary backdrop disabling introduced in 0.17.5:
-a small drag made the menu lose its normal appearance, and device testing
-reported stuck dismissal. Glass now keeps its live backdrop enabled during
-closing and cancelled drags. The outer bottom-sheet Material retains zero
-elevation. The dismissal regression covers touching, cancelling a drag, swiping
-closed, the close button, the outside barrier, fullscreen panels and dialogs;
-the same tests can run on the iOS simulator via `menu_dismissal_test.dart`.
-Flutter 0.17.7 caches the composed glass surface while the panel is fully open.
-Flutter's foreground filters cannot filter the UIKit backdrop above a native
-map, and shader masks also prevent that backdrop from sampling correctly.
-`SurfaceSnapshot` therefore captures the rendered iOS window region through
-`sporra/surfaces`, including the map and its native backdrop. Other Flutter hosts
-capture the composed scene. Captures refresh after painted frames, throttled to
-80 ms, and on pointer down. Unscoped glass buttons do not capture.
-
-During dismissal, the clipped snapshot replaces the live surface's paint and
-an unclipped `ImageFiltered` blurs the whole image with transparent outside
-samples. This feathers both straight edges and rounded corners while preserving
-the normal glass tint. The live child remains mounted for gestures and semantics;
-cancelled drags restore it at zero blur. Captures finishing during dismissal do
-not replace an existing open snapshot. Images are released when replaced or when
-the surface is disposed. Fullscreen solid panels and dialogs retain the direct
-foreground filter; Reduce Motion keeps all surfaces live and sharp.
-
-Pixel tests cover patterned backgrounds, increasing edge blur and exact visual
-restoration. The iOS integration suite checks touch, cancelled and completed
-swipes, close buttons, barrier taps, fullscreen panels and dialogs. A separate
-native Mapbox test verifies that background blur survives and outer edges feather
-above an actual platform map; both suites export screenshots through the driver.
+Flutter 0.17.8 removes the closing-blur experiment and restores the original
+panel and dialog transitions. The snapshot capture bridge and its frame
+callbacks are removed after device testing showed severe movement stalls.

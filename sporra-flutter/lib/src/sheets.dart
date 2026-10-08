@@ -1,5 +1,3 @@
-import 'closing_blur.dart';
-import 'surface_snapshot.dart';
 import 'rail_settings.dart';
 
 import 'dart:async';
@@ -44,22 +42,19 @@ class Glass extends StatelessWidget {
   const Glass({super.key, required this.child});
   final Widget child;
   @override
-  Widget build(BuildContext context) => SurfaceSnapshot(
-    shape: menuShape(context),
-    child: ClipRSuperellipse(
-      borderRadius: BorderRadius.circular(menuCornerRadius(context)),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-        child: DecoratedBox(
-          decoration: ShapeDecoration(
-            color: const Color(0x8a262626),
-            shape: RoundedSuperellipseBorder(
-              borderRadius: BorderRadius.circular(menuCornerRadius(context)),
-              side: const BorderSide(color: Colors.white12),
-            ),
+  Widget build(BuildContext context) => ClipRSuperellipse(
+    borderRadius: BorderRadius.circular(menuCornerRadius(context)),
+    child: BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+      child: DecoratedBox(
+        decoration: ShapeDecoration(
+          color: const Color(0x8a262626),
+          shape: RoundedSuperellipseBorder(
+            borderRadius: BorderRadius.circular(menuCornerRadius(context)),
+            side: const BorderSide(color: Colors.white12),
           ),
-          child: Material(type: MaterialType.transparency, child: child),
         ),
+        child: Material(type: MaterialType.transparency, child: child),
       ),
     ),
   );
@@ -99,8 +94,6 @@ Future<void> panel(
       isScrollControlled: true,
       showDragHandle: false,
       backgroundColor: Colors.transparent,
-      elevation: 0,
-      clipBehavior: Clip.none,
       barrierColor: Colors.black26,
       sheetAnimationStyle: MediaQuery.disableAnimationsOf(context)
           ? AnimationStyle.noAnimation
@@ -110,158 +103,139 @@ Future<void> panel(
             ),
       builder: (context) {
         _activePanel = ModalRoute.of(context);
-        return ClosingBlur(
-          filterChild: fullscreen,
-          child: Builder(
-            builder: (context) {
-              if (fullscreen) {
-                return Offstage(
-                  offstage: false,
-                  child: SizedBox(
-                    height: MediaQuery.sizeOf(context).height,
-                    width: MediaQuery.sizeOf(context).width,
-                    child: Scaffold(
-                      body: Padding(
-                        padding: EdgeInsets.only(
-                          top: MediaQueryData.fromView(View.of(context))
-                              .padding
-                              .top,
-                        ),
-                        child: SafeArea(
-                          top: false,
-                          child: Column(
+        if (fullscreen) {
+          return Offstage(
+            offstage: false,
+            child: SizedBox(
+              height: MediaQuery.sizeOf(context).height,
+              width: MediaQuery.sizeOf(context).width,
+              child: Scaffold(
+                body: Padding(
+                  padding: EdgeInsets.only(
+                    top: MediaQueryData.fromView(View.of(context)).padding.top,
+                  ),
+                  child: SafeArea(
+                    top: false,
+                    child: Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(24, 16, 16, 14),
+                          child: Row(
                             children: [
+                              Expanded(
+                                child: Text(
+                                  title,
+                                  style: const TextStyle(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: -0.7,
+                                  ),
+                                ),
+                              ),
+                              IconButton.filledTonal(
+                                tooltip: 'Close',
+                                onPressed: () => Navigator.pop(context),
+                                icon: const Icon(
+                                  CupertinoIcons.xmark,
+                                  size: 20,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Expanded(child: child),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+        return Offstage(
+          offstage: false,
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.viewInsetsOf(context).bottom,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                child: Glass(
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      bottom: math.max(
+                        0,
+                        MediaQuery.paddingOf(context).bottom - 12,
+                      ),
+                    ),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: 380,
+                        maxHeight: math.min(
+                          MediaQuery.sizeOf(context).height * height,
+                          MediaQuery.sizeOf(context).height -
+                              MediaQuery.viewInsetsOf(context).bottom -
+                              MediaQuery.paddingOf(context).vertical -
+                              24,
+                        ),
+                      ),
+                      child: SizedBox(
+                        width: 380,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (showHeader)
                               Padding(
                                 padding: const EdgeInsets.fromLTRB(
-                                  24,
-                                  16,
-                                  16,
-                                  14,
+                                  20,
+                                  12,
+                                  8,
+                                  6,
                                 ),
                                 child: Row(
                                   children: [
                                     Expanded(
                                       child: Text(
                                         title,
-                                        style: const TextStyle(
-                                          fontSize: 28,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: -0.7,
-                                        ),
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .headlineSmall,
                                       ),
                                     ),
-                                    IconButton.filledTonal(
-                                      tooltip: 'Close',
+                                    IconButton(
                                       onPressed: () => Navigator.pop(context),
-                                      icon: const Icon(
-                                        CupertinoIcons.xmark,
-                                        size: 20,
-                                      ),
+                                      icon: const Icon(CupertinoIcons.xmark),
                                     ),
                                   ],
                                 ),
                               ),
-                              Expanded(child: child),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              }
-              return Offstage(
-                offstage: false,
-                child: SafeArea(
-                  bottom: false,
-                  child: Padding(
-                    padding: EdgeInsets.only(
-                      bottom: MediaQuery.viewInsetsOf(context).bottom,
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-                      child: Glass(
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                            bottom: math.max(
-                              0,
-                              MediaQuery.paddingOf(context).bottom - 12,
-                            ),
-                          ),
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth: 380,
-                              maxHeight: math.min(
-                                MediaQuery.sizeOf(context).height * height,
-                                MediaQuery.sizeOf(context).height -
-                                    MediaQuery.viewInsetsOf(context).bottom -
-                                    MediaQuery.paddingOf(context).vertical -
-                                    24,
-                              ),
-                            ),
-                            child: SizedBox(
-                              width: 380,
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (showHeader)
-                                    Padding(
-                                      padding: const EdgeInsets.fromLTRB(
-                                        20,
-                                        12,
-                                        8,
-                                        6,
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Expanded(
-                                            child: Text(
-                                              title,
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .headlineSmall,
-                                            ),
-                                          ),
-                                          IconButton(
-                                            onPressed: () =>
-                                                Navigator.pop(context),
-                                            icon: const Icon(
-                                              CupertinoIcons.xmark,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  if (showHeader && showHeaderDivider)
-                                    const Divider(height: 1),
-                                  Flexible(
-                                    child:
-                                        NotificationListener<
-                                          ScrollUpdateNotification
-                                        >(
-                                          onNotification: (notification) {
-                                            if (notification.dragDetails !=
-                                                    null &&
-                                                notification.metrics.pixels <
-                                                    -70) {
-                                              Navigator.of(context).pop();
-                                            }
-                                            return false;
-                                          },
-                                          child: child,
-                                        ),
+                            if (showHeader && showHeaderDivider)
+                              const Divider(height: 1),
+                            Flexible(
+                              child:
+                                  NotificationListener<
+                                    ScrollUpdateNotification
+                                  >(
+                                    onNotification: (notification) {
+                                      if (notification.dragDetails != null &&
+                                          notification.metrics.pixels < -70) {
+                                        Navigator.of(context).pop();
+                                      }
+                                      return false;
+                                    },
+                                    child: child,
                                   ),
-                                ],
-                              ),
                             ),
-                          ),
+                          ],
                         ),
                       ),
                     ),
                   ),
                 ),
-              );
-            },
+              ),
+            ),
           ),
         );
       },
@@ -1283,7 +1257,7 @@ Widget tripsList(AppState app, NativeMapController map) {
                     minimumSize: Size.zero,
                     child: const Icon(CupertinoIcons.ellipsis, size: 20),
                     onPressed: () async {
-                      final action = await showClosingDialog<String>(
+                      final action = await showDialog<String>(
                         context: context,
                         builder: (context) => SimpleDialog(
                           shape: menuShape(context),
@@ -1394,7 +1368,7 @@ Future<void> importFile(BuildContext context, AppState app) async {
   if (result.isEmpty) return;
   if (!context.mounted) return;
   var source = '', includeRoutes = true;
-  final options = await showClosingDialog<bool>(
+  final options = await showDialog<bool>(
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, setState) => AlertDialog(
@@ -1456,7 +1430,7 @@ Future<void> importFile(BuildContext context, AppState app) async {
         canceled = true;
         return;
       }
-      final accepted = await showClosingDialog<bool>(
+      final accepted = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           shape: menuShape(context),
@@ -2386,7 +2360,7 @@ Future<bool> confirmRemoval(
   String title,
   String message,
 ) async =>
-    await showClosingDialog<bool>(
+    await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
@@ -2417,7 +2391,7 @@ Future<String?> askText(
   bool obscure = false,
 }) async {
   final controller = TextEditingController(text: initial);
-  final result = await showClosingDialog<String>(
+  final result = await showDialog<String>(
     context: context,
     barrierDismissible: false,
     builder: (context) => AlertDialog(
@@ -2497,7 +2471,7 @@ Future<void> setupHomeAssistant(BuildContext context, AppState app) async {
     });
     if (!context.mounted) return;
     final selected = <String>{};
-    final saved = await showClosingDialog<bool>(
+    final saved = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
@@ -2560,7 +2534,7 @@ Future<void> chooseHome(BuildContext context, AppState app) async {
         .toList();
     if (places.isEmpty) throw Exception('No town matched that name.');
     if (!context.mounted) return;
-    final picked = await showClosingDialog<Map>(
+    final picked = await showDialog<Map>(
       context: context,
       builder: (context) => SimpleDialog(
         shape: menuShape(context),
@@ -2608,7 +2582,7 @@ Future<String?> chooseColor(BuildContext context, String initial) async {
       ? int.parse(initial.substring(7), radix: 16) / 255
       : 1;
   String value = initial.substring(0, 7);
-  final result = await showClosingDialog<String>(
+  final result = await showDialog<String>(
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, set) => AlertDialog(
