@@ -10341,13 +10341,16 @@ uses the same progression, and a cancelled drag smoothly returns to sharp as
 the panel settles open. Reduce Motion disables the effect.
 
 Flutter 0.17.4 samples transparency outside the filtered surface (`TileMode.decal`)
-so its background, border and corners feather along with its content. The shared
-bottom-sheet route leaves clipping disabled so that blur can extend outside the
-panel bounds.
+to let foreground blur extend outside its original bounds. The shared
+bottom-sheet route leaves clipping disabled; ordinary painted surfaces feather
+correctly, but live glass backdrop compositing still showed a hard outline on
+the physical iPhone.
 
-Flutter 0.17.5 suspends the glass surface's live backdrop filter during closing
-blur, keeping its decoration and content inside the same foreground filter.
-Nested backdrop compositing on iOS can otherwise retain a sharp rounded boundary.
-The live backdrop returns when a cancelled swipe settles open; Reduce Motion
-keeps it enabled. The outer bottom-sheet Material has zero elevation, leaving
-all visible surface painting within the shared dismissal filter.
+Flutter 0.17.6 reverts the temporary backdrop disabling introduced in 0.17.5:
+a small drag made the menu lose its normal appearance, and device testing
+reported stuck dismissal. Glass now keeps its live backdrop enabled during
+closing and cancelled drags. The outer bottom-sheet Material retains zero
+elevation. The dismissal regression covers touching, cancelling a drag, swiping
+closed, the close button, the outside barrier, fullscreen panels and dialogs;
+the same tests can run on the iOS simulator via `menu_dismissal_test.dart`.
+Full edge feathering on the live glass backdrop still needs device verification.

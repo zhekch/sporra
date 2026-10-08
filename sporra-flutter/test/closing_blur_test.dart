@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sporra_flutter/src/closing_blur.dart';
-import 'package:sporra_flutter/src/sheets.dart' show Glass;
+import 'package:sporra_flutter/src/sheets.dart' show Glass, panel;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sporra_flutter/src/state.dart';
 
 void main() {
   testWidgets('closing keyframes grow and cancelled drag settles sharp', (
@@ -72,7 +74,7 @@ void main() {
     await tester.pump();
     expect(
       tester.widget<BackdropFilter>(find.byType(BackdropFilter)).enabled,
-      isFalse,
+      isTrue,
     );
     final boundary =
         key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
@@ -94,6 +96,137 @@ void main() {
       isTrue,
     );
   });
+
+  testWidgets('glass panel survives a tap and cancelled drag, then dismisses', (
+    tester,
+  ) async {
+    final app = AppState();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appProvider.overrideWith((ref) => app)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () =>
+                    panel(context, 'Menu', const SizedBox(height: 220)),
+                child: const Text('Open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(app.menuOpen, isTrue);
+    await tester.tap(find.text('Menu'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<BackdropFilter>(find.byType(BackdropFilter)).enabled,
+      isTrue,
+    );
+    final drag = await tester.startGesture(tester.getCenter(find.text('Menu')));
+    await drag.moveBy(const Offset(0, 20));
+    await tester.pump();
+    await drag.moveBy(const Offset(0, 30));
+    await tester.pump();
+    expect(
+      tester.widget<BackdropFilter>(find.byType(BackdropFilter)).enabled,
+      isTrue,
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(find.text('Menu'), findsOneWidget);
+    expect(app.menuOpen, isTrue);
+    await tester.fling(find.text('Menu'), const Offset(0, 350), 1500);
+    await tester.pumpAndSettle();
+    expect(find.text('Menu'), findsNothing);
+    expect(app.menuOpen, isFalse);
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(Glass),
+        matching: find.byType(IconButton),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Menu'), findsNothing);
+    expect(app.menuOpen, isFalse);
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(30, 120));
+    await tester.pumpAndSettle();
+    expect(find.text('Menu'), findsNothing);
+    expect(app.menuOpen, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'fullscreen panel and dialog close without blocking the next menu',
+    (tester) async {
+      final app = AppState();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appProvider.overrideWith((ref) => app)],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => Column(
+                  children: [
+                    TextButton(
+                      onPressed: () => panel(
+                        context,
+                        'Settings',
+                        const SizedBox(),
+                        fullscreen: true,
+                      ),
+                      child: const Text('Open settings'),
+                    ),
+                    TextButton(
+                      onPressed: () => showClosingDialog<void>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('Confirmation'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('Done'),
+                            ),
+                          ],
+                        ),
+                      ),
+                      child: const Text('Open dialog'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open settings'));
+      await tester.pumpAndSettle();
+      expect(app.menuOpen, isTrue);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(find.text('Settings'), findsNothing);
+      expect(app.menuOpen, isFalse);
+      await tester.tap(find.text('Open dialog'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Done'));
+      await tester.pumpAndSettle();
+      expect(find.text('Confirmation'), findsNothing);
+      await tester.tap(find.text('Open settings'));
+      await tester.pumpAndSettle();
+      expect(find.text('Settings'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('Reduce Motion disables closing blur', (tester) async {
     final animation = AnimationController(vsync: tester, value: 1);

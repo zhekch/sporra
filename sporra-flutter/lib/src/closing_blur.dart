@@ -9,28 +9,6 @@ final _blurFrames = TweenSequence<double>([
   TweenSequenceItem(tween: Tween(begin: 8, end: 18), weight: 30),
 ]);
 
-// A live backdrop layer can keep its own clipped boundary when nested under
-// the exit filter. Glass surfaces suspend that layer while being blurred.
-class ClosingBlurSurface extends InheritedWidget {
-  const ClosingBlurSurface({
-    super.key,
-    required this.active,
-    required super.child,
-  });
-
-  final bool active;
-
-  static bool isActive(BuildContext context) =>
-      context
-          .dependOnInheritedWidgetOfExactType<ClosingBlurSurface>()
-          ?.active ??
-      false;
-
-  @override
-  bool updateShouldNotify(ClosingBlurSurface oldWidget) =>
-      active != oldWidget.active;
-}
-
 class ClosingBlur extends StatefulWidget {
   const ClosingBlur({super.key, required this.child, this.animation});
   final Widget child;
@@ -96,7 +74,7 @@ class _ClosingBlurState extends State<ClosingBlur> {
         sigmaY: sigma,
         tileMode: TileMode.decal,
       ),
-      child: ClosingBlurSurface(active: sigma > 0, child: widget.child),
+      child: widget.child,
     );
   }
 }
