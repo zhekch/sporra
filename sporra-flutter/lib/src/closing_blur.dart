@@ -9,10 +9,40 @@ final _blurFrames = TweenSequence<double>([
   TweenSequenceItem(tween: Tween(begin: 8, end: 18), weight: 30),
 ]);
 
+class ClosingBlurScope extends InheritedWidget {
+  const ClosingBlurScope({
+    super.key,
+    required this.sigma,
+    this.settledOpen = true,
+    this.snapshotSurfaces = true,
+    required super.child,
+  });
+
+  final double sigma;
+  final bool settledOpen;
+  final bool snapshotSurfaces;
+
+  static double sigmaOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<ClosingBlurScope>()?.sigma ??
+      0;
+
+  @override
+  bool updateShouldNotify(ClosingBlurScope oldWidget) =>
+      sigma != oldWidget.sigma ||
+      settledOpen != oldWidget.settledOpen ||
+      snapshotSurfaces != oldWidget.snapshotSurfaces;
+}
+
 class ClosingBlur extends StatefulWidget {
-  const ClosingBlur({super.key, required this.child, this.animation});
+  const ClosingBlur({
+    super.key,
+    required this.child,
+    this.animation,
+    this.filterChild = true,
+  });
   final Widget child;
   final Animation<double>? animation;
+  final bool filterChild;
   @override
   State<ClosingBlur> createState() => _ClosingBlurState();
 }
@@ -65,6 +95,14 @@ class _ClosingBlurState extends State<ClosingBlur> {
         ? (1.0 - (animation?.value ?? 1.0)).clamp(0.0, 1.0)
         : 0.0;
     final sigma = _blurFrames.transform(progress);
+    if (!widget.filterChild) {
+      return ClosingBlurScope(
+        sigma: sigma,
+        settledOpen: (animation?.value ?? 1) == 1,
+        snapshotSurfaces: !widget.filterChild,
+        child: widget.child,
+      );
+    }
     return ImageFiltered(
       enabled: sigma > 0,
       // Transparent samples let the entire surface feather into its surroundings.
@@ -74,7 +112,12 @@ class _ClosingBlurState extends State<ClosingBlur> {
         sigmaY: sigma,
         tileMode: TileMode.decal,
       ),
-      child: widget.child,
+      child: ClosingBlurScope(
+        sigma: sigma,
+        settledOpen: (animation?.value ?? 1) == 1,
+        snapshotSurfaces: !widget.filterChild,
+        child: widget.child,
+      ),
     );
   }
 }

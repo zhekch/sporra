@@ -1,4 +1,5 @@
 import 'closing_blur.dart';
+import 'surface_snapshot.dart';
 import 'rail_settings.dart';
 
 import 'dart:async';
@@ -43,19 +44,22 @@ class Glass extends StatelessWidget {
   const Glass({super.key, required this.child});
   final Widget child;
   @override
-  Widget build(BuildContext context) => ClipRSuperellipse(
-    borderRadius: BorderRadius.circular(menuCornerRadius(context)),
-    child: BackdropFilter(
-      filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
-      child: DecoratedBox(
-        decoration: ShapeDecoration(
-          color: const Color(0x8a262626),
-          shape: RoundedSuperellipseBorder(
-            borderRadius: BorderRadius.circular(menuCornerRadius(context)),
-            side: const BorderSide(color: Colors.white12),
+  Widget build(BuildContext context) => SurfaceSnapshot(
+    shape: menuShape(context),
+    child: ClipRSuperellipse(
+      borderRadius: BorderRadius.circular(menuCornerRadius(context)),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
+        child: DecoratedBox(
+          decoration: ShapeDecoration(
+            color: const Color(0x8a262626),
+            shape: RoundedSuperellipseBorder(
+              borderRadius: BorderRadius.circular(menuCornerRadius(context)),
+              side: const BorderSide(color: Colors.white12),
+            ),
           ),
+          child: Material(type: MaterialType.transparency, child: child),
         ),
-        child: Material(type: MaterialType.transparency, child: child),
       ),
     ),
   );
@@ -107,6 +111,7 @@ Future<void> panel(
       builder: (context) {
         _activePanel = ModalRoute.of(context);
         return ClosingBlur(
+          filterChild: fullscreen,
           child: Builder(
             builder: (context) {
               if (fullscreen) {

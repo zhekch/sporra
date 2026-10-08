@@ -10353,4 +10353,25 @@ closing and cancelled drags. The outer bottom-sheet Material retains zero
 elevation. The dismissal regression covers touching, cancelling a drag, swiping
 closed, the close button, the outside barrier, fullscreen panels and dialogs;
 the same tests can run on the iOS simulator via `menu_dismissal_test.dart`.
-Full edge feathering on the live glass backdrop still needs device verification.
+Flutter 0.17.7 caches the composed glass surface while the panel is fully open.
+Flutter's foreground filters cannot filter the UIKit backdrop above a native
+map, and shader masks also prevent that backdrop from sampling correctly.
+`SurfaceSnapshot` therefore captures the rendered iOS window region through
+`sporra/surfaces`, including the map and its native backdrop. Other Flutter hosts
+capture the composed scene. Captures refresh after painted frames, throttled to
+80 ms, and on pointer down. Unscoped glass buttons do not capture.
+
+During dismissal, the clipped snapshot replaces the live surface's paint and
+an unclipped `ImageFiltered` blurs the whole image with transparent outside
+samples. This feathers both straight edges and rounded corners while preserving
+the normal glass tint. The live child remains mounted for gestures and semantics;
+cancelled drags restore it at zero blur. Captures finishing during dismissal do
+not replace an existing open snapshot. Images are released when replaced or when
+the surface is disposed. Fullscreen solid panels and dialogs retain the direct
+foreground filter; Reduce Motion keeps all surfaces live and sharp.
+
+Pixel tests cover patterned backgrounds, increasing edge blur and exact visual
+restoration. The iOS integration suite checks touch, cancelled and completed
+swipes, close buttons, barrier taps, fullscreen panels and dialogs. A separate
+native Mapbox test verifies that background blur survives and outer edges feather
+above an actual platform map; both suites export screenshots through the driver.
