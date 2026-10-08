@@ -10344,3 +10344,10 @@ Flutter 0.17.4 samples transparency outside the filtered surface (`TileMode.deca
 so its background, border and corners feather along with its content. The shared
 bottom-sheet route leaves clipping disabled so that blur can extend outside the
 panel bounds.
+
+Flutter 0.17.5 suspends the glass surface's live backdrop filter during closing
+blur, keeping its decoration and content inside the same foreground filter.
+Nested backdrop compositing on iOS can otherwise retain a sharp rounded boundary.
+The live backdrop returns when a cancelled swipe settles open; Reduce Motion
+keeps it enabled. The outer bottom-sheet Material has zero elevation, leaving
+all visible surface painting within the shared dismissal filter.

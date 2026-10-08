@@ -46,6 +46,7 @@ class Glass extends StatelessWidget {
   Widget build(BuildContext context) => ClipRSuperellipse(
     borderRadius: BorderRadius.circular(menuCornerRadius(context)),
     child: BackdropFilter(
+      enabled: !ClosingBlurSurface.isActive(context),
       filter: ImageFilter.blur(sigmaX: 26, sigmaY: 26),
       child: DecoratedBox(
         decoration: ShapeDecoration(
@@ -95,6 +96,7 @@ Future<void> panel(
       isScrollControlled: true,
       showDragHandle: false,
       backgroundColor: Colors.transparent,
+      elevation: 0,
       clipBehavior: Clip.none,
       barrierColor: Colors.black26,
       sheetAnimationStyle: MediaQuery.disableAnimationsOf(context)

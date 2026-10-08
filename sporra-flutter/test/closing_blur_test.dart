@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sporra_flutter/src/closing_blur.dart';
+import 'package:sporra_flutter/src/sheets.dart' show Glass;
 
 void main() {
   testWidgets('closing keyframes grow and cancelled drag settles sharp', (
@@ -55,11 +56,7 @@ void main() {
               child: Center(
                 child: ClosingBlur(
                   animation: animation,
-                  child: const SizedBox(
-                    width: 60,
-                    height: 60,
-                    child: ColoredBox(color: Colors.white),
-                  ),
+                  child: const Glass(child: SizedBox(width: 60, height: 60)),
                 ),
               ),
             ),
@@ -67,8 +64,16 @@ void main() {
         ),
       ),
     );
+    expect(
+      tester.widget<BackdropFilter>(find.byType(BackdropFilter)).enabled,
+      isTrue,
+    );
     animation.value = 0.3;
     await tester.pump();
+    expect(
+      tester.widget<BackdropFilter>(find.byType(BackdropFilter)).enabled,
+      isFalse,
+    );
     final boundary =
         key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
     final pixels = await tester.runAsync(() async {
@@ -80,8 +85,14 @@ void main() {
     int alpha(int x) => pixels!.getUint8((60 * 120 + x) * 4 + 3);
     // The original surface spans x=30..89. Its edge should fade on both sides.
     expect(alpha(25), greaterThan(0));
-    expect(alpha(30), lessThan(240));
-    expect(alpha(60), greaterThan(240));
+    expect(alpha(30), lessThan(138));
+    expect(alpha(60), greaterThan(120));
+    animation.value = 1;
+    await tester.pump();
+    expect(
+      tester.widget<BackdropFilter>(find.byType(BackdropFilter)).enabled,
+      isTrue,
+    );
   });
 
   testWidgets('Reduce Motion disables closing blur', (tester) async {
