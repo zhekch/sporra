@@ -1,4 +1,7 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sporra_flutter/src/closing_blur.dart';
 
@@ -33,6 +36,52 @@ void main() {
     animation.value = 1;
     await tester.pump();
     expect(filter().enabled, isFalse);
+  });
+
+  testWidgets('closing blur feathers the surface edge into transparency', (
+    tester,
+  ) async {
+    final animation = AnimationController(vsync: tester, value: 1);
+    addTearDown(animation.dispose);
+    final key = GlobalKey();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Center(
+          child: RepaintBoundary(
+            key: key,
+            child: SizedBox(
+              width: 120,
+              height: 120,
+              child: Center(
+                child: ClosingBlur(
+                  animation: animation,
+                  child: const SizedBox(
+                    width: 60,
+                    height: 60,
+                    child: ColoredBox(color: Colors.white),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    animation.value = 0.3;
+    await tester.pump();
+    final boundary =
+        key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final pixels = await tester.runAsync(() async {
+      final image = await boundary.toImage(pixelRatio: 1);
+      final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      image.dispose();
+      return data!;
+    });
+    int alpha(int x) => pixels!.getUint8((60 * 120 + x) * 4 + 3);
+    // The original surface spans x=30..89. Its edge should fade on both sides.
+    expect(alpha(25), greaterThan(0));
+    expect(alpha(30), lessThan(240));
+    expect(alpha(60), greaterThan(240));
   });
 
   testWidgets('Reduce Motion disables closing blur', (tester) async {

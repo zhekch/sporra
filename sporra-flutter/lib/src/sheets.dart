@@ -95,6 +95,7 @@ Future<void> panel(
       isScrollControlled: true,
       showDragHandle: false,
       backgroundColor: Colors.transparent,
+      clipBehavior: Clip.none,
       barrierColor: Colors.black26,
       sheetAnimationStyle: MediaQuery.disableAnimationsOf(context)
           ? AnimationStyle.noAnimation

@@ -10339,3 +10339,8 @@ progress drives dismissal keyframes: blur sigma is 0 at the open position, 2
 at 35% closed, 8 at 70%, and 18 at the end. Opening stays sharp. Drag dismissal
 uses the same progression, and a cancelled drag smoothly returns to sharp as
 the panel settles open. Reduce Motion disables the effect.
+
+Flutter 0.17.4 samples transparency outside the filtered surface (`TileMode.decal`)
+so its background, border and corners feather along with its content. The shared
+bottom-sheet route leaves clipping disabled so that blur can extend outside the
+panel bounds.

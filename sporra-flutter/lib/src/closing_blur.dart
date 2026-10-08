@@ -67,7 +67,13 @@ class _ClosingBlurState extends State<ClosingBlur> {
     final sigma = _blurFrames.transform(progress);
     return ImageFiltered(
       enabled: sigma > 0,
-      imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+      // Transparent samples let the entire surface feather into its surroundings.
+      // Clamping repeats the boundary pixels and leaves a hard outer edge.
+      imageFilter: ImageFilter.blur(
+        sigmaX: sigma,
+        sigmaY: sigma,
+        tileMode: TileMode.decal,
+      ),
       child: widget.child,
     );
   }
