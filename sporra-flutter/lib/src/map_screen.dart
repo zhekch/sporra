@@ -30,6 +30,7 @@ import 'api.dart';
 import 'state.dart';
 import 'sheets.dart';
 import 'activity_graph.dart';
+import 'activity_metric.dart';
 
 // MapLibre's setter serializes omitted properties as null, which resets them.
 // A patch must retain the colors/widths already installed on the native layer.
@@ -822,9 +823,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     if (activityLinesView != lineView) {
       await geoSource(
         'activity-metric',
-        data != null && app.activityMetric != null
-            ? Map<String, dynamic>.from(data['lines'][app.activityMetric])
-            : Map<String, dynamic>.from(empty),
+        activityMetricLines(data, app.activityMetric),
       );
       if (!layers.contains('activity-metric-line')) {
         await map!.addLineLayer(
@@ -835,6 +834,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
             lineJoin: 'round',
             lineColor: 'rgba(20,16,12,0.85)',
             lineWidth: metricWidth(scale: 1.45),
+            lineSortKey: ['get', 'metricOrder'],
             lineOpacity: 1,
           ),
         );
@@ -847,6 +847,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
             lineCap: 'round',
             lineJoin: 'round',
             lineWidth: metricWidth(),
+            lineSortKey: ['get', 'metricOrder'],
             lineOpacity: 1,
           ),
         );
@@ -1312,9 +1313,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
         ]);
         if (!mounted || request != tapRequest) return;
         if (results[0].isNotEmpty) {
-          app.scrubActivity(
-            (results[0].first['properties']['i'] as num).toInt(),
-          );
+          final sample = results[0]
+              .map((hit) => hit['properties']?['i'])
+              .whereType<num>()
+              .firstOrNull;
+          if (sample != null) app.scrubActivity(sample.toInt());
           return;
         }
         if (results[1].isNotEmpty) {

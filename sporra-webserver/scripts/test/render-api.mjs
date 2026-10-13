@@ -124,6 +124,12 @@ try {
   const activity = await api('GET', '/api/render/activity?id=' + activityId);
   check(activity.status === 200 && activity.body.graphs.speed && activity.body.samples.length > 1, 'activity API returns speed graph and aligned samples');
   check((await api('GET', '/api/render/activity?id=' + activityId, undefined, {'If-None-Match':activity.etag})).status === 304, 'activity graph revalidates');
+  const version = (await api('GET', '/api/health')).body.version;
+  check(activity.etag.startsWith(`W/"${version}:`), 'activity validator includes renderer version');
+  const legacyTag = activity.etag.replace(`${version}:`, '');
+  check((await api('GET', '/api/render/activity?id=' + activityId, undefined, {'If-None-Match':legacyTag})).status === 200, 'old cached activity gaps receive a fresh body after deployment');
+  const previousBuildTag = activity.etag.replace(`${version}:`, '0.143.0:');
+  check((await api('GET', '/api/render/activity?id=' + activityId, undefined, {'If-None-Match':previousBuildTag})).status === 200, 'a previous rendering build cannot validate stale activity data');
   check((await api('GET', '/api/render/activity?id=bad')).status === 400, 'invalid activity id is refused');
   check((await api('GET', '/api/render/activity-stats')).body.years.length > 0, 'activity statistics include annual distance readings');
 

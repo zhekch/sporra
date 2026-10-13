@@ -10309,6 +10309,13 @@ or non-finite speed/elevation is white, and elevation requires both ends to be
 measured. Real segment breaks remain gaps. The same collection drives web and
 Flutter maps, so changing metrics never makes unmeasured route sections vanish.
 Flutter activity dismissal uses the same light haptic as closing a menu.
+Flutter also draws the complete `route.geom` in white beneath the metric spans,
+with explicit `line-sort-key` ordering. This is a coverage fallback for cached
+responses from older servers that omitted unmeasured spans; it never connects
+separate recording segments or invents measurement values. Activity and activity
+statistics ETags include `SERVER_VERSION`, because unchanged stored coordinates
+can produce different render responses after a deployment. Tests revalidate
+both current and pre-deployment validators and exercise partial cached geometry.
 
 An unlabeled `LoadingIndicator` centres a 24×24 ring with width and height
 factors of one: a full-width settings list may centre it, while a ListTile
