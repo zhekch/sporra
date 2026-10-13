@@ -18,6 +18,7 @@ void showToast(
   double top = 12,
   String? action,
   VoidCallback? onAction,
+  Duration duration = const Duration(seconds: 5),
 }) {
   _timer?.cancel();
   _entry?.remove();
@@ -93,7 +94,7 @@ void showToast(
   );
   _entry = entry;
   Overlay.of(context, rootOverlay: true).insert(entry);
-  _timer = Timer(const Duration(seconds: 5), dismissToast);
+  _timer = Timer(duration, dismissToast);
 }
 
 void dismissToast() {

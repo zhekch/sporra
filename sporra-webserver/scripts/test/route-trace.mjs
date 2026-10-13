@@ -8,7 +8,7 @@
 //   node scripts/test/route-trace.mjs
 
 import { alignTrace, buildRoute, haversine, nearestSample, routeSamples, traceSupersedes } from '../../src/routes.js';
-import { metricColor } from '../../src/route-metric.js';
+import { metricColor, metricCollection } from '../../src/route-metric.js';
 import { fillMetricGraph, formatGraphSpeed, graphTimeStep } from '../../src/route-info.js';
 
 let pass = 0;
@@ -181,6 +181,21 @@ fillMetricGraph(longHost, timedRide(8 * 60 + 40, 1100), 'elev');
 const longText = [];
 walkInto(longHost, longText);
 check(longText.includes('8 h'), 'the last hour is labelled when its line is drawn', longText.join(' | '));
+
+const missing = [
+  {lng:7,lat:46,seg:0,ele:null,speed:null},
+  {lng:7.1,lat:46,seg:0,ele:null,speed:null},
+  {lng:7.2,lat:46,seg:0,ele:540,speed:2},
+  {lng:7.3,lat:46,seg:0,ele:550,speed:3},
+  {lng:8,lat:46,seg:1,ele:550,speed:null},
+];
+const elevation = metricCollection(missing, 'elev');
+check(elevation.features.length === 3, 'missing elevation keeps every real span without connecting segment gaps');
+check(elevation.features[0].properties.color === '#ffffff' && elevation.features[1].properties.color === '#ffffff', 'missing or partial elevations are white');
+check(elevation.features[2].properties.color !== '#ffffff', 'measured elevation retains its color');
+const noMeasurements = metricCollection(missing.map(sample => ({...sample,ele:null})), 'elev');
+check(noMeasurements.features.length === 3 && noMeasurements.features.every(feature => feature.properties.color === '#ffffff'), 'a route without measurements stays visible in white');
+check(metricCollection(missing, 'speed').features[0].properties.color === '#ffffff', 'missing speed is also white');
 
 console.log(`\n${fail ? 'FAILED' : 'passed'}: ${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

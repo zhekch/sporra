@@ -77,7 +77,6 @@ import {
   rememberSnapshot, setBannerMode,
 } from './whats-new.js';
 import { mountWhatsNew } from './whats-new-ui.js';
-import { HEALTH_SOURCE } from './whats-new.js';
 // `pluralKey` renamed on the way in: src/history.js exports its own `plural`,
 // which is the English-only "3 cells" the undo log is written with. This one
 // picks a locale's plural *category* and looks the phrase up — see i18n.js.
@@ -4632,6 +4631,7 @@ let stravaUi = null; // set by mountStrava()
 let deviceUi = null; // set by mountDevices()
 let statsUi = null; // set by mountStats()
 let whatsNewUi = null; // set by mountWhatsNew()
+let announcementsReady = false;
 let backupUi = null; // set by mountBackup()
 // These two are up here with the other late-bound handles rather than inside the
 // wiring block, because the *auth gate* reaches for both: which tabs Settings
@@ -5213,16 +5213,8 @@ async function syncPrefs() {
     prefsDirty = true;
     pushPrefs();
   }
-  // Both of these read `remote` rather than the adopted state, and for the same
-  // reason: this is the first moment anything knows what the *account* has
-  // already been told, and the 'push' branch above never fills that in.
-  //
-  // The banner's baseline is merged in before the banner is decided — `onAuthed`
-  // awaits this and shows it afterwards — so a ride the phone already announced
-  // is not announced again here. And when the merge comes out ahead of what the
-  // account holds, the account is the one that is behind: that is a browser
-  // whose own banner never got pushed, and an account left holding the lower
-  // number would let the *other* device announce it a second time.
+  // Keep legacy counter baselines for older clients. Current announcements
+  // use the server's identity baseline and cannot be rolled back by this merge.
   const seen = mergeSnapshots(lastSnapshot(), remote?.whatsNewSeen);
   if (seen) {
     rememberSnapshot(seen);
@@ -12507,10 +12499,12 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     },
     snowPossible: () => engine === MAPBOX,
     whatsNew: () => bannerMode(),
-    onWhatsNew: (mode) => {
+    onWhatsNew: async (mode) => {
       setBannerMode(mode);
       touchPrefs();
-      pushPrefs();
+      whatsNewUi?.hide();
+      await pushPrefs();
+      await whatsNewUi?.show({ quiet: true });
     },
     locales: () => LOCALES,
     locale: () => locale(),
@@ -12917,32 +12911,21 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     stats.open();
   });
 
-  // "Your map has grown" — and the one press it offers goes to the panel that
-  // says by how much, which is the only thing anybody would want next.
+  // News is computed and consumed by the server; the action opens the activity
+  // it names, or the statistics when there is more than one thing to show.
   whatsNewUi = mountWhatsNew({
-    stats: () => derived.stats(),
-    routes: () => routeList,
-    // "Show me" means show me the thing the sentence was about. When that is a
-    // single workout there is somewhere specific to go, and stopping at the list
-    // to make you pick the only entry in it is a step that answers nothing. Any
-    // more than one and the list *is* the answer, so it opens as it always did.
-    //
-    // routeList is newest first, which is what makes finding the one worth
-    // opening a search rather than a comparison: a workout that has just arrived
-    // is the latest one the phone recorded.
-    onOpenStats: (newWorkouts) => {
+    load: (quiet) => auth.whatsNew(quiet),
+    ready: () => authed && announcementsReady && bannerMode() !== 'never',
+    onOpenStats: async (newActivities, ids) => {
       setMenuOpen(false);
-      const only = newWorkouts === 1 ? routeList.find((r) => r?.source === HEALTH_SOURCE) : null;
-      if (only) stats.openRoute(only);
-      else stats.open();
-    },
-    // Straight up rather than on the debounce. The point of a shared baseline is
-    // that the device you pick up *next* stays quiet, and next can be a minute
-    // away — a push still sitting in a timer when the phone comes out of a
-    // pocket is the duplicate this exists to stop.
-    onSeen: () => {
-      touchPrefs();
-      pushPrefs();
+      if (newActivities === 1) {
+        try {
+          const routes = await auth.getRoutes(false);
+          const only = routes.find(route => String(route.id) === String(ids[0]));
+          if (only) { stats.openRoute(only); return; }
+        } catch { /* The activities panel can still open from cached data. */ }
+      }
+      stats.open();
     },
   });
 
@@ -13138,29 +13121,10 @@ const authState = mountAuth({
     // Coming back from Strava's OAuth redirect reopens the dialog on the result.
     if (!(await stravaUi?.handleReturn())) stravaUi?.refresh();
 
-    // What changed since this last said anything.
-    //
-    // Last, and deliberately not awaited by anything above it: the coverage
-    // sweep is the one reading here that can take a moment on a large map, and
-    // the banner is the least urgent thing on the screen. Nothing waits for it,
-    // and a map that has finished drawing before the line appears is the right
-    // order — the map is what you came for.
-    //
-    // The failure is silence. `loadStats` throws where the other readings
-    // swallow (see src/derived.js), because the Statistics panel has somewhere
-    // to put the reason and this does not: a banner that cannot be computed
-    // simply does not appear, and the baseline stays where it was so the next
-    // open can still report whatever happened in between.
-    try {
-      await derived.loadStats();
-      // Quiet on a first run: the introduction is on screen, and a line saying
-      // how much the map has grown is a strange thing to tell somebody who has
-      // not yet been told what the map is. The baseline still moves — see the
-      // note on `show` — so tomorrow reports today rather than everything.
-      whatsNewUi?.show({ quiet: introShowing });
-    } catch {
-      /* no coverage answer, no banner, and no baseline moved */
-    }
+    // Optional news does not wait for a client-side coverage request. A failed
+    // check stays quiet and is retried while the map is visible.
+    announcementsReady = true;
+    whatsNewUi?.show({ quiet: introShowing });
     // Whatever was on the stack was somebody else's map, or this one before it
     // was re-read from the server. Either way there is nothing here to take
     // back any more.
@@ -13187,6 +13151,7 @@ const authState = mountAuth({
     // describes their map and would otherwise make the next account's first
     // open report the difference between two strangers' maps.
     forgetSnapshot();
+    announcementsReady = false;
     whatsNewUi?.hide();
     // …and the copies the service worker keeps of the same answers, which are
     // filed under URLs that say nothing about whose account they describe.

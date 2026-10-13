@@ -268,6 +268,7 @@ export const auth = {
   // How this account likes to look at its map (route colours, hidden
   // activities). Synced so the phone and the laptop agree.
   getPrefs: () => api('GET', '/api/prefs').then((d) => d.prefs ?? {}),
+  whatsNew: (quiet = false) => api('POST', '/api/whats-new', { quiet }),
   setPrefs: (prefs) => api('POST', '/api/prefs', { prefs }),
   // The same save, but allowed to outlive the page.
   //

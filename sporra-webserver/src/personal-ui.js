@@ -124,9 +124,6 @@ export function mountPersonal({
     // The note says what each answer actually means, because the words in the
     // list do not: "substantial" is a threshold somebody chose, and a person
     // deciding between three options deserves to know roughly where it sits.
-    // The workouts sentence is on every one of them — including Never — because
-    // that exception is exactly the thing somebody choosing Never would
-    // otherwise be surprised by later.
     localeSel.value = locale?.() ?? 'en';
     whatsNewSel.value = whatsNew?.() ?? 'substantial';
     whatsNewNote.textContent = {

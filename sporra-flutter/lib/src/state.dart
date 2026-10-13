@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -49,6 +50,37 @@ class AppState extends ChangeNotifier {
   };
 
   double get groundOpacity => ground ? mapOpacity : 0;
+  Map<String, dynamic>? announcement;
+  int announcementRevision = 0;
+  bool _checkingAnnouncements = false;
+  bool get announcementsEnabled => prefs['whatsNew'] != 'never';
+
+  Future<void> checkAnnouncements({bool quiet = false}) async {
+    if (user == null || _checkingAnnouncements) return;
+    final account = user;
+    _checkingAnnouncements = true;
+    try {
+      final result = await api.post('/api/whats-new', {
+        'quiet': quiet,
+      }, invalidate: false);
+      if (user != account || quiet || result['show'] != true) return;
+      announcement = Map<String, dynamic>.from(result);
+      announcementRevision++;
+      notifyListeners();
+    } catch (_) {
+      // News is optional, including when connected to an older server.
+    } finally {
+      _checkingAnnouncements = false;
+    }
+  }
+
+  Future<void> setAnnouncementsEnabled(bool enabled) async {
+    await patchPrefs({'whatsNew': enabled ? 'substantial' : 'never'});
+    if (!enabled) announcement = null;
+    notifyListeners();
+    await checkAnnouncements(quiet: true);
+  }
+
   bool routes = true;
   bool menuOpen = false;
   void setMenuOpen(bool value) {
@@ -182,6 +214,7 @@ class AppState extends ChangeNotifier {
   }
 
   void closeActivity() {
+    if (activity != null) unawaited(HapticFeedback.lightImpact());
     activityRequest++;
     activity = null;
     activitySample = null;
@@ -360,6 +393,7 @@ class AppState extends ChangeNotifier {
   }
 
   void warmData() {
+    unawaited(checkAnnouncements());
     for (final path in ['/api/days', '/api/trips', '/api/routes?fold=1']) {
       unawaited(api.get(path).then<void>((_) {}, onError: (Object _) {}));
     }
@@ -531,6 +565,7 @@ class AppState extends ChangeNotifier {
     await native.signOut();
     api.clear();
     prefs = {};
+    announcement = null;
     user = null;
     undo = null;
     hidden.clear();

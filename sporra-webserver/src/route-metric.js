@@ -55,9 +55,7 @@ export function spanValue(samples, metric, index) {
   const prev = samples[index - 1];
   if (!here || !prev || here.seg !== prev.seg) return null;
   if (metric === 'speed') return here.speed;
-  if (here.ele == null && prev.ele == null) return null;
-  if (here.ele == null) return prev.ele;
-  if (prev.ele == null) return here.ele;
+  if (!Number.isFinite(here.ele) || !Number.isFinite(prev.ele)) return null;
   return (here.ele + prev.ele) / 2;
 }
 
@@ -104,7 +102,7 @@ export function metricColor(metric, unit) {
 }
 
 /**
- * One feature per span that has a value, coloured for `metric`.
+ * Every recorded span stays visible; missing metric data is white.
  *
  * @param {Array<object>} samples
  * @param {'speed'|'elev'} metric
@@ -112,15 +110,14 @@ export function metricColor(metric, unit) {
 export function metricCollection(samples, metric) {
   const domain = metricDomain(samples, metric);
   const features = [];
-  if (!domain) return { type: 'FeatureCollection', features };
   for (let i = 1; i < samples.length; i++) {
     const v = spanValue(samples, metric, i);
-    if (v == null) continue;
     const prev = samples[i - 1];
     const here = samples[i];
+    if (here.seg !== prev.seg) continue;
     features.push({
       type: 'Feature',
-      properties: { color: metricColor(metric, unitOf(v, domain)), i },
+      properties: { color: domain && Number.isFinite(v) ? metricColor(metric, unitOf(v, domain)) : '#ffffff', i },
       geometry: { type: 'LineString', coordinates: [[prev.lng, prev.lat], [here.lng, here.lat]] },
     });
   }

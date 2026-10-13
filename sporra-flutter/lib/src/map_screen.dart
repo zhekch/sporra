@@ -149,6 +149,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   DateTime? routesUpdated;
   Object? photosView;
   String? observedError;
+  int observedAnnouncement = 0;
   Timer? fade;
   double activityCardHeight = 330, placeCardHeight = 150;
   Size mapSize = const Size(390, 844);
@@ -1486,7 +1487,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
       bearing: preferences.bearing,
     );
     WidgetsBinding.instance.addObserver(this);
-    sunTimer = Timer.periodic(const Duration(minutes: 1), (_) => updateSun());
+    sunTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      updateSun();
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        unawaited(ref.read(appProvider).checkAnnouncements());
+      }
+    });
   }
 
   @override
@@ -1499,6 +1505,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       unawaited(ref.read(appProvider).mapPreferences.flush());
     } else if (state == AppLifecycleState.resumed) {
       updateSun();
+      unawaited(ref.read(appProvider).checkAnnouncements());
       unawaited(refresh());
     }
   }
@@ -1519,6 +1526,33 @@ class _MapScreenState extends ConsumerState<MapScreen>
   @override
   Widget build(BuildContext context) {
     final app = ref.watch(appProvider);
+    if (observedAnnouncement != app.announcementRevision) {
+      observedAnnouncement = app.announcementRevision;
+      final notice = app.announcement;
+      if (notice != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted ||
+              !app.announcementsEnabled ||
+              app.announcement != notice) {
+            return;
+          }
+          final ids = notice['activityIds'] as List? ?? [];
+          showToast(
+            context,
+            '${notice['title']}\n${notice['detail']}',
+            duration: const Duration(seconds: 12),
+            action: 'Show',
+            onAction: () {
+              if (ids.length == 1) {
+                unawaited(app.openActivity(ids.single));
+              } else {
+                unawaited(showStats(context, app));
+              }
+            },
+          );
+        });
+      }
+    }
     if (app.activity != null) placeInfo = null;
     if (observedTrack != app.track) {
       observedTrack = app.track;

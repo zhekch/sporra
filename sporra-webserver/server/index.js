@@ -86,6 +86,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeLimiter, clientIp } from './rate-limit.js';
 import * as derive from './derive.js';
+import { announcementFor, announcementBaseline } from './announcements.js';
 import * as render from './render.js';
 import * as renderGeo from './render-geography.js';
 import * as renderReference from './render-reference.js';
@@ -111,7 +112,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.142.0';
+export const SERVER_VERSION = '0.143.0';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -343,6 +344,10 @@ db.exec(`
     -- deliberately not consulted for anything else: while it is set, the session
     -- is the other account in every respect, permissions included.
     admin_id   INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS user_announcements (
+    user_id INTEGER PRIMARY KEY,
+    snapshot TEXT NOT NULL
   );
   -- Legacy single-blob storage. Kept as a backup of the pre-provenance data;
   -- nothing writes to it any more (see migrateCellSets).
@@ -609,6 +614,11 @@ const q = {
   countSessions: db.prepare('SELECT user_id, COUNT(*) AS n FROM sessions GROUP BY user_id'),
 
   prefs: db.prepare('SELECT prefs FROM user_prefs WHERE user_id = ?'),
+  announcements: db.prepare('SELECT snapshot FROM user_announcements WHERE user_id = ?'),
+  setAnnouncements: db.prepare(`
+    INSERT INTO user_announcements(user_id, snapshot) VALUES(?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET snapshot = excluded.snapshot
+  `),
   setPrefs: db.prepare(`
     INSERT INTO user_prefs(user_id, prefs, updated_at) VALUES(?, ?, ?)
     ON CONFLICT(user_id) DO UPDATE SET prefs = excluded.prefs, updated_at = excluded.updated_at
@@ -2233,6 +2243,7 @@ const USER_TABLES = [
   'ha_links',
   'strava_links',
   'user_prefs',
+  'user_announcements',
   'device_links',
   'device_workouts',
 ];
@@ -3267,6 +3278,24 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       const head = conditional(req, res, signature);
       if (!head) return;
       return send(res, 200, await derive.trips(user.id, signature, supply), head);
+    }
+
+    if (req.method === 'POST' && pathname === '/api/whats-new') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      const body = await readBody(req);
+      const { signature, supply } = derivedFor(user);
+      const snapshot = await derive.announcementSnapshot(user.id, signature, supply);
+      // No awaits after reading the baseline: two simultaneous clients cannot
+      // both consume the same announcement.
+      const before = JSON.parse(q.announcements.get(user.id)?.snapshot ?? 'null');
+      const prefs = JSON.parse(q.prefs.get(user.id)?.prefs ?? '{}');
+      const mode = ['never', 'always', 'substantial'].includes(prefs.whatsNew) ? prefs.whatsNew : 'substantial';
+      const notice = announcementFor(before, snapshot, mode, body?.quiet === true);
+      if (!before || notice.show || mode === 'never' || body?.quiet === true) {
+        q.setAnnouncements.run(user.id, JSON.stringify(announcementBaseline(before, snapshot)));
+      }
+      return send(res, 200, notice);
     }
 
     if (req.method === 'GET' && pathname === '/api/stats') {

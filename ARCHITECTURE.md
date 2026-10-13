@@ -3506,92 +3506,46 @@ the whole map as news. See the section below for why that distinction matters.
 
 ## What changed while you were not looking
 
-`src/whats-new.js` is the arithmetic; `src/whats-new-ui.js` is the banner.
+`server/announcements.js` decides what is worth announcing; `derive.announcementSnapshot`
+computes named places and folded activity identities. `POST /api/whats-new`
+returns the title, detail, named countries/cities/regions and activity IDs.
+Flutter and `src/whats-new-ui.js` display that answer rather than comparing
+coverage counters independently. They check on opening or returning to the app,
+after native sync, and once per minute while visible.
 
-The map is filled in by things that are not you — a phone in your pocket, a
-watch that saved a ride, Home Assistant noticing you came home, a Strava sync at
-four in the morning. So opening it is the interesting moment: the ground has
-moved and nothing on screen says so, because **a map that has grown looks exactly
-like a map that has not**.
+The baseline is persisted in `user_announcements`, separate from user preferences
+so a delayed preference upload cannot roll it back. It holds country, city,
+region and activity identities plus the greatest announced coverage. The
+endpoint reads the baseline only after the asynchronous derivation and updates
+it synchronously before answering: simultaneous devices consume a change once.
+Deletion removes this table's rows with the rest of the account.
 
-### Since when, and why it is not "since last time you opened it"
+The first check records a baseline silently. A quiet check and the `never`
+setting also advance it silently, so enabling announcements later does not
+announce the whole past year. Otherwise it advances when something is reported.
+Identity sets only grow, so removing a source cannot announce an old place again.
 
-Since the last time a banner was *shown*. That distinction is the whole of why
-the middle setting works. If the baseline moved on every open, four days of one
-cell each would each be too small to mention and the fifth would report one cell
-— and a week would pass without a word. Holding the baseline until something is
-actually said lets small changes accumulate until they are worth saying.
+Every new country, city or region is named, with at most three names followed by
+how many more. Cities come from the existing gazetteer at cell centres, memoized
+at about a kilometre. A nearest town thirty kilometres away can name a route but
+is not evidence of visiting that town: the announcement lookup accepts towns
+within 1.5–8 km depending on population. New activities from **every source**
+are announced, and duplicate groups count once even if a preferred recording
+changes. The action opens the exact activity ID returned by the server.
 
-Two consequences, both deliberate:
+Bare cell counts are never announced. Small additions within an already visited
+place stay quiet. Unnamed new ground accumulates until 400 km² in `substantial`
+mode, or 1 km² in `always` mode. Those thresholds live at the top of
+`server/announcements.js`. `never` suppresses **both activities and ground**.
+The preference remains `whatsNew` on the account; Flutter presents it as an
+on/off switch in Personal settings and the web retains its frequency selector.
+Legacy counter snapshots are retained only for compatibility with old clients.
 
-- **The first open ever shows nothing.** There is no baseline, so there is no
-  change. A banner announcing that you have 12,000 places is not news, it is the
-  map. The baseline is recorded and the next visit is the first that can report
-  anything.
-- **`never` moves the baseline anyway.** Otherwise switching it on after a year
-  would open on "+38,000 places", which is a number nobody can feel and not what
-  anybody meant by turning the setting on.
-
-**Only growth is reported**, and that is not laziness. Cells go *down* when you
-take a source off the map or undo an import — both things you just did on
-purpose — and being told about them on the next open is the app reading your own
-action back to you. There is no honest "you lost 300 km²" that is also welcome.
-
-### Both the frequency and the baseline follow the account
-
-The setting rides in the account's preferences beside the clock: how much you
-want to be told is a fact about you. So does the **snapshot** it is measured
-against, and that is a reversal.
-
-It used to stay in this browser's localStorage, on the argument that it answers
-*since you last saw this banner* and the laptop and the phone have seen
-different banners at different times. What that produced in practice was one
-ride announced twice — on the phone when it was picked up, and again on the
-laptop an hour later — and news you have already had is not news. The banner is
-about what changed, not about which machine you are reading it on.
-
-Both copies are still written. The local one is what makes the banner work with
-no server and what survives a push that never landed; the account's is what the
-other device reads. They are **merged rather than reconciled**, field by field,
-taking the larger of the two (`mergeSnapshots`). A snapshot is a set of counters
-that only ever grow, so the higher number is the one that has already been
-reported — which makes the merge the safe direction: it can suppress a line and
-it cannot cause one to be shown twice. A timestamp comparison could not promise
-that. A phone that showed the banner while the laptop was asleep would still
-lose to the laptop's older, lower baseline the moment the laptop pushed a colour
-change, and the news would come round again.
-
-The merge happens in `syncPrefs`, off the account's own copy rather than off the
-adopted state — the same place and the same reason as `offerIntro`, because the
-"push" branch never fills the adopted state in. It runs *before* the banner is
-decided, since `onAuthed` awaits the sync and shows the banner after it. And
-when the merge comes out ahead of what the account holds, the account is the
-copy that is behind, so it is pushed back: that is a browser whose own banner
-never got sent, and leaving the lower number on the account would let the other
-device announce the same thing again.
-
-The baseline moving is now a *write*, so it is pushed straight out rather than
-on the 600 ms debounce (`onSeen`). The whole point is that the device you pick
-up next stays quiet, and next can be a minute away.
-
-### Workouts are the exception, at every setting
-
-A new workout out of Apple Health is the one change here that came from something
-you *did*: you went for a ride, and a watch and two syncs later it is on the map.
-That is worth saying whatever the frequency says, so it is counted separately —
-routes whose source is `apple-health` — and reported unconditionally. On `never`
-you get the workout and none of the coverage, which is what `never` means.
-
-The thresholds for "substantial" are constants at the top of `src/whats-new.js`
-and they are two different kinds of thing. A country or a region is
-*categorical* — there is no such thing as a slightly new country — so one of
-either is always a line. Ground is continuous and needs a number: 20 cells or
-400 km², which is more than a walk to the shops and less than a day out. A record
-streak counts at any length, being the one figure that can only be beaten rather
-than accumulated.
-
-`scripts/test/whats-new.mjs` pins all four of the decisions above, because every
-one of them is the sort of thing a later reader would "fix" back.
+`scripts/test/announcements.mjs` exercises the real endpoint with isolated data:
+named cities and countries, equal counts with different identities, small-change
+suppression, concurrent devices, new non-Health activities, reimports, disabling,
+quiet checks and account isolation. `scripts/test/account-delete.mjs` checks
+that baseline rows are removed with their owner.
 
 ### Days, and what a streak is not
 
@@ -10347,3 +10301,16 @@ camera changes; moving away clears it, and focusing restores it.
 Flutter 0.17.8 removes the closing-blur experiment and restores the original
 panel and dialog transitions. The snapshot capture bridge and its frame
 callbacks are removed after device testing showed severe movement stalls.
+
+### Missing activity measurements and compact loaders
+
+`src/route-metric.js` emits every recorded span within a route segment. Missing
+or non-finite speed/elevation is white, and elevation requires both ends to be
+measured. Real segment breaks remain gaps. The same collection drives web and
+Flutter maps, so changing metrics never makes unmeasured route sections vanish.
+Flutter activity dismissal uses the same light haptic as closing a menu.
+
+An unlabeled `LoadingIndicator` centres a 24×24 ring with width and height
+factors of one: a full-width settings list may centre it, while a ListTile
+trailing slot still receives a compact widget. This prevents a stretched
+rotating oval without expanding a compact loading control to the tile width.

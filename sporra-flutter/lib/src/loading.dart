@@ -49,7 +49,11 @@ class _LoadingIndicatorState extends State<LoadingIndicator>
       ),
     );
     if (!widget.showLabel) {
-      return Semantics(label: widget.label, child: spinner);
+      return Center(
+        widthFactor: 1,
+        heightFactor: 1,
+        child: Semantics(label: widget.label, child: spinner),
+      );
     }
     return Semantics(
       liveRegion: true,

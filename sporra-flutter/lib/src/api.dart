@@ -303,8 +303,12 @@ class SporraApi {
     return {for (var i = 0; i < entries.length; i++) entries[i].key: values[i]};
   }
 
-  Future<dynamic> post(String path, Map<String, dynamic> value) async {
-    clear();
+  Future<dynamic> post(
+    String path,
+    Map<String, dynamic> value, {
+    bool invalidate = true,
+  }) async {
+    if (invalidate) clear();
     final response = await client
         .post(
           uri(path),
@@ -316,7 +320,7 @@ class SporraApi {
         )
         .timeout(const Duration(minutes: 2));
     final result = _decode(response);
-    clear();
+    if (invalidate) clear();
     return result;
   }
 

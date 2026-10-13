@@ -161,6 +161,9 @@ try {
   db.prepare('INSERT INTO cell_sets(user_id, data, updated_at) VALUES(?, ?, ?)')
     .run(bystanderId, '["8/9/4"]', new Date().toISOString());
 
+  await api('POST', '/api/whats-new', {quiet:true});
+  db.prepare('INSERT INTO user_announcements(user_id,snapshot) VALUES(?,?)').run(bystanderId, '{}');
+
   const before = rowsFor(doomedId);
   const emptyBefore = Object.entries(before).filter(([, n]) => !n).map(([t]) => t);
   check(emptyBefore.length === 0, 'every table has at least one row to delete',

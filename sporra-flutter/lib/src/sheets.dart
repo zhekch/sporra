@@ -1674,6 +1674,15 @@ Future<void> showSettings(BuildContext context, AppState app) => panel(
           children: [
             if (tab == 'Personal') ...[
               section('Personal'),
+              GlassSwitch(
+                title: const Text('What’s new / new ground'),
+                subtitle: const Text(
+                  'Announce new activities and newly visited places.',
+                ),
+                value: app.announcementsEnabled,
+                onChanged: (value) =>
+                    app.run(() => app.setAnnouncementsEnabled(value)),
+              ),
               section('Manual edit'),
               ListTile(
                 leading: const SFIcon(
