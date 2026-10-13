@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui';
+
+import 'package:flutter/foundation.dart';
 
 import 'package:geolocator/geolocator.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' as mb;
@@ -11,6 +12,25 @@ mb.Point mapboxPoint(LatLng p) =>
     mb.Point(coordinates: mb.Position(p.longitude, p.latitude));
 LatLng mapboxLatLng(mb.Point p) =>
     LatLng(p.coordinates.lat.toDouble(), p.coordinates.lng.toDouble());
+
+Future<String> encodeNativeGeoJson(Map<String, dynamic> value) async {
+  final data = value['data'] is Map ? value['data'] as Map : value;
+  final features = data['features'] as List?;
+  var positions = 0;
+  bool large(dynamic coordinates) {
+    if (coordinates is! List || coordinates.isEmpty) return false;
+    if (coordinates.first is num) return ++positions >= 2000;
+    return coordinates.any(large);
+  }
+
+  final heavy =
+      features != null &&
+      (features.length >= 100 ||
+          features.any(
+            (feature) => large(feature['geometry']?['coordinates']),
+          ));
+  return heavy ? compute(jsonEncode, value) : jsonEncode(value);
+}
 
 // Keep app overlays in the style specification both engines understand. Only
 // the adapter knows about Standard's slots and the SDK's camera/image APIs.
@@ -187,13 +207,18 @@ class NativeMapController {
   Future<void> addSource(String id, SourceProperties props) async {
     if (libre != null) return libre!.addSource(id, props);
     final p = props.toJson();
-    await box!.addStyleSource(id, jsonEncode(p));
+    await box!.addStyleSource(id, await encodeNativeGeoJson(p));
   }
 
-  Future<void> setGeoJsonSource(String id, Map<String, dynamic> data) =>
-      libre != null
-      ? libre!.setGeoJsonSource(id, data)
-      : box!.setStyleSourceProperty(id, 'data', jsonEncode(data));
+  Future<void> setGeoJsonSource(String id, Map<String, dynamic> data) async {
+    if (libre != null) return libre!.setGeoJsonSource(id, data);
+    await box!.setStyleSourceProperty(
+      id,
+      'data',
+      await encodeNativeGeoJson(data),
+    );
+  }
+
   Future<void> addImageSource(
     String id,
     Uint8List bytes,
@@ -236,10 +261,13 @@ class NativeMapController {
 
   Future<void> setLayerProperties(String id, LayerProperties props) async {
     if (libre != null) return libre!.setLayerProperties(id, props);
-    for (final p in props.toJson().entries) {
-      if (p.value != null) await box!.setStyleLayerProperty(id, p.key, p.value);
-    }
+    final properties = props.toJson()..removeWhere((_, value) => value == null);
+    await box!.setStyleLayerProperties(id, jsonEncode(properties));
   }
+
+  Future<void> setFilter(String id, List<dynamic> filter) => libre != null
+      ? libre!.setFilter(id, filter)
+      : box!.setStyleLayerProperty(id, 'filter', filter);
 
   Future<void> setLayerVisibility(String id, bool visible) => libre != null
       ? libre!.setLayerVisibility(id, visible)

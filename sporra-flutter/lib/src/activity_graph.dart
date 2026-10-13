@@ -121,7 +121,7 @@ class ActivityCard extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(18, 2, 18, 10),
                     child: ActivityGraph(
-                      graph: Map<String, dynamic>.from(graph),
+                      graph: graph as Map<String, dynamic>,
                       selected: app.activitySample,
                       onScrub: app.scrubActivity,
                     ),
@@ -341,7 +341,7 @@ class _ActivityCardDragState extends State<ActivityCardDrag> {
   );
 }
 
-class ActivityGraph extends StatelessWidget {
+class ActivityGraph extends StatefulWidget {
   const ActivityGraph({
     super.key,
     required this.graph,
@@ -352,21 +352,60 @@ class ActivityGraph extends StatelessWidget {
   final int? selected;
   final ValueChanged<int> onScrub;
   @override
+  State<ActivityGraph> createState() => _ActivityGraphState();
+}
+
+class _ActivityGraphState extends State<ActivityGraph> {
+  late List<dynamic> points;
+  late Map<int, dynamic> samples;
+  Map<String, dynamic> get graph => widget.graph;
+  @override
+  void initState() {
+    super.initState();
+    prepare();
+  }
+
+  void prepare() {
+    final all = (graph['runs'] as List).expand((run) => run as List).toList();
+    points = [];
+    for (final point in all) {
+      if (points.isEmpty || points.last['x'] != point['x']) points.add(point);
+    }
+    samples = {for (final point in all) (point['i'] as num).toInt(): point};
+  }
+
+  @override
+  void didUpdateWidget(ActivityGraph old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.graph, graph)) prepare();
+  }
+
+  @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final width = constraints.maxWidth;
-      final points = (graph['runs'] as List).expand((r) => r as List).toList();
-      final chosen = points.where((p) => p['i'] == selected).firstOrNull;
+      final chosen = samples[widget.selected];
       void scrub(Offset position) {
+        if (points.isEmpty || width <= 4) return;
         final x =
             ((position.dx - 2) / (width - 4)).clamp(0.0, 1.0) *
             (graph['maxX'] as num);
-        final nearest = points.reduce(
-          (a, b) => ((a['x'] as num) - x).abs() <= ((b['x'] as num) - x).abs()
-              ? a
-              : b,
-        );
-        onScrub((nearest['i'] as num).toInt());
+        var lo = 0, hi = points.length;
+        while (lo < hi) {
+          final mid = (lo + hi) ~/ 2;
+          if ((points[mid]['x'] as num) < x) {
+            lo = mid + 1;
+          } else {
+            hi = mid;
+          }
+        }
+        var index = math.min(lo, points.length - 1);
+        if (index > 0 &&
+            (x - (points[index - 1]['x'] as num)).abs() <=
+                ((points[index]['x'] as num) - x).abs()) {
+          index--;
+        }
+        widget.onScrub((points[index]['i'] as num).toInt());
       }
 
       return Semantics(
@@ -398,7 +437,15 @@ class ActivityGraph extends StatelessWidget {
               child: SizedBox(
                 height: 72,
                 width: width,
-                child: CustomPaint(painter: _GraphPainter(graph, selected)),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    RepaintBoundary(
+                      child: CustomPaint(painter: _GraphPainter(graph, null)),
+                    ),
+                    CustomPaint(painter: _GraphCursorPainter(graph, chosen)),
+                  ],
+                ),
               ),
             ),
             SizedBox(
@@ -410,6 +457,39 @@ class ActivityGraph extends StatelessWidget {
       );
     },
   );
+}
+
+class _GraphCursorPainter extends CustomPainter {
+  _GraphCursorPainter(this.graph, this.point);
+  final Map<String, dynamic> graph;
+  final dynamic point;
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (point == null) return;
+    final min = graph['min'] as num, max = graph['max'] as num;
+    final position = Offset(
+      2 +
+          (point['x'] as num) /
+              math.max(1, graph['maxX'] as num) *
+              (size.width - 4),
+      6 +
+          (1 - ((point['y'] as num) - min) / (max == min ? 1 : max - min)) *
+              (size.height - 12),
+    );
+    canvas.drawCircle(position, 4.5, Paint()..color = Colors.white);
+    canvas.drawCircle(
+      position,
+      4.5,
+      Paint()
+        ..color = Colors.black54
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_GraphCursorPainter old) =>
+      old.graph != graph || old.point != point;
 }
 
 class _GraphPainter extends CustomPainter {

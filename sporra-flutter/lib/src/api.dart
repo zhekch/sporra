@@ -6,6 +6,8 @@ import 'package:cupertino_http/cupertino_http.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'cell_snapshot.dart';
+
 class ApiException implements Exception {
   ApiException(this.status, this.message);
   final int status;
@@ -46,12 +48,20 @@ class SporraApi {
   static const offlineRetention = Duration(days: 30);
   static const mapFreshness = Duration(minutes: 5);
   void Function()? onMapDataChanged;
+  final _updates = StreamController<Uri>.broadcast();
+  Stream<Uri> get updates => _updates.stream;
+  final _cells = CellSnapshotReader();
+  final _pathEpochs = <String, int>{};
+  final _contentRevisions = <String, int>{};
   final _revalidated = <String, DateTime>{};
   Timer? _prefetchTimer;
   int _prefetchGeneration = 0;
   final _cache = <String, ({String? tag, String json, DateTime at})>{};
-  final _pending = <String, Future<dynamic>>{};
+  final _pending = <String, Future<String>>{};
   int _epoch = 0;
+  int _revision = 0;
+  int _cacheVersion = 0;
+  int _queuedSaveVersion = 0;
   File? _file;
   String? _scope;
   Timer? _saveTimer;
@@ -136,7 +146,8 @@ class SporraApi {
   Future<void> flushCache() {
     _saveTimer?.cancel();
     final file = _file;
-    if (file == null) return _diskWork;
+    if (file == null || _queuedSaveVersion == _cacheVersion) return _diskWork;
+    _queuedSaveVersion = _cacheVersion;
     final snapshot = {
       'scope': _scope,
       'entries': [
@@ -162,6 +173,11 @@ class SporraApi {
 
   void clear() {
     _epoch++;
+    _revision++;
+    _cacheVersion++;
+    _pathEpochs.clear();
+    _contentRevisions.clear();
+    _cells.clear();
     cancelPrefetch();
     _revalidated.clear();
     _cache.clear();
@@ -177,7 +193,45 @@ class SporraApi {
     }
   }
 
-  Future<dynamic> get(String path, {bool refresh = false}) async {
+  void _invalidatePaths(Set<String> paths) {
+    _revision++;
+    _cacheVersion++;
+    cancelPrefetch();
+    for (final path in paths) {
+      _pathEpochs[path] = (_pathEpochs[path] ?? 0) + 1;
+    }
+    bool affected(String key) => paths.contains(Uri.parse(key).path);
+    _cache.removeWhere((key, _) => affected(key));
+    _pending.removeWhere((key, _) => affected(key));
+    _revalidated.removeWhere((key, _) => affected(key));
+    _save();
+  }
+
+  Object revisionFor(String path) =>
+      (_epoch, _pathEpochs[path] ?? 0, _contentRevisions[path] ?? 0);
+
+  Future<dynamic> get(
+    String path, {
+    bool refresh = false,
+    bool allowStale = false,
+  }) async => decodeJson(
+    await _getJson(path, refresh: refresh, allowStale: allowStale),
+  );
+
+  Future<Map<String, dynamic>> getCells(
+    String path,
+    List<double> bounds,
+  ) async {
+    final epoch = _epoch;
+    final json = await _getJson(path);
+    return _cells.read('$epoch\n${uri(path)}', json, bounds);
+  }
+
+  Future<String> _getJson(
+    String path, {
+    bool refresh = false,
+    bool allowStale = false,
+  }) async {
     final url = uri(path);
     final key = url.toString();
     final cached = _cache[key];
@@ -186,8 +240,8 @@ class SporraApi {
         cached != null &&
         freshness != null &&
         DateTime.now().difference(cached.at) <
-            (_isMap(url) ? offlineRetention : freshness)) {
-      if (_isMap(url) &&
+            (_isMap(url) || allowStale ? offlineRetention : freshness)) {
+      if ((_isMap(url) || allowStale) &&
           DateTime.now().difference(cached.at) >= freshness &&
           DateTime.now().difference(_revalidated[key] ?? cached.at) >=
               freshness) {
@@ -199,12 +253,17 @@ class SporraApi {
       // Callers filter and decorate GeoJSON; never lend them the cached object.
       _cache.remove(key);
       _cache[key] = cached;
-      return decodeJson(cached.json);
+      return cached.json;
     }
     final epoch = _epoch;
-    final work = _pending[key] ??= _read(url, cached, epoch);
+    final work = _pending[key] ??= _read(
+      url,
+      cached,
+      epoch,
+      _pathEpochs[url.path] ?? 0,
+    );
     try {
-      return await decodeJson(await work as String);
+      return await work;
     } finally {
       if (identical(_pending[key], work)) _pending.remove(key);
     }
@@ -214,6 +273,7 @@ class SporraApi {
     Uri url,
     ({String? tag, String json, DateTime at})? cached,
     int epoch,
+    int pathEpoch,
   ) async {
     http.Response response;
     try {
@@ -232,6 +292,7 @@ class SporraApi {
               error is TimeoutException) &&
           cached != null &&
           epoch == _epoch &&
+          pathEpoch == (_pathEpochs[url.path] ?? 0) &&
           DateTime.now().difference(cached.at) < offlineRetention) {
         return cached.json;
       }
@@ -244,8 +305,12 @@ class SporraApi {
     }
     final json = response.statusCode == 304 && cached != null
         ? cached.json
+        : response.bodyBytes.length >= isolateThreshold
+        ? await compute(_responseBody, response)
         : response.body;
-    if (epoch == _epoch && _freshness(url) != null) {
+    if (epoch == _epoch &&
+        pathEpoch == (_pathEpochs[url.path] ?? 0) &&
+        _freshness(url) != null) {
       _cache.remove(url.toString());
       _cache[url.toString()] = (
         tag:
@@ -255,9 +320,16 @@ class SporraApi {
         at: DateTime.now(),
       );
       _trim();
+      _cacheVersion++;
       _save();
-      if (_isMap(url) && cached != null && cached.json != json) {
-        onMapDataChanged?.call();
+      if (cached != null && cached.json != json) {
+        _contentRevisions[url.path] = (_contentRevisions[url.path] ?? 0) + 1;
+        _updates.add(url);
+        if (_isMap(url) ||
+            url.path == '/api/render/routes' ||
+            url.path == '/api/routes') {
+          onMapDataChanged?.call();
+        }
       }
     }
     return json;
@@ -281,7 +353,11 @@ class SporraApi {
           if (generation != _prefetchGeneration || epoch != _epoch) return;
         }
         try {
-          await get(path);
+          final json = await _getJson(path);
+          if (generation != _prefetchGeneration || epoch != _epoch) return;
+          if (uri(path).path == '/api/render/cells') {
+            await _cells.read('$epoch\n${uri(path)}', json, null);
+          }
         } catch (_) {
           return; // A struggling connection should not spend time on speculation.
         }
@@ -295,11 +371,16 @@ class SporraApi {
       ? compute(jsonDecode, json)
       : jsonDecode(json);
 
-  int get revision => _epoch;
+  int get revision => _revision;
 
-  Future<Map<String, dynamic>> getMany(Map<String, String> paths) async {
+  Future<Map<String, dynamic>> getMany(
+    Map<String, String> paths, {
+    bool allowStale = false,
+  }) async {
     final entries = paths.entries.toList();
-    final values = await Future.wait(entries.map((entry) => get(entry.value)));
+    final values = await Future.wait(
+      entries.map((entry) => get(entry.value, allowStale: allowStale)),
+    );
     return {for (var i = 0; i < entries.length; i++) entries[i].key: values[i]};
   }
 
@@ -308,7 +389,19 @@ class SporraApi {
     Map<String, dynamic> value, {
     bool invalidate = true,
   }) async {
-    if (invalidate) clear();
+    // Ground snapshots are determined by their query and stored visits, not
+    // display preferences. Saving a switch must not discard every zoom level.
+    final paths = path == '/api/prefs'
+        ? const {
+            '/api/prefs',
+            '/api/render/routes',
+            '/api/trips',
+            '/api/search',
+            '/api/render/track',
+          }
+        : null;
+    void invalidateData() => paths == null ? clear() : _invalidatePaths(paths);
+    if (invalidate) invalidateData();
     final response = await client
         .post(
           uri(path),
@@ -320,7 +413,7 @@ class SporraApi {
         )
         .timeout(const Duration(minutes: 2));
     final result = _decode(response);
-    if (invalidate) clear();
+    if (invalidate) invalidateData();
     return result;
   }
 
@@ -349,4 +442,15 @@ class SporraApi {
     }
     return response.bodyBytes;
   }
+
+  void dispose() {
+    cancelPrefetch();
+    _saveTimer?.cancel();
+    onMapDataChanged = null;
+    _cells.dispose();
+    unawaited(_updates.close());
+    client.close();
+  }
 }
+
+String _responseBody(http.Response response) => response.body;

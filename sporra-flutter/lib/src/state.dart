@@ -18,7 +18,28 @@ final appProvider = ChangeNotifierProvider((ref) => AppState());
 class AppState extends ChangeNotifier {
   AppState({SporraApi? api}) : api = api ?? SporraApi() {
     this.api.onMapDataChanged = changed;
+    _responses = this.api.updates.listen((url) {
+      final id = activity?['route']['id'];
+      if (url.path != '/api/render/activity' ||
+          id == null ||
+          '$id' != url.queryParameters['id'] ||
+          requestedActivity != id) {
+        return;
+      }
+      final request = activityRequest;
+      unawaited(
+        this.api.get(url.toString()).then<void>((value) {
+          if (request != activityRequest || activity == null) return;
+          applyActivity(
+            Map<String, dynamic>.from(value),
+            keepMetric: true,
+            select: false,
+          );
+        }, onError: (Object _) {}),
+      );
+    });
   }
+  late final StreamSubscription<Uri> _responses;
   final SporraApi api;
   final mapPreferences = MapPreferences();
   final native = SporraNative();
@@ -167,7 +188,7 @@ class AppState extends ChangeNotifier {
   Future<void> randomActivityColors(List<String> sports) async {
     final result = await api.post('/api/render/activity-palette', {
       'keys': sports,
-    });
+    }, invalidate: false);
     await saveRouteView({
       'colors': {...?routeView['colors'] as Map?, ...result['colors'] as Map},
       'rainbow': false,
@@ -191,31 +212,47 @@ class AppState extends ChangeNotifier {
   String? activityMetric;
   int? activitySample;
   int activityRequest = 0;
+  dynamic requestedActivity;
   Future<void> openActivity(dynamic id, {bool keepMetric = false}) {
     final request = ++activityRequest;
+    requestedActivity = id;
     return run(() async {
-      final data = Map<String, dynamic>.from(
-        await api.get('/api/render/activity?id=$id'),
+      final path = '/api/render/activity?id=$id';
+      final version = api.revisionFor('/api/render/activity');
+      var data = Map<String, dynamic>.from(
+        await api.get(path, allowStale: true),
       );
+      if (version != api.revisionFor('/api/render/activity')) {
+        data = Map<String, dynamic>.from(await api.get(path));
+      }
       if (request != activityRequest) return;
-      final graphs = data['graphs'] as Map;
-      activityMetric = keepMetric && graphs[activityMetric] != null
-          ? activityMetric
-          : graphs['speed'] != null
-          ? 'speed'
-          : graphs['elev'] != null
-          ? 'elev'
-          : null;
-      activity = data;
-      activitySample = null;
-      selectedRoute = id;
-      changed();
+      applyActivity(data, keepMetric: keepMetric);
     });
+  }
+
+  void applyActivity(
+    Map<String, dynamic> data, {
+    bool keepMetric = false,
+    bool select = true,
+  }) {
+    final graphs = data['graphs'] as Map;
+    activityMetric = keepMetric && graphs[activityMetric] != null
+        ? activityMetric
+        : graphs['speed'] != null
+        ? 'speed'
+        : graphs['elev'] != null
+        ? 'elev'
+        : null;
+    activity = data;
+    activitySample = null;
+    if (select) selectedRoute = data['route']['id'];
+    changed();
   }
 
   void closeActivity() {
     if (activity != null) unawaited(HapticFeedback.lightImpact());
     activityRequest++;
+    requestedActivity = null;
     activity = null;
     activitySample = null;
     activityMetric = null;
@@ -263,6 +300,7 @@ class AppState extends ChangeNotifier {
       final data = Map<String, dynamic>.from(results[0]);
       if (request != trackRequest) return;
       activityRequest++;
+      requestedActivity = null;
       activity = null;
       activityMetric = null;
       activitySample = null;
@@ -394,7 +432,12 @@ class AppState extends ChangeNotifier {
 
   void warmData() {
     unawaited(checkAnnouncements());
-    for (final path in ['/api/days', '/api/trips', '/api/routes?fold=1']) {
+    for (final path in [
+      '/api/days',
+      '/api/trips',
+      '/api/routes?fold=1',
+      '/api/render/activity-stats',
+    ]) {
       unawaited(api.get(path).then<void>((_) {}, onError: (Object _) {}));
     }
   }
@@ -561,6 +604,14 @@ class AppState extends ChangeNotifier {
       await clearSession();
     }
   });
+  @override
+  void dispose() {
+    activityRequest++;
+    unawaited(_responses.cancel());
+    api.dispose();
+    super.dispose();
+  }
+
   Future<void> clearSession() async {
     await native.signOut();
     api.clear();
@@ -572,6 +623,7 @@ class AppState extends ChangeNotifier {
     clearPhotos();
     recordedDays = [];
     activityRequest++;
+    requestedActivity = null;
     activity = null;
     activityMetric = null;
     activitySample = null;

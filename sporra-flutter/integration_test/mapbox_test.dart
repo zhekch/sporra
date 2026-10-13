@@ -94,6 +94,25 @@ void main() {
         'test-pins',
         const CircleLayerProperties(circleOpacity: 0.8),
       );
+      final opacity = await map.getStyleLayerProperty(
+        'test-pins',
+        'circle-opacity',
+      );
+      expect(opacity.value, closeTo(0.8, 1e-6));
+      await c.setFilter('activities-line', [
+        '==',
+        ['get', 'id'],
+        42,
+      ]);
+      final filter = await map.getStyleLayerProperty(
+        'activities-line',
+        'filter',
+      );
+      expect(filter.value, [
+        '==',
+        ['get', 'id'],
+        42,
+      ]);
       final recorder = ui.PictureRecorder();
       Canvas(
         recorder,

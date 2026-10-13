@@ -8,6 +8,22 @@ import 'blob.dart';
 final regionFineZoom = 13.6 - 6 * math.log(3) / math.ln2;
 const routeTapPadding = 8.0;
 const trackColor = '#ffcf4d';
+
+List<dynamic> activityFilter(dynamic selected, dynamic metricRoute) => [
+  'all',
+  if (selected != null)
+    [
+      '==',
+      ['get', 'id'],
+      selected,
+    ],
+  if (metricRoute != null)
+    [
+      '!=',
+      ['get', 'id'],
+      metricRoute,
+    ],
+];
 // Geometry only; visit aggregation stays in the shared server rollup.
 String cellKey(int level, double lng, double lat) {
   final columns = (625482 / math.pow(3, level)).round();

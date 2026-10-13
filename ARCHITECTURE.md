@@ -10321,3 +10321,65 @@ An unlabeled `LoadingIndicator` centres a 24×24 ring with width and height
 factors of one: a full-width settings list may centre it, while a ListTile
 trailing slot still receives a compact widget. This prevents a stretched
 rotating oval without expanding a compact loading control to the tile width.
+
+### Flutter interaction and zoom latency (0.20.0)
+
+Full cell snapshots now stay in a long-lived Dart isolate. `CellSnapshotReader`
+decodes a snapshot once and indexes its Mercator coordinates in 256×256 buckets.
+Only cells inside the padded viewport return to the UI isolate, in their
+original compositing order, with independently owned visit facts. Directed
+longitude intervals handle Greenwich and the date line. Its LRU retains at most
+three prepared snapshots and 24 MiB of estimated JSON string size; decoded
+objects and bucket indexes add memory beyond that estimate. Oversized snapshots
+are used for the current request without remaining in the LRU. Account/cache
+clearing clears those prepared snapshots too. Idle prefetch prepares cell indexes
+without transferring full off-screen snapshots into Flutter. Large HTTP response
+text decoding and large Mapbox GeoJSON encoding also run outside the UI isolate.
+
+Ground render identity follows the data, filters, level, fine-boundary mode,
+camera focus and output size, rather than every AppState revision. Opening an
+activity or changing opacity therefore retains the visited sheet; opacity and
+visibility patch its native layers. Moving the camera makes a pending decode or
+paint obsolete, allowing the next viewport to start before an old HTTP request
+finishes. The existing sheet remains until its replacement is ready. Blob
+crossfades use eight 16 ms steps (128 ms), instead of twenty 31 ms steps.
+Area snapshots are account-wide, so panning, zooming and resizing reuse their
+native geometry and tap paths while the level and fine-boundary mode match.
+Reference-overlay loading runs independently of ground refreshes. Appearance
+or filter changes can supersede an obsolete pending ground read too.
+MapLibre's idle callback adopts the controller's final camera, including direct
+camera jumps that emit no movement callback. Mapbox coalesces camera-state reads
+and resolves its final camera before refreshing at idle.
+
+Native route sources retain their complete geometry. Selection and metric-route
+exclusion use layer filters, and activity visibility uses native visibility.
+These changes no longer decode, decorate and resend the full activity collection.
+Metric/cursor updates are serialized and coalesced to the latest selection.
+Mapbox layer patches send all properties in one bridge call. MapLibre's unused
+annotation managers are disabled; this app owns its style sources directly.
+
+Preference saves invalidate preferences, rendered routes, trips, search and
+track responses, preserving ground snapshots, activity details and statistics.
+Per-endpoint generations prevent a read crossing targeted invalidation from
+repopulating those entries, while unrelated in-flight ground reads remain valid.
+Writes to visits/routes, native sync and sign-out retain full invalidation.
+Repeated cache flushes skip encoding/writing when nothing has changed.
+
+Activities/statistics, sources, calendars, trips, route summaries and saved
+activity details can display retained responses immediately and conditionally
+refresh in the background. Visible lists and the active activity receive changed
+responses; background activity updates preserve Show all / Show this. Sessions,
+administration and connector status still require server reads. Activity totals
+warm alongside the existing login datasets. Activity rows and expanded groups
+are built on demand. Graph scrubbing reuses prepared point/sample indexes,
+binary-searches the nearest distance, and paints its cursor over a retained
+graph rather than repainting all segments.
+
+`test/performance_test.dart` covers viewport equivalence, independent facts,
+targeted invalidation, delayed menu refresh, activity reconciliation and a
+10,000-activity list. Its optional `SPORRA_BENCHMARK=true` fixture compares the
+old full decode/clip path with prepared queries on 50,000 synthetic cells; those
+are host processing measurements, not end-to-end phone timings.
+`integration_test/performance_test.dart` uses mock responses and a local native
+style, with location disabled, to hold an obsolete zoom download open while
+checking the new level, retained ground and native selection filters.

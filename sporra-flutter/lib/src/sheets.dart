@@ -34,6 +34,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'state.dart';
+import 'api.dart';
 import 'appearance.dart';
 import 'blob.dart' show parseColor;
 import 'year_chart.dart';
@@ -636,19 +637,54 @@ Future<void> showMenuSheet(
 }
 
 class AsyncList extends StatefulWidget {
-  const AsyncList({super.key, required this.load, required this.builder});
+  const AsyncList({
+    super.key,
+    required this.load,
+    required this.builder,
+    this.api,
+    this.paths = const {},
+  });
   final Future<dynamic> Function() load;
   final Widget Function(BuildContext, dynamic) builder;
+  final SporraApi? api;
+  final Set<String> paths;
   @override
   State<AsyncList> createState() => _AsyncListState();
 }
 
 class _AsyncListState extends State<AsyncList> {
   late Future<dynamic> future;
+  StreamSubscription<Uri>? subscription;
   @override
   void initState() {
     super.initState();
     future = widget.load();
+    listen();
+  }
+
+  void listen() {
+    subscription = widget.api?.updates.listen((url) {
+      if (mounted && widget.paths.contains(url.path)) {
+        setState(() {
+          future = widget.load();
+        });
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(AsyncList old) {
+    super.didUpdateWidget(old);
+    if (old.api != widget.api) {
+      unawaited(subscription?.cancel());
+      listen();
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(subscription?.cancel());
+    super.dispose();
   }
 
   @override
@@ -664,7 +700,9 @@ class _AsyncListState extends State<AsyncList> {
               children: [
                 Text('${snapshot.error}'),
                 TextButton(
-                  onPressed: () => setState(() => future = widget.load()),
+                  onPressed: () => setState(() {
+                    future = widget.load();
+                  }),
                   child: const Text('Try again'),
                 ),
               ],
@@ -734,7 +772,9 @@ Widget statisticsList(AppState app) {
   final showingAll = <String>{};
   final openedCountries = <String>{};
   return AsyncList(
-    load: () => app.api.get('/api/stats'),
+    api: app.api,
+    paths: const {'/api/stats'},
+    load: () => app.api.get('/api/stats', allowStale: true),
     builder: (context, s) => StatefulBuilder(
       builder: (context, setState) {
         final countries = List<Map<String, dynamic>>.from(s['countries']);
@@ -907,7 +947,9 @@ class _SourcesState extends State<_Sources> {
   @override
   Widget build(BuildContext context) => AsyncList(
     key: ValueKey(refresh),
-    load: () => widget.app.api.get('/api/sources'),
+    api: widget.app.api,
+    paths: const {'/api/sources'},
+    load: () => widget.app.api.get('/api/sources', allowStale: true),
     builder: (context, data) => Consumer(
       builder: (context, ref, _) {
         final app = widget.app;
@@ -1096,10 +1138,12 @@ class _SearchState extends State<_Search> {
         child: calendarOpen
             ? AsyncList(
                 key: const ValueKey('search-calendar'),
+                api: widget.app.api,
+                paths: const {'/api/days', '/api/trips'},
                 load: () => widget.app.api.getMany({
                   'days': '/api/days',
                   'trips': '/api/trips',
-                }),
+                }, allowStale: true),
                 builder: (context, data) => SingleChildScrollView(
                   child: VisitCalendar(
                     days: data['days']['days'],
@@ -1212,8 +1256,13 @@ Future<DateTime?> chooseDay(BuildContext context, AppState app) async {
     SizedBox(
       height: 350,
       child: AsyncList(
+        api: app.api,
+        paths: const {'/api/days', '/api/trips'},
         load: () => app.api
-            .getMany({'days': '/api/days', 'trips': '/api/trips'})
+            .getMany({
+              'days': '/api/days',
+              'trips': '/api/trips',
+            }, allowStale: true)
             .then(
               (data) => {
                 'days': data['days']['days'],
@@ -1238,8 +1287,10 @@ Future<DateTime?> chooseDay(BuildContext context, AppState app) async {
 Widget tripsList(AppState app, NativeMapController map) {
   return AsyncList(
     key: const ValueKey('search-trips'),
+    api: app.api,
+    paths: const {'/api/days', '/api/trips'},
     load: () => app.api
-        .getMany({'trips': '/api/trips', 'days': '/api/days'})
+        .getMany({'trips': '/api/trips', 'days': '/api/days'}, allowStale: true)
         .then(
           (data) => {
             'trips': data['trips']['trips'],
@@ -2239,8 +2290,11 @@ Future<void> showActivityDetails(
 
 Widget activitiesList(AppState app) {
   var sort = 'recent', group = 'none';
+  final expandedGroups = <String, bool>{};
   return AsyncList(
-    load: () => app.api.get('/api/render/activity-stats'),
+    api: app.api,
+    paths: const {'/api/render/activity-stats'},
+    load: () => app.api.get('/api/render/activity-stats', allowStale: true),
     builder: (context, data) => StatefulBuilder(
       builder: (context, setState) {
         final routes = List<Map<String, dynamic>>.from(data['routes']);
@@ -2265,71 +2319,80 @@ Widget activitiesList(AppState app) {
         }
         final grouped = groups.entries.toList()
           ..sort((a, b) => b.value.length.compareTo(a.value.length));
-        return ListView(
-          shrinkWrap: true,
-          children: [
-            fact('Activities', (data['routes'] as List).length),
-            fact('Total distance', data['distance']),
-            if (data['duration'] != null)
-              fact('Time recorded', data['duration']),
-            if (data['longest'] != null)
-              fact(
-                'Longest',
-                '${data['longest']['distance']} · ${data['longest']['name']}',
-              ),
-            if ((data['years'] as List).length > 1) ...[
-              section('Distance by year'),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: YearChart(
-                  entries: List<Map<String, dynamic>>.from(data['years']),
-                ),
-              ),
-            ],
-            ChoiceRow(
-              label: 'Order',
-              value: sort,
-              choices: const {'recent': 'Newest', 'distance': 'Longest'},
-              onChanged: (v) => setState(() => sort = v),
+        final rows = <Object>[];
+        for (final bucket in grouped) {
+          if (group != 'none') rows.add((bucket.key, bucket.value.length));
+          if (group == 'none' ||
+              (expandedGroups['$group:${bucket.key}'] ?? true)) {
+            rows.addAll(bucket.value);
+          }
+        }
+        final header = <Widget>[
+          fact('Activities', (data['routes'] as List).length),
+          fact('Total distance', data['distance']),
+          if (data['duration'] != null) fact('Time recorded', data['duration']),
+          if (data['longest'] != null)
+            fact(
+              'Longest',
+              '${data['longest']['distance']} · ${data['longest']['name']}',
             ),
-            ChoiceRow(
-              label: 'Group',
-              value: group,
-              choices: const {
-                'none': 'None',
-                'app': 'By app',
-                'activity': 'By activity',
-              },
-              onChanged: (v) => setState(() => group = v),
-            ),
-            section('Your activities'),
-            for (final bucket in grouped)
-              if (group == 'none') ...[
-                for (final activity in bucket.value)
-                  activityRow(context, app, activity),
-              ] else
-                DisclosureTile(
-                  key: PageStorageKey('activity-group-$group-${bucket.key}'),
-                  initiallyExpanded: true,
-                  title: Text(
-                    '${bucket.key.isEmpty
-                        ? 'Unspecified'
-                        : group == 'app'
-                        ? sourceDisplayName(bucket.key, label: (data['sourceLabels'] as Map?)?[bucket.key])
-                        : bucket.key} · ${bucket.value.length}',
-                  ),
-                  children: [
-                    for (final activity in bucket.value)
-                      activityRow(context, app, activity),
-                  ],
-                ),
-            if ((data['routes'] as List).isEmpty)
-              const ListTile(
-                title: Text(
-                  'No activities yet. Import a file or connect a sync source.',
-                ),
+          if ((data['years'] as List).length > 1) ...[
+            section('Distance by year'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: YearChart(
+                entries: List<Map<String, dynamic>>.from(data['years']),
               ),
+            ),
           ],
+          ChoiceRow(
+            label: 'Order',
+            value: sort,
+            choices: const {'recent': 'Newest', 'distance': 'Longest'},
+            onChanged: (v) => setState(() => sort = v),
+          ),
+          ChoiceRow(
+            label: 'Group',
+            value: group,
+            choices: const {
+              'none': 'None',
+              'app': 'By app',
+              'activity': 'By activity',
+            },
+            onChanged: (v) => setState(() => group = v),
+          ),
+          section('Your activities'),
+          if ((data['routes'] as List).isEmpty)
+            const ListTile(
+              title: Text(
+                'No activities yet. Import a file or connect a sync source.',
+              ),
+            ),
+        ];
+        return ListView.builder(
+          itemCount: header.length + rows.length,
+          itemBuilder: (context, index) {
+            if (index < header.length) return header[index];
+            final row = rows[index - header.length];
+            if (row is Map<String, dynamic>) {
+              return activityRow(context, app, row);
+            }
+            final (key, count) = row as (String, int);
+            final identity = '$group:$key';
+            final expanded = expandedGroups[identity] ?? true;
+            return ListTile(
+              key: PageStorageKey('activity-group-$group-$key'),
+              title: Text(
+                '${key.isEmpty
+                    ? 'Unspecified'
+                    : group == 'app'
+                    ? sourceDisplayName(key, label: (data['sourceLabels'] as Map?)?[key])
+                    : key} · $count',
+              ),
+              trailing: DisclosureChevron(expanded: expanded),
+              onTap: () => setState(() => expandedGroups[identity] = !expanded),
+            );
+          },
         );
       },
     ),
@@ -2759,7 +2822,9 @@ Future<void> showActivityStyle(BuildContext context, AppState app) => panel(
   context,
   'Activities',
   AsyncList(
-    load: () => app.api.get('/api/routes?fold=1'),
+    api: app.api,
+    paths: const {'/api/routes'},
+    load: () => app.api.get('/api/routes?fold=1', allowStale: true),
     builder: (context, data) => Consumer(
       builder: (context, ref, _) {
         final a = ref.watch(appProvider);

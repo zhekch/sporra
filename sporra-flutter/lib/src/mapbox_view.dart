@@ -125,7 +125,23 @@ class _MapboxViewState extends State<MapboxView> {
     }
   }
 
-  Future<void> cameraChanged() async {
+  Future<void>? cameraRead;
+  bool cameraPending = false;
+  Future<void> cameraChanged() {
+    cameraPending = true;
+    return cameraRead ??= () async {
+      try {
+        do {
+          cameraPending = false;
+          await readCamera();
+        } while (cameraPending && mounted);
+      } finally {
+        cameraRead = null;
+      }
+    }();
+  }
+
+  Future<void> readCamera() async {
     final c = controller;
     if (c == null) return;
     final ticket = epoch;
@@ -188,7 +204,11 @@ class _MapboxViewState extends State<MapboxView> {
     },
     onStyleLoadedListener: (_) => unawaited(styleLoaded()),
     onCameraChangeListener: (_) => unawaited(cameraChanged()),
-    onMapIdleListener: (_) => widget.onIdle(),
+    onMapIdleListener: (_) => unawaited(
+      cameraChanged().then((_) {
+        if (mounted) widget.onIdle();
+      }),
+    ),
     onMapLoadErrorListener: (e) =>
         widget.onError('Mapbox could not load: ${e.message}'),
   );
