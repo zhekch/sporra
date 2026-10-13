@@ -418,6 +418,7 @@ Future<void> showMenuSheet(
                     onTap: () async {
                       final color = await chooseColor(context, a.accent);
                       if (color != null) {
+                        a.mapOpacity = a.mapOpacity;
                         a.accent = color;
                         a.changed();
                         await a.run(a.saveAppearance);
@@ -462,6 +463,14 @@ Future<void> showMenuSheet(
                       ],
                     ),
                   ),
+                MapOpacitySlider(
+                  value: a.mapOpacity,
+                  onChanged: (value) {
+                    a.mapOpacity = value;
+                    a.changed();
+                  },
+                  onChangeEnd: (_) => a.run(a.saveAppearance),
+                ),
               ],
             ),
             section('Map overlays'),
@@ -2561,6 +2570,90 @@ Future<void> chooseHome(BuildContext context, AppState app) async {
   });
 }
 
+class MapOpacitySlider extends StatelessWidget {
+  const MapOpacitySlider({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    required this.onChangeEnd,
+  });
+
+  final double value;
+  final ValueChanged<double> onChanged, onChangeEnd;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+    child: Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [const Text('Opacity'), Text('${(value * 100).round()}%')],
+        ),
+        SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            trackHeight: 10,
+            activeTrackColor: const Color(0xffaaa9ad),
+            inactiveTrackColor: const Color(0xff505052),
+            trackShape: const _OpacityTrackShape(),
+            thumbShape: SliderComponentShape.noThumb,
+            overlayShape: SliderComponentShape.noOverlay,
+          ),
+          child: Slider(
+            value: value,
+            semanticFormatterCallback: (v) => 'Opacity ${(v * 100).round()}%',
+            onChanged: onChanged,
+            onChangeEnd: onChangeEnd,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _OpacityTrackShape extends RoundedRectSliderTrackShape {
+  const _OpacityTrackShape();
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset offset, {
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required Animation<double> enableAnimation,
+    required TextDirection textDirection,
+    required Offset thumbCenter,
+    Offset? secondaryOffset,
+    bool isDiscrete = false,
+    bool isEnabled = false,
+    double additionalActiveTrackHeight = 0,
+  }) {
+    final track = getPreferredRect(
+      parentBox: parentBox,
+      offset: offset,
+      sliderTheme: sliderTheme,
+      isEnabled: isEnabled,
+      isDiscrete: isDiscrete,
+    );
+    final canvas = context.canvas;
+    canvas.save();
+    canvas.clipRRect(
+      RRect.fromRectAndRadius(track, Radius.circular(track.height / 2)),
+    );
+    canvas.drawRect(track, Paint()..color = sliderTheme.inactiveTrackColor!);
+    canvas.drawRect(
+      Rect.fromLTRB(
+        textDirection == TextDirection.ltr ? track.left : thumbCenter.dx,
+        track.top,
+        textDirection == TextDirection.ltr ? thumbCenter.dx : track.right,
+        track.bottom,
+      ),
+      Paint()..color = sliderTheme.activeTrackColor!,
+    );
+    canvas.restore();
+  }
+}
+
 class ColorDot extends StatelessWidget {
   const ColorDot(this.hex, {super.key});
   final String hex;
@@ -2578,9 +2671,6 @@ class ColorDot extends StatelessWidget {
 
 Future<String?> chooseColor(BuildContext context, String initial) async {
   final text = TextEditingController(text: initial.substring(0, 7));
-  double opacity = initial.length == 9
-      ? int.parse(initial.substring(7), radix: 16) / 255
-      : 1;
   String value = initial.substring(0, 7);
   final result = await showDialog<String>(
     context: context,
@@ -2631,17 +2721,7 @@ Future<String?> chooseColor(BuildContext context, String initial) async {
                   }),
                 ),
                 const SizedBox(height: 16),
-                Row(
-                  children: [
-                    ColorDot(value),
-                    const Spacer(),
-                    Text('Opacity ${(opacity * 100).round()}%'),
-                  ],
-                ),
-                Slider(
-                  value: opacity,
-                  onChanged: (v) => set(() => opacity = v),
-                ),
+                ColorDot(value),
               ],
             ),
           ),
@@ -2653,10 +2733,7 @@ Future<String?> chooseColor(BuildContext context, String initial) async {
           ),
           FilledButton(
             onPressed: RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(text.text)
-                ? () => Navigator.pop(
-                    context,
-                    '$value${(opacity * 255).round().toRadixString(16).padLeft(2, '0')}',
-                  )
+                ? () => Navigator.pop(context, value)
                 : null,
             child: const Text('Save'),
           ),

@@ -115,6 +115,7 @@ export const PRESETS = [
  * @param {() => {left:number, top:number}} [opts.place] where to put the panel
  * @param {string[]} [opts.presets] the swatch row, for callers whose colour is
  *   doing a different job from the visited wash
+ * @param {boolean} [opts.opacity] show the alpha control (false for map colors)
  * @returns {{ set(hex:string):void, get():string, close():void, isOpen():boolean }}
  */
 // Only one picker is ever open. Each instance stops the click on its own button
@@ -125,9 +126,9 @@ export const PRESETS = [
 // whichever was open, whoever owns it.
 let openPicker = null;
 
-export function mountColorPicker({ button, panel, value, onInput, place, presets = PRESETS }) {
+export function mountColorPicker({ button, panel, value, onInput, place, presets = PRESETS, opacity = true }) {
   let hsv = rgbToHsv(hexToRgb(value) ?? [96, 172, 255]);
-  let alpha = hexAlpha(value);
+  let alpha = opacity ? hexAlpha(value) : 1;
   let open = false;
 
   panel.classList.add('cp');
@@ -140,14 +141,14 @@ export function mountColorPicker({ button, panel, value, onInput, place, presets
     <div class="cp-hue" tabindex="0" role="slider" aria-label="Hue" aria-valuemin="0" aria-valuemax="359">
       <div class="cp-hue-knob"></div>
     </div>
-    <div class="cp-alpha" tabindex="0" role="slider" aria-label="Opacity" aria-valuemin="0" aria-valuemax="100">
+    ${opacity ? `<div class="cp-alpha" tabindex="0" role="slider" aria-label="Opacity" aria-valuemin="0" aria-valuemax="100">
       <div class="cp-alpha-ramp"></div>
       <div class="cp-alpha-knob"></div>
-    </div>
+    </div>` : ''}
     <div class="cp-foot">
       <span class="cp-preview"></span>
       <input class="cp-hex" type="text" spellcheck="false" autocomplete="off"
-        autocapitalize="none" autocorrect="off" maxlength="9" aria-label="Hex color" />
+        autocapitalize="none" autocorrect="off" maxlength="${opacity ? 9 : 7}" aria-label="Hex color" />
     </div>
     <div class="cp-presets">${presets.map(
       (c) => `<button type="button" class="cp-preset" data-color="${c}" style="background:${c}" aria-label="${c}"></button>`,
@@ -178,9 +179,11 @@ export function mountColorPicker({ button, panel, value, onInput, place, presets
     // The ramp runs from nothing to this colour at full strength, over the
     // checkerboard the track already carries — the only way a strip can show
     // transparency rather than just claim it.
-    alphaRamp.style.background = `linear-gradient(to right, transparent, ${solid})`;
-    alphaKnob.style.setProperty('--kx', String(alpha));
-    alphaKnob.style.background = hex;
+    if (alphaStrip) {
+      alphaRamp.style.background = `linear-gradient(to right, transparent, ${solid})`;
+      alphaKnob.style.setProperty('--kx', String(alpha));
+      alphaKnob.style.background = hex;
+    }
     // Through the variable, not the background property: both of these draw the
     // colour as a layer over a checkerboard (see .color-swatch in style.css),
     // and assigning their background directly would paint over the board that
@@ -190,8 +193,8 @@ export function mountColorPicker({ button, panel, value, onInput, place, presets
     button.setAttribute('aria-label', `Visited color, ${hex}`);
     area.setAttribute('aria-valuetext', hex);
     hue.setAttribute('aria-valuenow', String(Math.round(hsv[0])));
-    alphaStrip.setAttribute('aria-valuenow', String(Math.round(alpha * 100)));
-    alphaStrip.setAttribute('aria-valuetext', `${Math.round(alpha * 100)}% opaque`);
+    alphaStrip?.setAttribute('aria-valuenow', String(Math.round(alpha * 100)));
+    alphaStrip?.setAttribute('aria-valuetext', `${Math.round(alpha * 100)}% opaque`);
     // Don't fight the field while it's being typed in.
     if (!typing) hexBox.value = hex;
     return hex;
@@ -237,7 +240,7 @@ export function mountColorPicker({ button, panel, value, onInput, place, presets
   draggable(hue, (x) => {
     hsv = [x * 360, hsv[1], hsv[2]];
   });
-  draggable(alphaStrip, (x) => {
+  if (alphaStrip) draggable(alphaStrip, (x) => {
     alpha = x;
   });
 
@@ -257,7 +260,7 @@ export function mountColorPicker({ button, panel, value, onInput, place, presets
     hsv = [(((hsv[0] + step) % 360) + 360) % 360, hsv[1], hsv[2]];
     emit();
   });
-  alphaStrip.addEventListener('keydown', (e) => {
+  alphaStrip?.addEventListener('keydown', (e) => {
     const step = (e.shiftKey ? 0.1 : 0.02) * (e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0);
     if (!step) return;
     e.preventDefault();
@@ -269,7 +272,7 @@ export function mountColorPicker({ button, panel, value, onInput, place, presets
     const rgb = hexToRgb(hexBox.value);
     if (!rgb) return; // half-typed — leave the rest alone until it parses
     hsv = rgbToHsv(rgb);
-    alpha = hexAlpha(hexBox.value);
+    alpha = opacity ? hexAlpha(hexBox.value) : 1;
     emit({ typing: true });
   });
   hexBox.addEventListener('blur', () => paint());
@@ -355,7 +358,7 @@ export function mountColorPicker({ button, panel, value, onInput, place, presets
       const rgb = hexToRgb(hex);
       if (!rgb) return;
       hsv = rgbToHsv(rgb);
-      alpha = hexAlpha(hex);
+      alpha = opacity ? hexAlpha(hex) : 1;
       paint();
     },
     get: () => hsvToHex(hsv, alpha),

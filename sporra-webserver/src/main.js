@@ -49,6 +49,7 @@ import { mountStats } from './stats-ui.js';
 import { mountHomeAssistant } from './home-assistant-ui.js';
 import { sourceLabel } from './locations.js';
 import { mountColorPicker, hexAlpha, hexOpaque } from './color-picker.js';
+import { readMapOpacities, mapOpacityFor } from './map-opacity.js';
 import {
   HEAT_MODES, HEAT_NEIGHBOURHOOD, TYPE_COLORS, TYPE_MAX, TYPE_OTHER_COLOR, UNDATED_COLOR,
   ageStopsOf, cellColorOf, cellStats, heatMetric, hotOf, isHeatMode as isHeatColoring,
@@ -1910,11 +1911,11 @@ function syncAccent() {
   accent = next;
   colorPicker?.set(accent); // the swatch, and the panel behind it
   applyColors();
-  // The opacity half of a colour lands on the layers rather than in them, so
-  // the fades have to be re-pinned — the same reason the picker does it.
+  // A legacy color can still supply the initial opacity on another basemap.
   applyFade(fade.cur);
   applyPrevFade(fade.prev);
   repaintAccent();
+  syncMapOpacityUi();
   return true;
 }
 
@@ -1925,6 +1926,12 @@ function syncAccent() {
 // ramps would be a second answer to the same question. What stays here is what
 // is genuinely the map's: the MapLibre expression built from those ramps, and
 // the roll-up that produces the stats they read.
+const MAP_OPACITIES_KEY = 'visited-map:map-opacities:v1';
+let mapOpacities = {};
+try {
+  mapOpacities = readMapOpacities(JSON.parse(localStorage.getItem(MAP_OPACITIES_KEY) ?? '{}'));
+} catch { /* Missing or damaged preferences use the existing defaults. */ }
+
 const HEAT_KEY = 'visited-map:heat:v1';
 let heatMode = localStorage.getItem(HEAT_KEY) ?? 'flat';
 if (!HEAT_MODES[heatMode]) heatMode = 'flat';
@@ -2398,31 +2405,27 @@ function applyColors() {
 // here, edge softness in src/blob-canvas.js.
 const isHeatMode = () => isHeatColoring(heatMode);
 
-// Heat-map cells are opaque enough to read as data; flat regions stay a
-// translucent wash over the basemap. Both live in src/blob-canvas.js.
-// How strong the visited wash is, per basemap. The same alpha does not read the
-// same over a near-black basemap, a green one and a photograph — over imagery a
-// light wash vanishes, over Terrain the default drowns the landcover. Each
-// STYLES entry can carry `cellAlpha` (single-colour) and `heatAlpha` (the heat
-// maps) as multipliers of the defaults in src/blob-canvas.js; 1 = unchanged.
-// …and on top of that, whatever opacity the accent itself carries. The colour
-// you pick for the visited areas can now be a translucent one, and the only
-// place that can mean anything is here: the wash is drawn by cutting blurred
-// discs at a fixed alpha, so transparency has to be applied to the finished
-// layer rather than to the ink. Only in the single-colour mode — a heat map
-// doesn't draw the accent at all, so it has no business honouring its opacity.
-//
-// Zero when the visited areas are switched off, which is the same lever pulled
-// all the way: every surface that draws them reads this, so there is one place
-// to turn them off rather than four.
-const accentAlpha = () => (!cellsOn ? 0 : isHeatMode() ? 1 : hexAlpha(accent));
-
-const regionOpacity = () => {
+// Basemap tuning remains the initial value; a saved opacity is absolute so
+// 100% reaches full opacity on every basemap, in every coloring mode.
+const defaultMapOpacity = () => {
   const style = STYLES[styleKey] ?? {};
   const base = isHeatMode() ? BLOB_HEAT_ALPHA : BLOB_ALPHA;
   const scale = (isHeatMode() ? style.heatAlpha : style.cellAlpha) ?? 1;
-  return Math.max(0, Math.min(1, base * scale * accentAlpha()));
+  return Math.max(0, Math.min(1, base * scale * (isHeatMode() ? 1 : hexAlpha(accent))));
 };
+const mapOpacityNow = () => mapOpacityFor(mapOpacities, heatMode, defaultMapOpacity());
+const accentAlpha = () => !cellsOn ? 0 : Math.min(1, mapOpacityNow() / (isHeatMode() ? BLOB_HEAT_ALPHA : BLOB_ALPHA));
+const regionOpacity = () => cellsOn ? mapOpacityNow() : 0;
+
+function syncMapOpacityUi() {
+  const slider = document.getElementById('map-opacity');
+  if (!slider) return;
+  const percent = Math.round(mapOpacityNow() * 100);
+  slider.value = String(percent);
+  slider.style.setProperty('--opacity-fill', `${percent}%`);
+  slider.setAttribute('aria-valuetext', `${percent}%`);
+  document.getElementById('map-opacity-value').textContent = `${percent}%`;
+}
 
 function setHeatMode(next) {
   if (!HEAT_MODES[next]) return;
@@ -4888,6 +4891,7 @@ const prefsPayload = () => ({
   // so the better single answer.
   accent: accents.dark,
   accents: { ...accents },
+  mapOpacities: { ...mapOpacities },
   routeView: routeViewJson(),
   home: homePlace,
   hiddenTrips: [...hiddenTripIds],
@@ -4992,6 +4996,7 @@ function touchPrefs() {
   prefsStamp = Date.now();
   prefsDirty = true;
   try {
+    localStorage.setItem(MAP_OPACITIES_KEY, JSON.stringify(mapOpacities));
     localStorage.setItem(PREFS_STAMP_KEY, String(prefsStamp));
     localStorage.setItem(ROUTE_VIEW_KEY, JSON.stringify(routeViewJson()));
     localStorage.setItem(HIDDEN_TRIPS_KEY, JSON.stringify([...hiddenTripIds]));
@@ -5051,6 +5056,10 @@ document.addEventListener('visibilitychange', () => {
 
 /** Adopt a set of preferences wholesale — from the server, or from a reset. */
 function adoptPrefs(prefs) {
+  mapOpacities = readMapOpacities(prefs.mapOpacities);
+  try {
+    localStorage.setItem(MAP_OPACITIES_KEY, JSON.stringify(mapOpacities));
+  } catch { /* The account copy still applies. */ }
   if (prefs.routeView && typeof prefs.routeView === 'object') adoptRouteView(prefs.routeView);
   hiddenTripIds = new Set(
     (Array.isArray(prefs.hiddenTrips) ? prefs.hiddenTrips : [])
@@ -5119,6 +5128,9 @@ function adoptPrefs(prefs) {
     repaintAccent();
   }
   saveAccents();
+  syncMapOpacityUi();
+  applyFade(fade.cur);
+  applyPrevFade(fade.prev);
   try {
     localStorage.setItem(ROUTE_VIEW_KEY, JSON.stringify(routeViewJson()));
     localStorage.setItem(HIDDEN_TRIPS_KEY, JSON.stringify([...hiddenTripIds]));
@@ -10457,6 +10469,7 @@ function updateLayersUi() {
   // The picker only means anything in single-color mode, and nothing at all
   // while the cells are hidden — the note takes that slot instead.
   const heat = HEAT_MODES[heatMode];
+  syncMapOpacityUi();
   const colorRow = document.getElementById('color-row');
   colorRow.hidden = isHeatMode() || !cellsOn;
   // The swatch changes when you change basemap, and without a word for it that
@@ -12246,8 +12259,10 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     button: colorInput,
     panel: document.getElementById('color-panel'),
     value: accent,
+    opacity: false,
     place: () => placeBesideMenu(colorInput, document.getElementById('color-panel')),
     onInput: (hex) => {
+      mapOpacities[heatMode] = mapOpacityNow();
       accent = hex;
       // Against the basemap it was picked on, and only that one. The other
       // stays where its own owner put it.
@@ -12259,15 +12274,21 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       // phone on the old one for good.
       touchPrefs();
       applyColors();
-      // The opacity half of the colour lands on the layers rather than in
-      // them, so the fades have to be re-pinned or dragging the alpha strip
-      // changes nothing until the map next moves.
+      // A color change preserves the independently chosen layer opacity.
       applyFade(fade.cur);
       applyPrevFade(fade.prev);
       repaintAccent();
     },
   });
 
+  document.getElementById('map-opacity').addEventListener('input', (event) => {
+    mapOpacities[heatMode] = Number(event.target.value) / 100;
+    syncMapOpacityUi();
+    touchPrefs();
+    applyFade(fade.cur);
+    applyPrevFade(fade.prev);
+  });
+  document.getElementById('map-opacity').addEventListener('change', () => pushPrefs());
   wireLayersControl();
 
   cellInfo = mountCellInfo({ onClose: () => closeCellInfo(), loadDates: info => auth.getVisitDates(info, hiddenSources) });
@@ -13187,6 +13208,8 @@ const authState = mountAuth({
     accents.light = DEFAULT_ACCENT;
     accents.dark = DEFAULT_ACCENT;
     accent = DEFAULT_ACCENT;
+    mapOpacities = {};
+    syncMapOpacityUi();
     colorPicker?.set(accent);
     applyColors();
     try {
@@ -13196,6 +13219,7 @@ const authState = mountAuth({
       localStorage.removeItem(CLOCK_KEY);
       localStorage.removeItem(COLOR_KEY);
       localStorage.removeItem(COLORS_KEY);
+      localStorage.removeItem(MAP_OPACITIES_KEY);
     } catch {
       /* fine */
     }

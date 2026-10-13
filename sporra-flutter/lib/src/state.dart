@@ -31,6 +31,24 @@ class AppState extends ChangeNotifier {
   String mode = 'flat';
   String detail = 'auto';
   String accent = '#60acff';
+  double get mapOpacity {
+    final saved = (prefs['mapOpacities'] as Map?)?[mode];
+    if (saved is num && saved.isFinite) {
+      return saved.toDouble().clamp(0, 1);
+    }
+    // Preserve the old appearance until an explicit opacity is chosen.
+    final alpha = accent.length == 9
+        ? (int.tryParse(accent.substring(7), radix: 16) ?? 255) / 255
+        : 1.0;
+    return mode == 'flat' ? 0.3 * alpha : 0.5;
+  }
+
+  set mapOpacity(double value) => prefs['mapOpacities'] = {
+    ...?prefs['mapOpacities'] as Map?,
+    mode: value.clamp(0, 1),
+  };
+
+  double get groundOpacity => ground ? mapOpacity : 0;
   bool routes = true;
   bool menuOpen = false;
   void setMenuOpen(bool value) {
@@ -435,6 +453,7 @@ class AppState extends ChangeNotifier {
       'accent': accentTheme == 'dark' ? accent : prefs['accent'] ?? '#60acff',
       'accents': {...?prefs['accents'] as Map?, accentTheme: accent},
       'heatMode': mode,
+      if (prefs['mapOpacities'] != null) 'mapOpacities': prefs['mapOpacities'],
     });
   }
 
@@ -468,7 +487,7 @@ class AppState extends ChangeNotifier {
     queryParameters: {
       'level': '$level',
       'mode': mode,
-      'accent': accent,
+      'accent': accent.substring(0, 7),
       'bbox': ?bbox,
       if (hidden.isNotEmpty) 'hidden': hidden.toList(),
     },

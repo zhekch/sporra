@@ -383,7 +383,7 @@ glass look. Click hexagons to mark places you've visited.
   level all four apply per country. Single-color mode's swatch opens the app's
   **own color picker**
   (`src/color-picker.js`) rather than the OS one, and the map repaints as you
-  drag. Every colour it produces can carry an **opacity** — see
+  drag. A separate slider below the color or legend controls **map opacity** — see
   [Colours with an opacity](#colours-with-an-opacity).
   **There are two of them, one per basemap theme** (`accents.light` /
   `accents.dark`, with `accent` pointing at whichever the basemap on screen
@@ -8489,7 +8489,20 @@ reads as two ways of grouping rather than one you can turn off.
 
 ## Colours with an opacity
 
-Any colour the picker produces — the visited wash, and one per activity — can
+**Map opacity is independent of map color.** Appearance places a rounded gray
+opacity slider below the visited color or legend, in both Flutter and the web
+app. Each coloring mode keeps its own absolute value in account preferences
+under `mapOpacities` (`flat`, `visits`, `oldest`, `type`), from 0 to 1. The web
+app mirrors these in `visited-map:map-opacities:v1` and uses the existing
+preference timestamps and retry mechanism. Flutter saves on the end of a drag.
+Missing values retain the old defaults: 0.3 for Single and 0.5 for heat modes;
+the web app's basemap multipliers and legacy accent alpha remain part of that
+initial value. An explicit value bypasses those multipliers, so 100% is fully
+opaque on raster blobs and vector areas. Changing map color preserves opacity,
+and the map color picker no longer offers an alpha control. The descriptions
+below still apply to activity colors and to reading legacy map colors.
+
+An activity colour the picker produces can
 carry an opacity, written as a fourth pair of hex digits (`#60acffcc`). Full
 opacity is still written as six digits, so nothing already stored is rewritten
 and nothing that hasn't been taught about opacity ever sees any.
@@ -8506,9 +8519,8 @@ drawn by blurring discs and cutting the result at a fixed alpha — a translucen
 fill would move that contour and *shrink* the blobs instead of fading them (see
 [How it works](#how-it-works)). And a colour that is already translucent would
 then be composited again by the layer opacity it is drawn with, applying the
-same choice twice. So the accent's opacity multiplies `regionOpacity()` and the
-region outlines, an activity's multiplies that activity's line opacity, and both
-hand MapLibre an opaque colour.
+same choice twice. The independent map opacity drives `regionOpacity()`; an activity's alpha
+multiplies that activity's line opacity. Both hand MapLibre an opaque colour.
 
 **Only where the colour is used.** A heat map doesn't draw the accent at all, so
 it doesn't honour the accent's opacity either — the rule is that an opacity

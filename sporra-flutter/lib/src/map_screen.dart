@@ -418,14 +418,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
       renderedView = null;
       factsBounds = bounds;
-      final alpha = app.accent.length == 9
-          ? int.parse(app.accent.substring(7), radix: 16) / 255
-          : 1.0;
-      final opacity = !app.ground
-          ? 0.0
-          : app.mode == 'flat'
-          ? 0.3 * alpha
-          : 0.5;
+      final opacity = app.groundOpacity;
       if (level < 6) {
         cellFacts.clear();
         for (final row in data['rows'] as List) {
