@@ -644,7 +644,7 @@ class AsyncList extends StatefulWidget {
     this.api,
     this.paths = const {},
   });
-  final Future<dynamic> Function() load;
+  final Future<dynamic> Function({bool revalidate}) load;
   final Widget Function(BuildContext, dynamic) builder;
   final SporraApi? api;
   final Set<String> paths;
@@ -666,7 +666,7 @@ class _AsyncListState extends State<AsyncList> {
     subscription = widget.api?.updates.listen((url) {
       if (mounted && widget.paths.contains(url.path)) {
         setState(() {
-          future = widget.load();
+          future = widget.load(revalidate: false);
         });
       }
     });
@@ -774,7 +774,8 @@ Widget statisticsList(AppState app) {
   return AsyncList(
     api: app.api,
     paths: const {'/api/stats'},
-    load: () => app.api.get('/api/stats', allowStale: true),
+    load: ({bool revalidate = true}) =>
+        app.api.get('/api/stats', revalidate: revalidate),
     builder: (context, s) => StatefulBuilder(
       builder: (context, setState) {
         final countries = List<Map<String, dynamic>>.from(s['countries']);
@@ -949,7 +950,8 @@ class _SourcesState extends State<_Sources> {
     key: ValueKey(refresh),
     api: widget.app.api,
     paths: const {'/api/sources'},
-    load: () => widget.app.api.get('/api/sources', allowStale: true),
+    load: ({bool revalidate = true}) =>
+        widget.app.api.get('/api/sources', revalidate: revalidate),
     builder: (context, data) => Consumer(
       builder: (context, ref, _) {
         final app = widget.app;
@@ -1063,14 +1065,44 @@ class _SearchState extends State<_Search> {
   bool busy = false;
   bool hasQuery = false;
   bool calendarOpen = false;
+  String? activePath;
+  StreamSubscription<Uri>? subscription;
+  @override
+  void initState() {
+    super.initState();
+    subscription = widget.app.api.updates.listen((url) {
+      if (url.toString() != activePath) return;
+      final token = generation;
+      unawaited(
+        widget.app.api.get(url.toString(), revalidate: false).then<void>((
+          data,
+        ) {
+          if (mounted && token == generation) {
+            setState(() => results = data['results']);
+          }
+        }, onError: (Object _) {}),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    generation++;
+    unawaited(subscription?.cancel());
+    super.dispose();
+  }
+
   Future<void> search(String q) async {
     final token = ++generation;
+    final path = '/api/search?q=${Uri.encodeQueryComponent(q)}';
+    activePath = widget.app.api.uri(path).toString();
     setState(() {
       hasQuery = q.trim().length >= 2;
       if (hasQuery) calendarOpen = false;
       error = null;
     });
     if (q.trim().length < 2) {
+      activePath = null;
       setState(() {
         results = [];
         busy = false;
@@ -1078,12 +1110,12 @@ class _SearchState extends State<_Search> {
       return;
     }
     setState(() => busy = true);
-    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!widget.app.api.hasCached(path)) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
     if (token != generation) return;
     try {
-      final data = await widget.app.api.get(
-        '/api/search?q=${Uri.encodeQueryComponent(q)}',
-      );
+      final data = await widget.app.api.get(path);
       if (mounted && token == generation) {
         setState(() {
           results = data['results'];
@@ -1140,10 +1172,10 @@ class _SearchState extends State<_Search> {
                 key: const ValueKey('search-calendar'),
                 api: widget.app.api,
                 paths: const {'/api/days', '/api/trips'},
-                load: () => widget.app.api.getMany({
+                load: ({bool revalidate = true}) => widget.app.api.getMany({
                   'days': '/api/days',
                   'trips': '/api/trips',
-                }, allowStale: true),
+                }, revalidate: revalidate),
                 builder: (context, data) => SingleChildScrollView(
                   child: VisitCalendar(
                     days: data['days']['days'],
@@ -1258,11 +1290,11 @@ Future<DateTime?> chooseDay(BuildContext context, AppState app) async {
       child: AsyncList(
         api: app.api,
         paths: const {'/api/days', '/api/trips'},
-        load: () => app.api
+        load: ({bool revalidate = true}) => app.api
             .getMany({
               'days': '/api/days',
               'trips': '/api/trips',
-            }, allowStale: true)
+            }, revalidate: revalidate)
             .then(
               (data) => {
                 'days': data['days']['days'],
@@ -1289,8 +1321,11 @@ Widget tripsList(AppState app, NativeMapController map) {
     key: const ValueKey('search-trips'),
     api: app.api,
     paths: const {'/api/days', '/api/trips'},
-    load: () => app.api
-        .getMany({'trips': '/api/trips', 'days': '/api/days'}, allowStale: true)
+    load: ({bool revalidate = true}) => app.api
+        .getMany({
+          'trips': '/api/trips',
+          'days': '/api/days',
+        }, revalidate: revalidate)
         .then(
           (data) => {
             'trips': data['trips']['trips'],
@@ -2112,7 +2147,8 @@ Widget backupList(AppState app) => BackupSettings(
 );
 
 Widget administrationList(AppState app) => AsyncList(
-  load: () => app.api.get('/api/admin/users'),
+  load: ({bool revalidate = true}) =>
+      app.api.get('/api/admin/users', revalidate: revalidate),
   builder: (context, data) => ListView(
     shrinkWrap: true,
     children: [
@@ -2294,7 +2330,8 @@ Widget activitiesList(AppState app) {
   return AsyncList(
     api: app.api,
     paths: const {'/api/render/activity-stats'},
-    load: () => app.api.get('/api/render/activity-stats', allowStale: true),
+    load: ({bool revalidate = true}) =>
+        app.api.get('/api/render/activity-stats', revalidate: revalidate),
     builder: (context, data) => StatefulBuilder(
       builder: (context, setState) {
         final routes = List<Map<String, dynamic>>.from(data['routes']);
@@ -2824,7 +2861,8 @@ Future<void> showActivityStyle(BuildContext context, AppState app) => panel(
   AsyncList(
     api: app.api,
     paths: const {'/api/routes'},
-    load: () => app.api.get('/api/routes?fold=1', allowStale: true),
+    load: ({bool revalidate = true}) =>
+        app.api.get('/api/routes?fold=1', revalidate: revalidate),
     builder: (context, data) => Consumer(
       builder: (context, ref, _) {
         final a = ref.watch(appProvider);

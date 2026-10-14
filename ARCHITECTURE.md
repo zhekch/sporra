@@ -10253,13 +10253,11 @@ and building tap facts. Fine region snapshots warm all visited country boundarie
 Cached ground paints without waiting for independent route/activity requests.
 
 The response LRU allows 512 entries and 128 MiB of estimated string memory.
-Device restoration retains entries for 30 days, still requiring the server/account
-session check. Map snapshots display immediately within that window; after five
-minutes they revalidate with ETags in the background, at most once per key per five
-minutes even on failure. Changed responses notify the map to repaint. Explicit
+As of Flutter 0.21.0, retained content has no age expiry, still requiring the
+server/account session check before restoration. Cached reads return saved data
+first and conditionally validate in the background, sharing concurrent requests. Changed responses notify the map to repaint. Explicit
 refresh awaits validation; writes, native sync, sign-out and Clear cache invalidate
-responses. Saves flush a temporary file and rename it atomically. Other endpoint
-freshness remains unchanged.
+responses. Saves flush a temporary file and rename it atomically. Authentication, administration and connector status remain uncached.
 
 After painting, a two-second quiet period starts sequential warming of adjacent
 levels, remaining levels, then fine region/country snapshots. New map refreshes,
@@ -10383,3 +10381,66 @@ are host processing measurements, not end-to-end phone timings.
 `integration_test/performance_test.dart` uses mock responses and a local native
 style, with location disabled, to hold an obsolete zoom download open while
 checking the new level, retained ground and native selection filters.
+
+
+### Cached Flutter startup and moving cells (0.21.0)
+
+Every cacheable content read now uses its saved response regardless of age, then
+starts an ETag validation without waiting for it. Changed content replaces the
+visible list, active activity/track, preferences, search results, map facts,
+reference overlays or basemap style. List, activity/track, preferences, search
+and point-fact update handlers read the new body without another validation. Explicit refresh and preference merges for
+writes await the server; account/session checks remain uncached. The existing
+server/account scope, invalidation and bounded LRU still apply: age never removes
+an entry, but capacity, sign-out, Clear cache and relevant writes can remove it.
+Preference writes retain activity/trip/search/track responses for immediate reuse
+and mark their in-flight reads obsolete; the accepted preferences are saved
+locally after the write succeeds, so a settings save does not force a cold
+appearance or activity download at the next launch. Unchanged responses no
+longer rewrite the entire response file. Content revisions include the exact map query, so warming a different zoom does not discard the
+active sheet. Idle speculation reads existing snapshots without needless network
+validation. Prefetch prepares only the two nearest cell snapshots
+(`prefetchPreparedSnapshots = cellSnapshotLimit - 1`); preparing every remaining
+level used to evict the active and adjacent indexes in favour of distant levels.
+The remaining snapshots warm their raw responses only.
+
+Startup restores response and view files concurrently after session verification.
+The device view now remembers latitude, longitude and zoom as well as orientation
+and basemap. Its initial cell index starts preparing while the native style loads.
+Saved cells and complete activity lines render independently of a fresh location
+fix or route-summary metadata. Cached ground and native activity sources are
+installed before starting their background validation; only the eventual focus
+jump supersedes an earlier viewport. Menu/statistics warming waits until the first ground layer is installed and then waits another
+two seconds (`startupMenuWarmDelay`), keeping those requests off the initial map
+path. A missing cache entry still requires its first download, and session
+verification and native basemap setup still contribute to total launch time.
+
+Both camera callbacks schedule ground work during motion at most once per 150 ms
+(`gestureRefreshInterval`), coalescing movement while a render runs. Warm gesture
+reads use local snapshots; a missing level shares its outstanding download, and
+idle validates the final viewport. Moving within a level allows the padded sheet
+to finish rather than continually cancelling it. Level, filter and style changes
+can still supersede it. GPU paint and PNG encoding are serialized because that
+work cannot be cancelled. Motion uses a 256–1024 pixel sheet
+(`gestureSheetMinPixels`/`gestureSheetMaxPixels`), replaces it without a bridge
+crossfade, and leaves routes, overlays and speculation out of the gesture loop.
+Idle replaces a motion sheet with the normal quality image. The existing native
+layer moves with the camera throughout; cell detail changes arrive at the bounded
+render cadence rather than at the camera's display refresh rate.
+
+`test/api_test.dart` checks 800-day-old data before held validation, concurrent
+request sharing, changed-data notifications, query-specific ground revisions and
+unchanged-file retention. `integration_test/startup_performance_test.dart` uses a
+local native style and synthetic saved cells/routes with held server responses
+and a pending location flag, while an uncached route-summary response is also
+held. It verifies both initial layers before validation and a cell level replacement during a four-second native zoom animation, before
+idle, with no gesture HTTP validation. These are simulator fixtures, not an
+end-to-end measurement of the user's phone or account.
+
+
+An opt-in `SPORRA_PERFORMANCE_TRACE=true` Dart define emits startup, native-style,
+first-ground/activities, cell filtering/painting and HTTP durations, status codes
+and cache-hit counts via `performance.dart`. It is disabled by default. The trace
+omits account names, coordinates, request queries, tokens and response payloads;
+unrecognized HTTP paths are labelled `other`. This supports timing a normal
+release on the phone without replacing it with an integration-test entrypoint.

@@ -71,6 +71,9 @@ void main() {
       preferences.style = 'mapbox';
       preferences.tilt = 55;
       preferences.bearing = 123;
+      preferences.latitude = 47;
+      preferences.longitude = 8;
+      preferences.zoom = 14;
       preferences.save();
       await preferences.flush();
       final restored = MapPreferences();
@@ -78,11 +81,16 @@ void main() {
       expect(restored.style, 'mapbox');
       expect(restored.tilt, 55);
       expect(restored.bearing, 123);
+      expect(restored.latitude, 47);
+      expect(restored.longitude, 8);
+      expect(restored.zoom, 14);
       final other = MapPreferences();
       await other.restore(file, 'server/bob');
       expect(other.style, 'dark');
       expect(other.tilt, 0);
       expect(other.bearing, 0);
+      expect(other.latitude, isNull);
+      expect(other.zoom, isNull);
     },
   );
 

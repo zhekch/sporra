@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'cell_snapshot.dart';
+import 'performance.dart';
 
 class ApiException implements Exception {
   ApiException(this.status, this.message);
@@ -42,18 +43,14 @@ class SporraApi {
   static const isolateThreshold = 64 * 1024;
   static const cacheLimit = 512;
   static const cacheBytes = 128 * 1024 * 1024;
+  static const prefetchPreparedSnapshots = cellSnapshotLimit - 1;
   static const dataFreshness = Duration(seconds: 60);
-  static const viewportFreshness = Duration(seconds: 15);
-  static const referenceFreshness = Duration(days: 1);
-  static const offlineRetention = Duration(days: 30);
-  static const mapFreshness = Duration(minutes: 5);
   void Function()? onMapDataChanged;
   final _updates = StreamController<Uri>.broadcast();
   Stream<Uri> get updates => _updates.stream;
   final _cells = CellSnapshotReader();
   final _pathEpochs = <String, int>{};
   final _contentRevisions = <String, int>{};
-  final _revalidated = <String, DateTime>{};
   Timer? _prefetchTimer;
   int _prefetchGeneration = 0;
   final _cache = <String, ({String? tag, String json, DateTime at})>{};
@@ -71,30 +68,24 @@ class SporraApi {
   bool _isMap(Uri url) =>
       url.path == '/api/render/cells' || url.path == '/api/render/regions';
 
-  Duration? _freshness(Uri url) {
-    if (_isMap(url)) return mapFreshness;
-    if (url.path == '/api/render/style' ||
-        url.path == '/api/render/reference') {
-      return referenceFreshness;
-    }
-    if (url.path == '/api/render/at' || url.path == '/api/search') {
-      return viewportFreshness;
-    }
-    return const {
-          '/api/routes',
-          '/api/days',
-          '/api/trips',
-          '/api/stats',
-          '/api/sources',
-          '/api/prefs',
-          '/api/render/routes',
-          '/api/render/track',
-          '/api/render/activity',
-          '/api/render/activity-stats',
-        }.contains(url.path)
-        ? dataFreshness
-        : null;
-  }
+  bool _cacheable(Uri url) =>
+      _isMap(url) ||
+      const {
+        '/api/render/style',
+        '/api/render/reference',
+        '/api/render/at',
+        '/api/search',
+        '/api/routes',
+        '/api/days',
+        '/api/trips',
+        '/api/stats',
+        '/api/sources',
+        '/api/prefs',
+        '/api/render/routes',
+        '/api/render/track',
+        '/api/render/activity',
+        '/api/render/activity-stats',
+      }.contains(url.path);
 
   // Restore only after the server has identified the current cookie session.
   Future<void> restore(File file, String account) async {
@@ -109,9 +100,7 @@ class SporraApi {
       for (final row in (saved['entries'] as List).take(cacheLimit)) {
         final url = Uri.parse(row['url'] as String);
         final at = DateTime.fromMillisecondsSinceEpoch(row['at'] as int);
-        if (url.origin != uri('/').origin ||
-            _freshness(url) == null ||
-            DateTime.now().difference(at) > offlineRetention) {
+        if (url.origin != uri('/').origin || !_cacheable(url)) {
           continue;
         }
         final json = row['json'] as String;
@@ -179,7 +168,6 @@ class SporraApi {
     _contentRevisions.clear();
     _cells.clear();
     cancelPrefetch();
-    _revalidated.clear();
     _cache.clear();
     _pending.clear();
     _saveTimer?.cancel();
@@ -193,7 +181,7 @@ class SporraApi {
     }
   }
 
-  void _invalidatePaths(Set<String> paths) {
+  void _invalidatePaths(Set<String> paths, {bool retainContent = false}) {
     _revision++;
     _cacheVersion++;
     cancelPrefetch();
@@ -201,55 +189,77 @@ class SporraApi {
       _pathEpochs[path] = (_pathEpochs[path] ?? 0) + 1;
     }
     bool affected(String key) => paths.contains(Uri.parse(key).path);
-    _cache.removeWhere((key, _) => affected(key));
+    _cache.removeWhere(
+      (key, _) =>
+          affected(key) &&
+          (!retainContent || Uri.parse(key).path == '/api/prefs'),
+    );
     _pending.removeWhere((key, _) => affected(key));
-    _revalidated.removeWhere((key, _) => affected(key));
     _save();
   }
 
-  Object revisionFor(String path) =>
-      (_epoch, _pathEpochs[path] ?? 0, _contentRevisions[path] ?? 0);
+  Object revisionFor(String path) {
+    final url = uri(path);
+    return (
+      _epoch,
+      _pathEpochs[url.path] ?? 0,
+      _contentRevisions[url.hasQuery ? url.toString() : url.path] ?? 0,
+    );
+  }
 
   Future<dynamic> get(
     String path, {
     bool refresh = false,
-    bool allowStale = false,
+    bool revalidate = true,
   }) async => decodeJson(
-    await _getJson(path, refresh: refresh, allowStale: allowStale),
+    await _getJson(path, refresh: refresh, revalidate: revalidate),
   );
 
   Future<Map<String, dynamic>> getCells(
     String path,
-    List<double> bounds,
-  ) async {
+    List<double> bounds, {
+    bool revalidate = true,
+  }) async {
+    final clock = Stopwatch()..start();
     final epoch = _epoch;
-    final json = await _getJson(path);
-    return _cells.read('$epoch\n${uri(path)}', json, bounds);
+    final json = await _getJson(path, revalidate: revalidate);
+    final data = await _cells.read('$epoch\n${uri(path)}', json, bounds);
+    tracePerformance('cells-read', clock, {
+      'cells': (data['rows'] as List).length,
+    });
+    return data;
   }
+
+  bool hasCached(String path) => _cache.containsKey(uri(path).toString());
+
+  Future<void> prepareCells(String path) async {
+    final cached = _cache[uri(path).toString()];
+    if (cached != null) {
+      await _cells.read('$_epoch\n${uri(path)}', cached.json, null);
+    }
+  }
+
+  // Validation shares the foreground request and never decodes a second full
+  // snapshot on the UI isolate. Changed responses notify their visible owners.
+  void revalidate(String path) => unawaited(
+    _getJson(path, refresh: true).then<void>((_) {}, onError: (Object _) {}),
+  );
 
   Future<String> _getJson(
     String path, {
     bool refresh = false,
-    bool allowStale = false,
+    bool revalidate = true,
   }) async {
     final url = uri(path);
     final key = url.toString();
     final cached = _cache[key];
-    final freshness = _freshness(url);
-    if (!refresh &&
-        cached != null &&
-        freshness != null &&
-        DateTime.now().difference(cached.at) <
-            (_isMap(url) || allowStale ? offlineRetention : freshness)) {
-      if ((_isMap(url) || allowStale) &&
-          DateTime.now().difference(cached.at) >= freshness &&
-          DateTime.now().difference(_revalidated[key] ?? cached.at) >=
-              freshness) {
-        _revalidated[key] = DateTime.now();
-        unawaited(
-          get(path, refresh: true).then<void>((_) {}, onError: (Object _) {}),
-        );
-      }
+    if (_cacheable(url)) {
+      tracePerformance('cache ${url.path}', Stopwatch(), {
+        'hit': cached == null ? 0 : 1,
+      });
+    }
+    if (!refresh && cached != null && _cacheable(url)) {
+      if (revalidate) this.revalidate(path);
       // Callers filter and decorate GeoJSON; never lend them the cached object.
       _cache.remove(key);
       _cache[key] = cached;
@@ -276,6 +286,7 @@ class SporraApi {
     int pathEpoch,
   ) async {
     http.Response response;
+    final clock = Stopwatch()..start();
     try {
       response = await client
           .get(
@@ -292,12 +303,15 @@ class SporraApi {
               error is TimeoutException) &&
           cached != null &&
           epoch == _epoch &&
-          pathEpoch == (_pathEpochs[url.path] ?? 0) &&
-          DateTime.now().difference(cached.at) < offlineRetention) {
+          pathEpoch == (_pathEpochs[url.path] ?? 0)) {
         return cached.json;
       }
       rethrow;
     }
+    final endpoint = _cacheable(url) || url.path == '/api/me'
+        ? url.path
+        : 'other';
+    tracePerformance('http $endpoint', clock, {'status': response.statusCode});
     if (response.statusCode != 304 &&
         (response.statusCode < 200 || response.statusCode >= 300)) {
       if (response.statusCode == 401) clear();
@@ -310,7 +324,7 @@ class SporraApi {
         : response.body;
     if (epoch == _epoch &&
         pathEpoch == (_pathEpochs[url.path] ?? 0) &&
-        _freshness(url) != null) {
+        _cacheable(url)) {
       _cache.remove(url.toString());
       _cache[url.toString()] = (
         tag:
@@ -320,10 +334,16 @@ class SporraApi {
         at: DateTime.now(),
       );
       _trim();
-      _cacheVersion++;
-      _save();
+      if (cached?.json != json || cached?.tag != _cache[url.toString()]?.tag) {
+        _cacheVersion++;
+        _save();
+      }
       if (cached != null && cached.json != json) {
         _contentRevisions[url.path] = (_contentRevisions[url.path] ?? 0) + 1;
+        if (url.hasQuery) {
+          final key = url.toString();
+          _contentRevisions[key] = (_contentRevisions[key] ?? 0) + 1;
+        }
         _updates.add(url);
         if (_isMap(url) ||
             url.path == '/api/render/routes' ||
@@ -346,6 +366,7 @@ class SporraApi {
     final generation = _prefetchGeneration;
     final epoch = _epoch;
     _prefetchTimer = Timer(const Duration(seconds: 2), () async {
+      var prepared = 0;
       for (final path in paths) {
         if (generation != _prefetchGeneration || epoch != _epoch) return;
         while (_pending.isNotEmpty) {
@@ -353,10 +374,12 @@ class SporraApi {
           if (generation != _prefetchGeneration || epoch != _epoch) return;
         }
         try {
-          final json = await _getJson(path);
+          final json = await _getJson(path, revalidate: false);
           if (generation != _prefetchGeneration || epoch != _epoch) return;
-          if (uri(path).path == '/api/render/cells') {
+          if (uri(path).path == '/api/render/cells' &&
+              prepared < prefetchPreparedSnapshots) {
             await _cells.read('$epoch\n${uri(path)}', json, null);
+            prepared++;
           }
         } catch (_) {
           return; // A struggling connection should not spend time on speculation.
@@ -375,11 +398,11 @@ class SporraApi {
 
   Future<Map<String, dynamic>> getMany(
     Map<String, String> paths, {
-    bool allowStale = false,
+    bool revalidate = true,
   }) async {
     final entries = paths.entries.toList();
     final values = await Future.wait(
-      entries.map((entry) => get(entry.value, allowStale: allowStale)),
+      entries.map((entry) => get(entry.value, revalidate: revalidate)),
     );
     return {for (var i = 0; i < entries.length; i++) entries[i].key: values[i]};
   }
@@ -400,8 +423,10 @@ class SporraApi {
             '/api/render/track',
           }
         : null;
-    void invalidateData() => paths == null ? clear() : _invalidatePaths(paths);
+    void invalidateData() =>
+        paths == null ? clear() : _invalidatePaths(paths, retainContent: true);
     if (invalidate) invalidateData();
+    final epoch = _epoch;
     final response = await client
         .post(
           uri(path),
@@ -413,7 +438,19 @@ class SporraApi {
         )
         .timeout(const Duration(minutes: 2));
     final result = _decode(response);
-    if (invalidate) invalidateData();
+    if (invalidate && epoch == _epoch) {
+      invalidateData();
+      if (path == '/api/prefs' && value['prefs'] is Map) {
+        _cache[uri(path).toString()] = (
+          tag: null,
+          json: jsonEncode(value),
+          at: DateTime.now(),
+        );
+        _trim();
+        _cacheVersion++;
+        _save();
+      }
+    }
     return result;
   }
 

@@ -214,6 +214,7 @@ void main() {
     await tester.pump();
     await until(() => screen.factsLevel == 7 && !screen.refreshing);
     final regionAt = screen.renderedAt;
+    final previousRegionReads = regionReads;
     await tester.runAsync(
       () => screen.map.moveCamera(
         CameraUpdate.newLatLngZoom(const LatLng(20, 30), 6),
@@ -230,7 +231,11 @@ void main() {
       regionAt,
       reason: 'Account-wide areas survive panning and zooming.',
     );
-    expect(regionReads, 1);
+    expect(
+      regionReads,
+      previousRegionReads + 1,
+      reason: 'Idle validates cached areas without resending unchanged native geometry.',
+    );
     expect(screen.mapError, isNull);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());

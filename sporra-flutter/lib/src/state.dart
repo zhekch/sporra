@@ -10,15 +10,53 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'api.dart';
+import 'performance.dart';
 import 'map_preferences.dart';
 import 'native.g.dart';
 
 final appProvider = ChangeNotifierProvider((ref) => AppState());
+const startupMenuWarmDelay = Duration(seconds: 2);
 
 class AppState extends ChangeNotifier {
   AppState({SporraApi? api}) : api = api ?? SporraApi() {
     this.api.onMapDataChanged = changed;
     _responses = this.api.updates.listen((url) {
+      if (url.path == '/api/prefs' && _savingPreferences == 0) {
+        unawaited(
+          loadPrefs(revalidate: false)
+              .then<void>((_) => changed(), onError: (Object _) {}),
+        );
+        return;
+      }
+      if (url.path == '/api/render/track' &&
+          url.toString() == requestedTrackPath &&
+          track != null) {
+        final request = trackRequest;
+        unawaited(
+          this.api.get(url.toString(), revalidate: false).then<void>((value) {
+            if (request != trackRequest || track == null) return;
+            track = Map<String, dynamic>.from(value);
+            final name = (prefs['tripNames'] as Map?)?['$requestedTrackTrip'];
+            if (requestedTrackTrip != null && name != null) {
+              track!['label'] = name;
+            }
+            changed();
+          }, onError: (Object _) {}),
+        );
+        return;
+      }
+      if (url.path == '/api/days' && track != null) {
+        unawaited(
+          this.api.get(url.toString(), revalidate: false).then<void>((value) {
+            if (track == null) return;
+            recordedDays =
+                (value['days'] as Map).keys.map((key) => '$key').toList()
+                  ..sort();
+            notifyListeners();
+          }, onError: (Object _) {}),
+        );
+        return;
+      }
       final id = activity?['route']['id'];
       if (url.path != '/api/render/activity' ||
           id == null ||
@@ -28,7 +66,7 @@ class AppState extends ChangeNotifier {
       }
       final request = activityRequest;
       unawaited(
-        this.api.get(url.toString()).then<void>((value) {
+        this.api.get(url.toString(), revalidate: false).then<void>((value) {
           if (request != activityRequest || activity == null) return;
           applyActivity(
             Map<String, dynamic>.from(value),
@@ -40,6 +78,8 @@ class AppState extends ChangeNotifier {
     });
   }
   late final StreamSubscription<Uri> _responses;
+  int _savingPreferences = 0;
+  Timer? _warmDataTimer;
   final SporraApi api;
   final mapPreferences = MapPreferences();
   final native = SporraNative();
@@ -219,11 +259,11 @@ class AppState extends ChangeNotifier {
     return run(() async {
       final path = '/api/render/activity?id=$id';
       final version = api.revisionFor('/api/render/activity');
-      var data = Map<String, dynamic>.from(
-        await api.get(path, allowStale: true),
-      );
+      var data = Map<String, dynamic>.from(await api.get(path));
       if (version != api.revisionFor('/api/render/activity')) {
-        data = Map<String, dynamic>.from(await api.get(path));
+        data = Map<String, dynamic>.from(
+          await api.get(path, revalidate: false),
+        );
       }
       if (request != activityRequest) return;
       applyActivity(data, keepMetric: keepMetric);
@@ -281,6 +321,9 @@ class AppState extends ChangeNotifier {
   Map<String, dynamic>? track;
   String? trackDay;
   int trackRequest = 0;
+  int trackLoadedRequest = -1;
+  String? requestedTrackPath;
+  dynamic requestedTrackTrip;
   List<String> recordedDays = [];
   bool canStepDay(int delta) {
     final i = recordedDays.indexOf(trackDay ?? '');
@@ -293,11 +336,20 @@ class AppState extends ChangeNotifier {
       final query = Uri(
         queryParameters: day != null ? {'day': day} : {'trip': '$trip'},
       ).query;
-      final results = await Future.wait([
-        api.get('/api/render/track?$query'),
-        api.get('/api/days'),
-      ]);
-      final data = Map<String, dynamic>.from(results[0]);
+      final path = '/api/render/track?$query';
+      requestedTrackPath = api.uri(path).toString();
+      requestedTrackTrip = trip;
+      final version = api.revisionFor('/api/render/track');
+      final daysVersion = api.revisionFor('/api/days');
+      final results = await Future.wait([api.get(path), api.get('/api/days')]);
+      final data = Map<String, dynamic>.from(
+        version == api.revisionFor('/api/render/track')
+            ? results[0]
+            : await api.get(path, revalidate: false),
+      );
+      final days = daysVersion == api.revisionFor('/api/days')
+          ? results[1]
+          : await api.get('/api/days', revalidate: false);
       if (request != trackRequest) return;
       activityRequest++;
       requestedActivity = null;
@@ -305,14 +357,14 @@ class AppState extends ChangeNotifier {
       activityMetric = null;
       activitySample = null;
       selectedRoute = null;
-      recordedDays =
-          (results[1]['days'] as Map).keys.map((key) => '$key').toList()
-            ..sort();
+      recordedDays = (days['days'] as Map).keys.map((key) => '$key').toList()
+        ..sort();
       if (request != trackRequest) return;
       if (trip != null) {
         data['label'] = (prefs['tripNames'] as Map?)?['$trip'] ?? data['label'];
       }
       track = data;
+      trackLoadedRequest = request;
       trackDay = day;
       changed();
     });
@@ -320,6 +372,9 @@ class AppState extends ChangeNotifier {
 
   void clearTrack() {
     trackRequest++;
+    trackLoadedRequest = trackRequest;
+    requestedTrackPath = null;
+    requestedTrackTrip = null;
     track = null;
     trackDay = null;
     changed();
@@ -357,6 +412,7 @@ class AppState extends ChangeNotifier {
   Map<String, dynamic>? undo;
 
   Future<void> initialize() async {
+    final clock = Stopwatch()..start();
     try {
       device = Map<String, dynamic>.from(jsonDecode(await native.settings()));
       final server = '${device['server'] ?? ''}';
@@ -367,13 +423,13 @@ class AppState extends ChangeNotifier {
         if (user != null) {
           await restoreCache();
           await loadPrefs();
-          warmData();
         }
       }
     } catch (e) {
       error = '$e';
     }
     ready = true;
+    tracePerformance('app-ready', clock, {'signed-in': user == null ? 0 : 1});
     notifyListeners();
   }
 
@@ -409,7 +465,6 @@ class AppState extends ChangeNotifier {
       user = Map<String, dynamic>.from(result);
       await restoreCache();
       await loadPrefs();
-      warmData();
       revision++;
     });
   }
@@ -417,35 +472,43 @@ class AppState extends ChangeNotifier {
   Future<void> restoreCache() async {
     try {
       final directory = await getApplicationSupportDirectory();
-      await mapPreferences.restore(
-        File('${directory.path}/map-preferences.json'),
-        '${api.server}\n${user!["username"]}',
-      );
-      await api.restore(
-        File('${directory.path}/responses.json'),
-        '${user!['username']}',
-      );
+      await Future.wait([
+        mapPreferences.restore(
+          File('${directory.path}/map-preferences.json'),
+          '${api.server}\n${user!["username"]}',
+        ),
+        api.restore(
+          File('${directory.path}/responses.json'),
+          '${user!['username']}',
+        ),
+      ]);
     } catch (_) {
       // Memory caching still works when device storage is unavailable.
     }
   }
 
   void warmData() {
-    unawaited(checkAnnouncements());
-    for (final path in [
-      '/api/days',
-      '/api/trips',
-      '/api/routes?fold=1',
-      '/api/render/activity-stats',
-    ]) {
-      unawaited(api.get(path).then<void>((_) {}, onError: (Object _) {}));
-    }
+    _warmDataTimer?.cancel();
+    _warmDataTimer = Timer(startupMenuWarmDelay, () {
+      unawaited(checkAnnouncements());
+      for (final path in [
+        '/api/days',
+        '/api/trips',
+        '/api/render/activity-stats',
+      ]) {
+        api.revalidate(path);
+      }
+    });
   }
 
-  Future<void> loadPrefs() async {
-    prefs = Map<String, dynamic>.from(
-      (await api.get('/api/prefs'))['prefs'] ?? {},
-    );
+  Future<void> loadPrefs({bool revalidate = true}) async {
+    final version = api.revisionFor('/api/prefs');
+    var data = await api.get('/api/prefs', revalidate: revalidate);
+    if (version != api.revisionFor('/api/prefs')) {
+      data = await api.get('/api/prefs', revalidate: false);
+    }
+    if (!revalidate && _savingPreferences > 0) return;
+    prefs = Map<String, dynamic>.from(data['prefs'] ?? {});
     accent =
         '${(prefs['accents'] as Map?)?['dark'] ?? prefs['accent'] ?? '#60acff'}';
     style = mb.effectiveBasemap(mapPreferences.style, mapboxToken);
@@ -525,6 +588,13 @@ class AppState extends ChangeNotifier {
     mapPreferences.save();
   }
 
+  void rememberViewport(double latitude, double longitude, double zoom) {
+    mapPreferences.latitude = latitude;
+    mapPreferences.longitude = ((longitude + 180) % 360) - 180;
+    mapPreferences.zoom = zoom;
+    mapPreferences.save();
+  }
+
   Future<void> saveAppearance() async {
     await patchPrefs({
       'accent': accentTheme == 'dark' ? accent : prefs['accent'] ?? '#60acff',
@@ -535,15 +605,20 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> patchPrefs(Map<String, dynamic> patch) async {
-    final current = Map<String, dynamic>.from(
-      (await api.get('/api/prefs'))['prefs'] ?? {},
-    );
-    prefs = {
-      ...current,
-      ...patch,
-      'updatedAt': DateTime.now().millisecondsSinceEpoch,
-    };
-    await api.post('/api/prefs', {'prefs': prefs});
+    _savingPreferences++;
+    try {
+      final current = Map<String, dynamic>.from(
+        (await api.get('/api/prefs', refresh: true))['prefs'] ?? {},
+      );
+      prefs = {
+        ...current,
+        ...patch,
+        'updatedAt': DateTime.now().millisecondsSinceEpoch,
+      };
+      await api.post('/api/prefs', {'prefs': prefs});
+    } finally {
+      _savingPreferences--;
+    }
   }
 
   String mapDataPath(int level, {bool fine = false}) =>
@@ -606,6 +681,7 @@ class AppState extends ChangeNotifier {
   });
   @override
   void dispose() {
+    _warmDataTimer?.cancel();
     activityRequest++;
     unawaited(_responses.cancel());
     api.dispose();
@@ -613,6 +689,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> clearSession() async {
+    _warmDataTimer?.cancel();
     await native.signOut();
     api.clear();
     prefs = {};
@@ -630,6 +707,9 @@ class AppState extends ChangeNotifier {
     selectedRoute = null;
     stackIds = [];
     trackRequest++;
+    requestedTrackPath = null;
+    requestedTrackTrip = null;
+    trackLoadedRequest = trackRequest;
     track = null;
     trackDay = null;
     editing = false;

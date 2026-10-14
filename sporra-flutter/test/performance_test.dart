@@ -233,7 +233,8 @@ void main() {
           home: AsyncList(
             api: api,
             paths: const {'/api/trips'},
-            load: () => api.get('/api/trips', allowStale: true),
+            load: ({bool revalidate = true}) =>
+                api.get('/api/trips', revalidate: revalidate),
             builder: (_, data) => Text(data['label']),
           ),
         ),
@@ -247,10 +248,51 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(find.text('Updated trips'), findsOneWidget);
+      expect(
+        requests,
+        1,
+        reason: 'A response update must not validate itself again.',
+      );
       await tester.pumpWidget(const SizedBox());
       api.dispose();
     },
   );
+
+  test('background track changes update the active selection and cannot reopen a closed track', () async {
+    final update = Completer<http.Response>(),
+        late = Completer<http.Response>();
+    var reads = 0;
+    final app = AppState(
+      api: SporraApi(
+        client: MockClient((request) async {
+          if (request.url.path == '/api/days') {
+            return http.Response('{"days":{"2026-01-01":1}}', 200);
+          }
+          reads++;
+          if (reads == 2) return update.future;
+          if (reads == 3) return late.future;
+          return http.Response('{"id":1,"label":"Saved trip"}', 200);
+        }),
+      )..server = 'https://example.test',
+    );
+    addTearDown(app.dispose);
+    await app.api.get('/api/render/track?trip=1');
+    await app.selectTrack(trip: 1);
+    expect(app.track!['label'], 'Saved trip');
+    final loaded = app.trackLoadedRequest;
+    expect(update.isCompleted, isFalse);
+    update.complete(http.Response('{"id":1,"label":"Updated trip"}', 200));
+    await app.api.get('/api/render/track?trip=1', refresh: true);
+    await Future<void>.delayed(Duration.zero);
+    expect(app.track!['label'], 'Updated trip');
+    expect(app.trackLoadedRequest, loaded);
+    final pending = app.api.get('/api/render/track?trip=1', refresh: true);
+    app.clearTrack();
+    late.complete(http.Response('{"id":1,"label":"Later trip"}', 200));
+    await pending;
+    await Future<void>.delayed(Duration.zero);
+    expect(app.track, isNull);
+  });
 
   testWidgets('large activity groups build only the visible rows', (
     tester,

@@ -9,6 +9,7 @@ const mapStyles = {'dark', 'terrain', 'voyager', 'satellite', 'mapbox'};
 class MapPreferences {
   String style = 'dark';
   double tilt = 0, bearing = 0;
+  double? latitude, longitude, zoom;
   File? _file;
   String? _scope;
   Timer? _timer;
@@ -20,6 +21,7 @@ class MapPreferences {
     _scope = scope;
     style = 'dark';
     tilt = bearing = 0;
+    latitude = longitude = zoom = null;
     try {
       final data = jsonDecode(await file.readAsString()) as Map;
       if (data['scope'] != scope) return;
@@ -28,6 +30,21 @@ class MapPreferences {
       if (pitch is num && pitch.isFinite) tilt = pitch.toDouble().clamp(0, 85);
       if (heading is num && heading.isFinite) {
         bearing = heading.toDouble() % 360;
+      }
+      final lat = data['latitude'], lng = data['longitude'], z = data['zoom'];
+      if (lat is num &&
+          lat.isFinite &&
+          lat.abs() <= 85.051129 &&
+          lng is num &&
+          lng.isFinite &&
+          lng.abs() <= 180 &&
+          z is num &&
+          z.isFinite &&
+          z >= 0 &&
+          z <= 24) {
+        latitude = lat.toDouble();
+        longitude = lng.toDouble();
+        zoom = z.toDouble();
       }
     } catch (_) {
       // Missing or damaged view preferences must not delay opening the map.
@@ -49,6 +66,9 @@ class MapPreferences {
       'style': style,
       'tilt': tilt,
       'bearing': bearing,
+      if (latitude != null) 'latitude': latitude,
+      if (longitude != null) 'longitude': longitude,
+      if (zoom != null) 'zoom': zoom,
     });
     return _writes = _writes.then((_) async {
       try {
