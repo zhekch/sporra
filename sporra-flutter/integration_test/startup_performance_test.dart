@@ -19,19 +19,53 @@ import 'package:sporra_flutter/src/state.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   testWidgets(
-    'cached startup and live zoom do not wait for validation or location',
+    'cached startup and live zoom do not wait for facts, validation or location',
     (tester) async {
       final directory = await Directory.systemTemp.createTemp(
         'sporra-startup-',
       );
       final validation = Completer<http.Response>();
       final summaries = Completer<http.Response>();
+      final facts = Completer<void>();
+      var factsName = 'Fixture';
       final requests = <Uri>[];
+      Map<String, Object> cells(int level, {bool info = false}) => {
+        'level': level,
+        'radius': 42,
+        'columns': ['key', 'x', 'y', 'color', 'sparse', if (info) 'info'],
+        'rows': [
+          for (var i = 0; i < 40; i++)
+            [
+              cellKey(level, 8.28 + i * 0.0005, 46.95),
+              mercX(8.28 + i * 0.0005),
+              mercY(46.95),
+              '#60acff',
+              false,
+              if (info) {'name': factsName, 'visited': true},
+            ],
+        ],
+      };
       final app = AppState(
         api: SporraApi(
           client: MockClient((request) {
             requests.add(request.url);
             if (request.url.path == '/api/routes') return summaries.future;
+            if (request.url.path == '/api/render/cells' &&
+                request.url.queryParameters['info'] == '1') {
+              expect(request.url.queryParameters.containsKey('bbox'), isTrue);
+              return facts.future.then(
+                (_) => http.Response(
+                  jsonEncode(
+                    cells(
+                      int.parse(request.url.queryParameters['level']!),
+                      info: true,
+                    ),
+                  ),
+                  200,
+                  headers: {'etag': '"facts"'},
+                ),
+              );
+            }
             if (request.headers['If-None-Match'] == '"saved"') {
               return validation.future;
             }
@@ -42,17 +76,6 @@ void main() {
       app.mapPreferences.latitude = 46.95;
       app.mapPreferences.longitude = 8.28;
       app.mapPreferences.zoom = 14;
-      final rows = [
-        for (var i = 0; i < 40; i++)
-          [
-            cellKey(0, 8.28 + i * 0.0005, 46.95),
-            mercX(8.28 + i * 0.0005),
-            mercY(46.95),
-            '#60acff',
-            false,
-            {'name': 'Fixture', 'visited': true},
-          ],
-      ];
       final route = {
         'type': 'Feature',
         'properties': {'id': 1, 'color': '#ff9147', 'alpha': 1},
@@ -71,28 +94,32 @@ void main() {
           'features': [route],
         },
         for (var level = 0; level < 3; level++)
-          app.mapDataPath(level): {
-            'level': level,
-            'radius': 42,
-            'columns': ['key', 'x', 'y', 'color', 'sparse', 'info'],
-            'rows': rows,
-          },
+          app.mapDataPath(level): cells(level),
       };
       final file = File('${directory.path}/responses.json');
+      final bodies = Directory('${file.path}.data');
+      await bodies.create();
+      final entries = <Map<String, Object?>>[];
+      var id = 0;
+      for (final snapshot in snapshots.entries) {
+        final body = jsonEncode(snapshot.value);
+        await File('${bodies.path}/$id.json').writeAsString(body);
+        entries.add({
+          'url': 'https://example.test${snapshot.key}',
+          'tag': '"saved"',
+          'id': id++,
+          'size': body.length * 2,
+          'at': DateTime.now()
+              .subtract(const Duration(days: 800))
+              .millisecondsSinceEpoch,
+        });
+      }
       await file.writeAsString(
         jsonEncode({
           'scope': 'https://example.test\nalice',
-          'entries': [
-            for (final entry in snapshots.entries)
-              {
-                'url': 'https://example.test${entry.key}',
-                'tag': '"saved"',
-                'json': jsonEncode(entry.value),
-                'at': DateTime.now()
-                    .subtract(const Duration(days: 800))
-                    .millisecondsSinceEpoch,
-              },
-          ],
+          'format': SporraApi.cacheFormat,
+          'nextFile': id,
+          'entries': entries,
         }),
       );
       await app.api.restore(file, 'alice');
@@ -131,7 +158,9 @@ void main() {
           if (wait.elapsed > timeout) {
             fail(
               'Map did not progress: error=${screen.mapError}, zoom=${screen.camera.zoom}, '
-              'facts=${screen.factsLevel}, live=${screen.renderedLive}, moving=${screen.cameraMoving}',
+              'facts=${screen.factsLevel}, live=${screen.renderedLive}, moving=${screen.cameraMoving}, '
+              'painted=${screen.renderedAt != null}, routes=${screen.routesView != null}, '
+              'details=${screen.loadingFacts}, detailsRequests=${requests.where((url) => url.queryParameters["info"] == "1").length}',
             );
           }
           await tester.pump(const Duration(milliseconds: 16));
@@ -143,6 +172,7 @@ void main() {
         () =>
             screen.renderedAt != null &&
             screen.routesView != null &&
+            requests.any((url) => url.queryParameters['info'] == '1') &&
             !screen.refreshing,
       );
       expect(screen.factsLevel, 0);
@@ -150,6 +180,10 @@ void main() {
       expect(validation.isCompleted, isFalse);
       expect(screen.focusingLocation, isTrue);
       expect(summaries.isCompleted, isFalse);
+      expect(facts.isCompleted, isFalse);
+      screen.showCachedPlace(const LatLng(46.95, 8.28), app);
+      expect(screen.placeInfo['visited'], isTrue);
+      expect(screen.placeInfo['name'], isNull);
       final native = screen.map.libre as MapLibreMapController;
       expect(
         await native.querySourceFeatures('activities', null, null),
@@ -182,6 +216,7 @@ void main() {
         timeout: const Duration(seconds: 3),
       );
       expect(validation.isCompleted, isFalse);
+      expect(facts.isCompleted, isFalse);
       expect(
         requests.where((url) => url.path == '/api/render/cells').length,
         cellReads,
@@ -194,7 +229,34 @@ void main() {
             !screen.cameraMoving &&
             !screen.refreshing &&
             !screen.renderedLive &&
-            screen.factsLevel == 1,
+            screen.factsLevel == 1 &&
+            screen.activeFactsPath != null &&
+            Uri.parse(screen.activeFactsPath as String)
+                    .queryParameters['level'] ==
+                '1',
+      );
+      screen.showCachedPlace(const LatLng(46.95, 8.28), app);
+      final painted = screen.renderedAt;
+      facts.complete();
+      await until(
+        () => screen.placeInfo?['name'] == 'Fixture' && !screen.loadingFacts,
+      );
+      expect(
+        screen.renderedAt,
+        painted,
+        reason: 'Visit details never repaint the cell image.',
+      );
+      await tester.runAsync(() async {
+        factsName = 'Updated fixture';
+        await app.api
+            .get(screen.activeFactsPath as String, refresh: true)
+            .timeout(const Duration(seconds: 5));
+      });
+      await until(() => screen.placeInfo?['name'] == 'Updated fixture');
+      expect(
+        screen.renderedAt,
+        painted,
+        reason: 'Changed background facts update the selected place only.',
       );
       expect(screen.mapError, isNull);
       expect(tester.takeException(), isNull);

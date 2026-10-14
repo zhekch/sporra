@@ -175,6 +175,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
   Map<String, dynamic>? placeInfo;
   int observedTrackRequest = -1;
   final cellFacts = <String, Map<String, dynamic>>{};
+  String? activeFactsPath, loadedFactsPath, selectedCellKey;
+  Object? selectedFactsScope;
+  int factsRequest = 0;
+  bool loadingFacts = false;
   final areaFacts =
       <
         ({Path shape, Map<String, dynamic> info, Map<String, dynamic> geometry})
@@ -532,6 +536,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
         await updateGroundOpacity(app);
         if (!live) {
           refreshOverlays(app);
+          if (level < 6 && factsBounds != null) {
+            unawaited(refreshCellFacts(app, level, factsBounds!));
+          }
           await updatePlaceOutline();
         }
         if (validateSnapshot) app.api.revalidate(path);
@@ -581,16 +588,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
       factsBounds = level < 6 ? bounds : [-180, -85.051129, 180, 85.051129];
       final opacity = app.groundOpacity;
       if (level < 6) {
+        final query = app.renderQuery(level);
+        final savedFacts = factsLevel == level && factsQuery == query
+            ? Map.of(cellFacts)
+            : <String, Map<String, dynamic>>{};
         cellFacts.clear();
         for (final row in data['rows'] as List) {
-          if (row.length > 5) {
-            cellFacts['${row[0]}'] = Map<String, dynamic>.from(row[5]);
-          }
+          cellFacts['${row[0]}'] = row.length > 5
+              ? Map<String, dynamic>.from(row[5])
+              : savedFacts['${row[0]}'] ?? {'visited': true};
         }
         factsLevel = level;
-        factsQuery = (data['columns'] as List? ?? []).contains('info')
-            ? app.renderQuery(level)
-            : null;
+        factsQuery = query;
         final width = math.min(
           live ? gestureSheetMaxPixels : 1536,
           math.max(
@@ -766,6 +775,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       warmMap(app, level);
       if (!live) {
         refreshOverlays(app);
+        if (level < 6) unawaited(refreshCellFacts(app, level, bounds));
         await updatePlaceOutline();
       }
       if (mounted) setState(() => mapError = null);
@@ -819,6 +829,69 @@ class _MapScreenState extends ConsumerState<MapScreen>
       );
     }
     groundOpacityView = view;
+  }
+
+  Future<void> refreshCellFacts(
+    AppState app,
+    int level,
+    List<double> bounds, {
+    bool revalidate = true,
+  }) async {
+    if (!mounted || !loaded || !app.cellInfo || cameraMoving) return;
+    final path = app.mapDataPath(level, info: true, bbox: bounds.join(','));
+    final url = app.api.uri(path).toString();
+    if (activeFactsPath == url && loadingFacts) return;
+    if (activeFactsPath == url && loadedFactsPath == url) {
+      if (revalidate) app.api.revalidate(path);
+      return;
+    }
+    activeFactsPath = url;
+    loadingFacts = true;
+    final request = ++factsRequest, token = generation;
+    final query = app.renderQuery(level);
+    final clock = Stopwatch()..start();
+    try {
+      final version = app.api.revisionFor(path);
+      var data = await app.api.get(path, revalidate: revalidate);
+      if (version != app.api.revisionFor(path)) {
+        data = await app.api.get(path, revalidate: false);
+      }
+      if (!mounted ||
+          request != factsRequest ||
+          token != generation ||
+          factsLevel != level ||
+          factsQuery != query ||
+          app.renderQuery(level) != query) {
+        tracePerformance('viewport-facts-obsolete', clock, {
+          'request-current': request == factsRequest ? 1 : 0,
+          'style-current': token == generation ? 1 : 0,
+          'level-current': factsLevel == level ? 1 : 0,
+          'query-current':
+              factsQuery == query && app.renderQuery(level) == query ? 1 : 0,
+        });
+        return;
+      }
+      for (final row in data['rows'] as List) {
+        if (row.length > 5 && cellFacts.containsKey('${row[0]}')) {
+          cellFacts['${row[0]}'] = Map<String, dynamic>.from(row[5]);
+        }
+      }
+      loadedFactsPath = url;
+      final selected = cellFacts[selectedCellKey];
+      if (placeInfo != null &&
+          selected != null &&
+          selectedFactsScope == (level, query)) {
+        setState(() => placeInfo = {...?placeInfo, ...selected});
+      }
+      tracePerformance('viewport-facts', clock, {
+        'cells': (data['rows'] as List).length,
+      });
+    } catch (error) {
+      tracePerformance('viewport-facts-failed ${error.runtimeType}', clock);
+      // The geometry preview and a point's independent lookup remain usable.
+    } finally {
+      if (request == factsRequest) loadingFacts = false;
+    }
   }
 
   Future<String?> below() async {
@@ -913,26 +986,58 @@ class _MapScreenState extends ConsumerState<MapScreen>
       routesReadRevision = revision;
       routesDataPath = path;
     }
+    await refreshRouteStyle(app);
+    if (needsData && validate && geometryWasCached) app.api.revalidate(path);
+  }
+
+  Object routeStyleKey(AppState app) => (
+    generation,
+    routesView,
+    app.routes,
+    app.activity?['route']['id'] ?? app.selectedRoute,
+    app.selectedRoute,
+    app.activityMetric == null ? null : app.activity?['route']['id'],
+    app.accentTheme,
+  );
+
+  Future<void>? routeStyleWork;
+  Future<void> refreshRouteStyle(AppState app) {
+    if (!mounted || !loaded || !sources.contains('activities')) {
+      return Future.value();
+    }
+    // Visibility must catch up even while ground or route downloads are waiting.
+    // Keep a single writer so a late selection cannot overwrite a later close.
+    return routeStyleWork ??= () async {
+      final token = generation;
+      try {
+        do {
+          await updateRouteStyle(app);
+        } while (mounted &&
+            loaded &&
+            token == generation &&
+            sources.contains('activities') &&
+            routesStyleView != routeStyleKey(app));
+      } catch (error) {
+        if (mounted && loaded && token == generation) {
+          setState(() => mapError = readableError('$error'));
+        }
+      } finally {
+        routeStyleWork = null;
+      }
+    }();
+  }
+
+  Future<void> updateRouteStyle(AppState app) async {
+    final styleView = routeStyleKey(app);
+    if (routesStyleView == styleView || !sources.contains('activities')) return;
+    final clock = Stopwatch()..start();
     final light = app.accentTheme == 'light';
     final selected = app.activity?['route']['id'] ?? app.selectedRoute;
     final metricRoute = app.activityMetric == null
         ? null
         : app.activity?['route']['id'];
-    final styleView = (
-      generation,
-      routesView,
-      app.routes,
-      selected,
-      app.selectedRoute,
-      metricRoute,
-      light,
-    );
-    if (routesStyleView == styleView) {
-      if (needsData && validate && geometryWasCached) app.api.revalidate(path);
-      return;
-    }
-    if (!sources.contains('activities')) return;
-    final filter = activityFilter(app.selectedRoute, metricRoute);
+    final restriction = app.selectedRoute;
+    final filter = activityFilter(restriction, metricRoute);
     final glow = [
       '*',
       ['get', 'alpha'],
@@ -1004,8 +1109,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
       firstRoutesTraced = true;
       tracePerformance('first-activities', startupClock);
     }
-    if (needsData && validate && geometryWasCached) app.api.revalidate(path);
     routesStyleView = styleView;
+    tracePerformance('route-style', clock, {
+      'restricted': restriction == null ? 0 : 1,
+      'metric': metricRoute == null ? 0 : 1,
+      'visible': app.routes ? 1 : 0,
+    });
   }
 
   Future<void> updateTrack(AppState app) async {
@@ -1516,6 +1625,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
         inBounds &&
         factsLevel == currentLevel &&
         factsQuery == app.renderQuery(currentLevel);
+    selectedCellKey = currentLevel < 6
+        ? cellKey(currentLevel, point.longitude, point.latitude)
+        : null;
+    selectedFactsScope = (currentLevel, app.renderQuery(currentLevel));
     final local = factsReady
         ? currentLevel < 6
               ? cellFacts[cellKey(
@@ -1830,6 +1943,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
     photosView = null;
     fade?.cancel();
     loaded = true;
+    factsRequest++;
+    activeFactsPath = loadedFactsPath = null;
+    loadingFacts = false;
     tracePerformance('native-style-ready', startupClock);
     refreshRoutes(ref.read(appProvider));
     // Saved layers can appear while the location service obtains a fresh fix.
@@ -1854,7 +1970,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final app = ref.read(appProvider);
     responseUpdates = app.api.updates.listen((url) {
       if (!mounted) return;
-      if (url.path == '/api/render/reference') {
+      if (url.toString() == activeFactsPath && factsBounds != null) {
+        loadedFactsPath = null;
+        unawaited(
+          refreshCellFacts(app, factsLevel, factsBounds!, revalidate: false),
+        );
+      } else if (url.path == '/api/render/reference') {
         refreshOverlays(app);
       } else if (url.path == '/api/render/style' &&
           requestedStyle != null &&
@@ -1925,6 +2046,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     cameraRefreshTimer?.cancel();
     unawaited(responseUpdates?.cancel());
     generation++;
+    factsRequest++;
     if (!(obsoleteRefresh?.isCompleted ?? true)) obsoleteRefresh!.complete();
     tapRequest++;
     sunTimer?.cancel();
@@ -2005,6 +2127,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     if (observed != app.revision) {
       observed = app.revision;
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (loaded) unawaited(refreshRouteStyle(app));
         unawaited(refresh(validate: false));
       });
     }
@@ -2453,6 +2576,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             if (pendingActivityFit ==
                                 app.activity?['route']['id']) {
                               pendingActivityFit = null;
+                              final clock = app.activityOpenClock;
+                              if (clock != null) {
+                                clock.stop();
+                                tracePerformance('activity-card-layout', clock);
+                              }
                               focusActivity(app);
                             }
                           },

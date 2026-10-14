@@ -10444,3 +10444,142 @@ and cache-hit counts via `performance.dart`. It is disabled by default. The trac
 omits account names, coordinates, request queries, tokens and response payloads;
 unrecognized HTTP paths are labelled `other`. This supports timing a normal
 release on the phone without replacing it with an integration-test entrypoint.
+
+
+### Release-device cache retention (Flutter 0.21.1)
+
+On the iPhone release build, initial cell downloads took 2.3–2.8 seconds and full
+snapshot indexing roughly 0.6 seconds; cell image painting took 46–114 ms. One
+session check also waited 5.8 seconds while earlier speculation was still active.
+Repeat launches missed saved content, so live tracing now includes restore/save
+outcomes, response sizes, cache retention and prepared-index reuse, without
+recording payloads, URLs, coordinates or account identifiers.
+
+Both response and prepared-snapshot caches use `BoundedCache`. An oversized
+entry is rejected before normal LRU eviction rather than flushing all useful
+entries and then evicting itself. Replacements remove only their previous entry;
+reads retain recent entries, and account/invalidation removal updates the byte
+accounting. Speculative responses and prepared indexes fill spare capacity only,
+so normal-sized speculation cannot evict foreground entries either. A foreground
+read sharing an outstanding speculative request promotes that response. Index
+preparation skips work when its result cannot be retained. Raw responses retain the 128 MiB/512-entry budget. Prepared snapshots
+now have a 64 MiB estimated JSON-string allowance (still three snapshots), so
+larger active cell indexes can remain prepared; decoded facts and buckets consume
+additional memory beyond that estimate. The limits remain estimates, not whole
+process memory ceilings.
+
+Idle prefetch is limited to two nearest levels (`prefetchResponseLimit = 2`),
+with at most two prepared cell indexes. It no longer walks all remaining levels
+or speculatively fetches fine region/country boundaries. Fixed detail modes do
+not prefetch other levels. Missing snapshots still load when selected. This
+keeps distant exports from competing with ordinary foreground requests and
+startup restoration. Capacity and persistence regression tests cover oversized
+speculation retaining saved preferences and activity lines across restart.
+
+
+### Geometry before cell histories (Flutter 0.21.2)
+
+The phone trace revealed an approximately 54 MB level-zero response with
+`info=1`, too large for even the expanded prepared-index allowance. Repeated
+viewport reads decoded it again, and the saved response file took about a second
+to restore. Cell geometry now uses the account-wide `info=0` response, retaining
+the same colours, sparse flags and spatial index while excluding visit histories.
+Region responses still carry their area facts and independent outline geometry.
+
+After installing the ground layer, idle views request cell facts with `info=1`
+and the padded viewport's `bbox`. These requests use available cached responses
+before validation and never hold up geometry, activity lines or moving sheets.
+Known cell keys provide an immediate visited indicator, and previously loaded
+facts remain available for overlapping cells with the same level and filters.
+Changed facts update a selected place without repainting the ground. Selection,
+query, level, style and request guards keep obsolete facts out of a new view.
+The existing independent point lookup remains available while details load.
+
+Restoration converts legacy account-wide cell responses to geometry in a worker,
+after verifying their server/account scope; this retains useful old geometry
+instead of requiring a fresh download during upgrade. A migrated response drops
+its ETag because the geometry query has a different signature. Existing geometry
+responses take precedence, and the smaller migrated cache is saved atomically.
+Account-wide cell-history responses are no longer retained; viewport histories
+and region facts remain eligible for the bounded response cache.
+
+The startup simulator fixture holds cold facts, route summaries, validation and
+location independently. It checks initial native layers and live zoom first,
+then releases facts and verifies that both initial and changed details update
+the selected place without replacing the painted sheet. API migration tests
+cover old geometry reuse, separate ETag scope and removal of bulk histories.
+
+
+### Read cache bodies on demand (Flutter 0.21.3)
+
+With geometry and visible facts separated, a repeat phone launch still spent
+1.65 seconds restoring roughly 66 MB of saved response strings before creating
+the map. Cached cells then appeared in 619 ms and activity lines in 330 ms from
+map creation. The remaining bulk restoration delay was independent of network
+validation and required changing persistence rather than rendering.
+
+`responses.json` is now a small format-two index containing the verified
+server/account scope, response URL, ETag, timestamp, estimated size and numeric
+body-file ID. Bodies live in its sibling `responses.json.data` directory and
+load only when requested. Shared in-flight file reads avoid loading a startup
+snapshot twice while its index prepares alongside the native style. Large body
+UTF-8 encoding and decoding run in workers. The disk index and loaded response
+LRUs each obey the 512-entry/128 MiB estimated-string budget; speculation cannot
+evict foreground content from either. Unread bodies remain eligible regardless
+of age. Missing or truncated bodies fall back to a server request without reusing
+their ETag, while unrelated cached content remains available.
+
+Saves write changed bodies to new numeric IDs, rename each temporary body, then
+atomically replace the index. Unchanged bodies retain their files. Old body files
+are removed after the new index commits, and Clear cache/sign-out remove both
+the index and its body directory. Legacy files are read once and migrated with
+their useful geometry and content retained; subsequent launches parse metadata
+only. API tests check lazy reads, missing-body recovery, orphan cleanup, scope,
+invalidation and retention across restart. The native startup fixture restores
+this indexed format before exercising held requests and live zoom.
+
+On the release iPhone, indexed repeat startup restored the response index in
+3 ms (previously 1647 ms), with no bodies loaded by restoration. Session checking
+and cached preferences completed at 261 ms; native activity lines appeared
+309 ms after map creation and the first cell sheet at 648 ms. Combined, that is
+approximately 0.57 seconds for lines and 0.91 seconds for cells from app-state
+initialization, versus 2.17 and 2.46 seconds respectively before indexed storage.
+These are measured release runs on this phone with the server reachable, not
+guaranteed launch deadlines or timings for a missing cache entry.
+
+Flutter 0.21.4 gives the disk LRU its own 256 MiB estimated-string allowance
+(`diskCacheBytes`), keeping the loaded-response allowance at 128 MiB. The device's
+existing snapshots nearly filled the old shared 128 MiB allowance, so idle
+warming could not retain the adjacent level even though the active and nearby
+geometry themselves fit comfortably. The separate disk budget preserves more
+zoom levels across launch without restoring or holding all their bodies in RAM.
+Both LRUs still have 512 entries and speculation still fills spare space only.
+A regression test alternates cached responses while offline with a smaller RAM
+allowance than disk allowance, checking reuse after loaded-body eviction.
+
+Route visibility now updates independently of ground and route downloads. The
+selected activity's metric overlay normally replaces its base line, so the base
+filter can simultaneously select that ID and exclude it. Closing previously
+cleared the overlay immediately but could leave that filter installed until a
+ground refresh finished, hiding every activity. A serialized route-style worker
+coalesces selection/Show all/close changes and applies their latest filter to the
+retained native source, even while a camera or data refresh is pending. Data
+replacement and style replacement share that single writer. The native simulator
+fixture reproduces the old filter remaining after close, then verifies both base
+activities are actually rendered before releasing a held ground request.
+
+Opt-in timing now also records activity-data readiness, first card layout and
+route-style duration with boolean selection/metric/visibility counts. These
+events contain no route IDs or other account data. In the installed normal
+0.21.4+43 release, the user confirmed other activity lines remained visible after
+closing. Across 13 phone openings, six cached activities reached data readiness
+in 4–22 ms; seven uncached activities took 96–219 ms. First card layout took
+18–34 ms for cached activities and 118–242 ms for uncached activities. The close
+filter updates took 4–19 ms. These timings cover the observed activities and
+server conditions rather than guaranteeing every future opening's latency.
+
+That launch restored the cache index in 1 ms and app state in 212 ms. Native
+activity lines appeared 777 ms after map creation and cells at 1188 ms, roughly
+0.99 and 1.40 seconds respectively from app-state initialization. Native style
+loading and the first geometry body read varied across phone runs; they remain
+part of startup latency even though bulk cache restoration no longer blocks it.

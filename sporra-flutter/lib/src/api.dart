@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'cell_snapshot.dart';
+import 'bounded_cache.dart';
 import 'performance.dart';
 
 class ApiException implements Exception {
@@ -23,6 +24,9 @@ bool isConnectionFailure(Object error) =>
     error is TimeoutException ||
     (error is ApiException && error.status >= 500);
 
+typedef _Response = ({String? tag, String json, DateTime at});
+typedef _SavedResponse = ({String? tag, int size, int id, DateTime at});
+
 String readableError(String message) =>
     RegExp(
       r'SocketException|ClientException|TimeoutException|Connection (?:reset|refused)|network.*(?:lost|connection)',
@@ -32,18 +36,34 @@ String readableError(String message) =>
     : message;
 
 class SporraApi {
-  SporraApi({http.Client? client})
-    : client =
-          client ??
-          (Platform.isIOS
-              ? CupertinoClient.defaultSessionConfiguration()
-              : http.Client());
+  SporraApi({
+    http.Client? client,
+    int cacheByteLimit = cacheBytes,
+    int diskByteLimit = diskCacheBytes,
+  }) : client =
+           client ??
+           (Platform.isIOS
+               ? CupertinoClient.defaultSessionConfiguration()
+               : http.Client()),
+       _cache = BoundedCache<String, _Response>(
+         maxEntries: cacheLimit,
+         maxBytes: cacheByteLimit,
+         bytesFor: (entry) => entry.json.length * 2,
+       ),
+       _saved = BoundedCache<String, _SavedResponse>(
+         maxEntries: cacheLimit,
+         maxBytes: diskByteLimit,
+         bytesFor: (entry) => entry.size,
+       );
   final http.Client client;
   String server = '';
   static const isolateThreshold = 64 * 1024;
   static const cacheLimit = 512;
   static const cacheBytes = 128 * 1024 * 1024;
+  static const diskCacheBytes = 256 * 1024 * 1024;
+  static const cacheFormat = 2;
   static const prefetchPreparedSnapshots = cellSnapshotLimit - 1;
+  static const prefetchResponseLimit = 2;
   static const dataFreshness = Duration(seconds: 60);
   void Function()? onMapDataChanged;
   final _updates = StreamController<Uri>.broadcast();
@@ -53,8 +73,13 @@ class SporraApi {
   final _contentRevisions = <String, int>{};
   Timer? _prefetchTimer;
   int _prefetchGeneration = 0;
-  final _cache = <String, ({String? tag, String json, DateTime at})>{};
+  final BoundedCache<String, _Response> _cache;
+  final BoundedCache<String, _SavedResponse> _saved;
+  final _dirty = <int, String>{};
+  final _loading = <String, Future<_Response?>>{};
+  int _nextFile = 0;
   final _pending = <String, Future<String>>{};
+  final _foregroundPending = <String>{};
   int _epoch = 0;
   int _revision = 0;
   int _cacheVersion = 0;
@@ -69,7 +94,10 @@ class SporraApi {
       url.path == '/api/render/cells' || url.path == '/api/render/regions';
 
   bool _cacheable(Uri url) =>
-      _isMap(url) ||
+      (_isMap(url) &&
+          !(url.path == '/api/render/cells' &&
+              url.queryParameters['info'] == '1' &&
+              !url.queryParameters.containsKey('bbox'))) ||
       const {
         '/api/render/style',
         '/api/render/reference',
@@ -89,38 +117,139 @@ class SporraApi {
 
   // Restore only after the server has identified the current cookie session.
   Future<void> restore(File file, String account) async {
+    final clock = Stopwatch()..start();
     final epoch = _epoch;
     final scope = '$server\n$account';
     _file = file;
     _scope = scope;
     try {
       await _diskWork;
-      final saved = await decodeJson(await file.readAsString()) as Map;
-      if (_epoch != epoch || saved['scope'] != scope) return;
+      final saved = await compute(_restoreResponseCache, (
+        json: await file.readAsString(),
+        scope: scope,
+      ));
+      if (_epoch != epoch || saved['scope'] != scope) {
+        tracePerformance('cache-restore-scope-mismatch', clock);
+        return;
+      }
+      _nextFile = saved['nextFile'] as int? ?? 0;
       for (final row in (saved['entries'] as List).take(cacheLimit)) {
         final url = Uri.parse(row['url'] as String);
         final at = DateTime.fromMillisecondsSinceEpoch(row['at'] as int);
         if (url.origin != uri('/').origin || !_cacheable(url)) {
           continue;
         }
-        final json = row['json'] as String;
-        _cache[url.toString()] = (
-          tag: row['tag'] as String?,
-          json: json,
-          at: at,
-        );
+        if (saved['format'] == cacheFormat) {
+          final id = row['id'] as int, size = row['size'] as int;
+          if (id < 0 || size < 0) continue;
+          if (_nextFile <= id) _nextFile = id + 1;
+          _saved[url.toString()] = (
+            tag: row['tag'] as String?,
+            size: size,
+            id: id,
+            at: at,
+          );
+        } else {
+          _store(url.toString(), (
+            tag: row['tag'] as String?,
+            json: row['json'] as String,
+            at: at,
+          ));
+        }
       }
-      _trim();
-    } catch (_) {
+      tracePerformance('cache-restored', clock, {
+        'entries': _saved.length,
+        'estimatedBytes': _saved.bytes,
+        'loaded': _cache.length,
+      });
+      if (saved['format'] != cacheFormat) {
+        _cacheVersion++;
+        _save();
+      }
+    } catch (error) {
+      tracePerformance('cache-restore-failed ${error.runtimeType}', clock);
       // Device caches are disposable; a missing or damaged file cannot block login.
     }
   }
 
-  void _trim() {
-    var size = _cache.values.fold(0, (n, entry) => n + entry.json.length * 2);
-    while (_cache.length > cacheLimit || size > cacheBytes) {
-      size -= _cache.remove(_cache.keys.first)!.json.length * 2;
+  void _store(String key, _Response entry, {bool speculative = false}) {
+    final previous = _saved[key];
+    final reuse = previous != null && _cache[key]?.json == entry.json;
+    final record = (
+      tag: entry.tag,
+      size: entry.json.length * 2,
+      id: reuse ? previous.id : _nextFile++,
+      at: entry.at,
+    );
+    if (speculative) {
+      _cache.addIfRoom(key, entry);
+    } else {
+      _cache[key] = entry;
     }
+    if (_file == null) return;
+    if (speculative) {
+      _saved.addIfRoom(key, record);
+    } else {
+      _saved[key] = record;
+    }
+    if (!reuse && _saved[key] == record) _dirty[record.id] = entry.json;
+    final ids = {for (final saved in _saved.values) saved.id};
+    _dirty.removeWhere((id, _) => !ids.contains(id));
+  }
+
+  Future<_Response?> _loadSaved(String key, {bool speculative = false}) async {
+    final saved = _saved[key], file = _file;
+    if (saved == null || file == null) return null;
+    final epoch = _epoch;
+    final path = Uri.parse(key).path;
+    final pathEpoch = _pathEpochs[path] ?? 0;
+    final work = _loading[key] ??= () async {
+      final clock = Stopwatch()..start();
+      try {
+        final pending = _dirty[saved.id];
+        final body = File('${file.path}.data/${saved.id}.json');
+        if (pending == null && !await body.exists()) await _diskWork;
+        final json = pending ?? await _readBody(body);
+        if (json.length * 2 != saved.size) {
+          throw const FormatException('Incomplete cache body.');
+        }
+        if (epoch != _epoch ||
+            pathEpoch != (_pathEpochs[path] ?? 0) ||
+            _saved[key] != saved) {
+          return null;
+        }
+        final entry = (tag: saved.tag, json: json, at: saved.at);
+        if (speculative) {
+          _cache.addIfRoom(key, entry);
+        } else {
+          _cache[key] = entry;
+        }
+        tracePerformance('cache-body-read $path', clock, {
+          'estimatedBytes': json.length * 2,
+        });
+        return entry;
+      } catch (error) {
+        if (epoch == _epoch && _saved[key] == saved) {
+          _saved.remove(key);
+          _cacheVersion++;
+          _save();
+        }
+        tracePerformance('cache-body-failed ${error.runtimeType}', clock);
+        return null;
+      }
+    }();
+    try {
+      return await work;
+    } finally {
+      if (identical(_loading[key], work)) _loading.remove(key);
+    }
+  }
+
+  static Future<String> _readBody(File file) async {
+    final bytes = await file.readAsBytes();
+    return bytes.length >= isolateThreshold
+        ? compute(_responseText, bytes)
+        : utf8.decode(bytes);
   }
 
   void _save() {
@@ -139,24 +268,58 @@ class SporraApi {
     _queuedSaveVersion = _cacheVersion;
     final snapshot = {
       'scope': _scope,
+      'format': cacheFormat,
+      'nextFile': _nextFile,
       'entries': [
-        for (final entry in _cache.entries)
+        for (final entry in _saved.entries)
           {
             'url': entry.key,
             'tag': entry.value.tag,
-            'json': entry.value.json,
+            'id': entry.value.id,
+            'size': entry.value.size,
             'at': entry.value.at.millisecondsSinceEpoch,
           },
       ],
     };
+    final ids = {for (final entry in _saved.values) entry.id};
+    final bodies = {
+      for (final id in ids)
+        if (_dirty.containsKey(id)) id: _dirty[id]!,
+    };
+    _dirty.clear();
     return _diskWork = _diskWork.then((_) async {
+      final clock = Stopwatch()..start();
       try {
-        final json = await compute(jsonEncode, snapshot);
+        final json = jsonEncode(snapshot);
         await file.parent.create(recursive: true);
+        final directory = Directory('${file.path}.data');
+        await directory.create(recursive: true);
+        for (final entry in bodies.entries) {
+          final body = File('${directory.path}/${entry.key}.json');
+          final temporary = File('${body.path}.tmp');
+          final bytes = await compute(_responseBytes, entry.value);
+          await temporary.writeAsBytes(bytes, flush: true);
+          await temporary.rename(body.path);
+        }
         final temporary = File('${file.path}.tmp');
         await temporary.writeAsString(json, flush: true);
         await temporary.rename(file.path);
-      } catch (_) {}
+        await for (final entity in directory.list()) {
+          final name = entity.path.split(Platform.pathSeparator).last;
+          final match = RegExp(r'^(\d+)\.json(?:\.tmp)?$').firstMatch(name);
+          if (entity is File &&
+              match != null &&
+              !ids.contains(int.parse(match[1]!))) {
+            await entity.delete();
+          }
+        }
+        tracePerformance('cache-saved', clock, {
+          'entries': (snapshot['entries'] as List).length,
+          'bodies': bodies.length,
+        });
+      } catch (error) {
+        tracePerformance('cache-save-failed ${error.runtimeType}', clock);
+      }
     });
   }
 
@@ -164,18 +327,25 @@ class SporraApi {
     _epoch++;
     _revision++;
     _cacheVersion++;
+    _queuedSaveVersion = _cacheVersion;
     _pathEpochs.clear();
     _contentRevisions.clear();
     _cells.clear();
     cancelPrefetch();
     _cache.clear();
+    _saved.clear();
+    _dirty.clear();
+    _loading.clear();
     _pending.clear();
+    _foregroundPending.clear();
     _saveTimer?.cancel();
     final file = _file;
     if (file != null) {
       _diskWork = _diskWork.then((_) async {
         try {
           if (await file.exists()) await file.delete();
+          final directory = Directory('${file.path}.data');
+          if (await directory.exists()) await directory.delete(recursive: true);
         } catch (_) {}
       });
     }
@@ -194,7 +364,16 @@ class SporraApi {
           affected(key) &&
           (!retainContent || Uri.parse(key).path == '/api/prefs'),
     );
+    _saved.removeWhere(
+      (key, _) =>
+          affected(key) &&
+          (!retainContent || Uri.parse(key).path == '/api/prefs'),
+    );
+    _loading.removeWhere((key, _) => affected(key));
+    final ids = {for (final saved in _saved.values) saved.id};
+    _dirty.removeWhere((id, _) => !ids.contains(id));
     _pending.removeWhere((key, _) => affected(key));
+    _foregroundPending.removeWhere(affected);
     _save();
   }
 
@@ -230,10 +409,14 @@ class SporraApi {
     return data;
   }
 
-  bool hasCached(String path) => _cache.containsKey(uri(path).toString());
+  bool hasCached(String path) {
+    final key = uri(path).toString();
+    return _cache.containsKey(key) || _saved.containsKey(key);
+  }
 
   Future<void> prepareCells(String path) async {
-    final cached = _cache[uri(path).toString()];
+    final key = uri(path).toString();
+    final cached = _cache[key] ?? await _loadSaved(key);
     if (cached != null) {
       await _cells.read('$_epoch\n${uri(path)}', cached.json, null);
     }
@@ -249,10 +432,14 @@ class SporraApi {
     String path, {
     bool refresh = false,
     bool revalidate = true,
+    bool speculative = false,
   }) async {
     final url = uri(path);
     final key = url.toString();
-    final cached = _cache[key];
+    final epoch = _epoch;
+    _saved[key]; // Retain the active response in the disk LRU too.
+    final cached =
+        _cache[key] ?? await _loadSaved(key, speculative: speculative);
     if (_cacheable(url)) {
       tracePerformance('cache ${url.path}', Stopwatch(), {
         'hit': cached == null ? 0 : 1,
@@ -261,11 +448,9 @@ class SporraApi {
     if (!refresh && cached != null && _cacheable(url)) {
       if (revalidate) this.revalidate(path);
       // Callers filter and decorate GeoJSON; never lend them the cached object.
-      _cache.remove(key);
-      _cache[key] = cached;
       return cached.json;
     }
-    final epoch = _epoch;
+    if (!speculative) _foregroundPending.add(key);
     final work = _pending[key] ??= _read(
       url,
       cached,
@@ -275,7 +460,10 @@ class SporraApi {
     try {
       return await work;
     } finally {
-      if (identical(_pending[key], work)) _pending.remove(key);
+      if (identical(_pending[key], work)) {
+        _pending.remove(key);
+        _foregroundPending.remove(key);
+      }
     }
   }
 
@@ -311,7 +499,10 @@ class SporraApi {
     final endpoint = _cacheable(url) || url.path == '/api/me'
         ? url.path
         : 'other';
-    tracePerformance('http $endpoint', clock, {'status': response.statusCode});
+    tracePerformance('http $endpoint', clock, {
+      'status': response.statusCode,
+      'bytes': response.bodyBytes.length,
+    });
     if (response.statusCode != 304 &&
         (response.statusCode < 200 || response.statusCode >= 300)) {
       if (response.statusCode == 401) clear();
@@ -325,15 +516,23 @@ class SporraApi {
     if (epoch == _epoch &&
         pathEpoch == (_pathEpochs[url.path] ?? 0) &&
         _cacheable(url)) {
-      _cache.remove(url.toString());
-      _cache[url.toString()] = (
+      final entry = (
         tag:
             response.headers['etag'] ??
             (response.statusCode == 304 ? cached?.tag : null),
         json: json,
         at: DateTime.now(),
       );
-      _trim();
+      _store(
+        url.toString(),
+        entry,
+        speculative: !_foregroundPending.contains(url.toString()),
+      );
+      tracePerformance('cache-store $endpoint', clock, {
+        'estimatedBytes': json.length * 2,
+        'retained': _cache.containsKey(url.toString()) ? 1 : 0,
+        'entries': _cache.length,
+      });
       if (cached?.json != json || cached?.tag != _cache[url.toString()]?.tag) {
         _cacheVersion++;
         _save();
@@ -345,7 +544,9 @@ class SporraApi {
           _contentRevisions[key] = (_contentRevisions[key] ?? 0) + 1;
         }
         _updates.add(url);
-        if (_isMap(url) ||
+        if ((_isMap(url) &&
+                !(url.path == '/api/render/cells' &&
+                    url.queryParameters['info'] == '1')) ||
             url.path == '/api/render/routes' ||
             url.path == '/api/routes') {
           onMapDataChanged?.call();
@@ -367,18 +568,27 @@ class SporraApi {
     final epoch = _epoch;
     _prefetchTimer = Timer(const Duration(seconds: 2), () async {
       var prepared = 0;
-      for (final path in paths) {
+      for (final path in paths.take(prefetchResponseLimit)) {
         if (generation != _prefetchGeneration || epoch != _epoch) return;
         while (_pending.isNotEmpty) {
           await Future<void>.delayed(const Duration(milliseconds: 250));
           if (generation != _prefetchGeneration || epoch != _epoch) return;
         }
         try {
-          final json = await _getJson(path, revalidate: false);
+          final json = await _getJson(
+            path,
+            revalidate: false,
+            speculative: true,
+          );
           if (generation != _prefetchGeneration || epoch != _epoch) return;
           if (uri(path).path == '/api/render/cells' &&
               prepared < prefetchPreparedSnapshots) {
-            await _cells.read('$epoch\n${uri(path)}', json, null);
+            await _cells.read(
+              '$epoch\n${uri(path)}',
+              json,
+              null,
+              speculative: true,
+            );
             prepared++;
           }
         } catch (_) {
@@ -441,12 +651,11 @@ class SporraApi {
     if (invalidate && epoch == _epoch) {
       invalidateData();
       if (path == '/api/prefs' && value['prefs'] is Map) {
-        _cache[uri(path).toString()] = (
+        _store(uri(path).toString(), (
           tag: null,
           json: jsonEncode(value),
           at: DateTime.now(),
-        );
-        _trim();
+        ));
         _cacheVersion++;
         _save();
       }
@@ -491,3 +700,56 @@ class SporraApi {
 }
 
 String _responseBody(http.Response response) => response.body;
+Uint8List _responseBytes(String text) => utf8.encode(text);
+String _responseText(Uint8List bytes) => utf8.decode(bytes);
+
+// Previous builds saved every cell's visit history with the geometry. Extract
+// their usable geometry during restoration, before that history crosses back
+// to the UI isolate. The geometry query has its own ETag, so do not reuse it.
+Map<String, dynamic> _restoreResponseCache(
+  ({String json, String scope}) input,
+) {
+  final saved = jsonDecode(input.json) as Map<String, dynamic>;
+  if (saved['scope'] != input.scope) return {'scope': saved['scope']};
+  if (saved['format'] == SporraApi.cacheFormat) return saved;
+  final entries = saved['entries'] as List;
+  final existing = {for (final row in entries) row['url']};
+  var migrated = false;
+  final restored = <Map<String, dynamic>>[];
+  for (final row in entries) {
+    final url = Uri.parse(row['url'] as String);
+    if (url.path != '/api/render/cells' ||
+        url.queryParameters['info'] != '1' ||
+        url.queryParameters.containsKey('bbox')) {
+      restored.add(Map<String, dynamic>.from(row));
+      continue;
+    }
+    migrated = true;
+    final geometryUrl = url
+        .replace(
+          queryParameters: {
+            ...url.queryParametersAll,
+            'info': ['0'],
+          },
+        )
+        .toString();
+    if (existing.contains(geometryUrl)) continue;
+    try {
+      final geometry = jsonDecode(row['json'] as String) as Map;
+      geometry['columns'] = ['key', 'x', 'y', 'color', 'sparse'];
+      geometry['rows'] = [
+        for (final cell in geometry['rows'] as List)
+          (cell as List).take(5).toList(),
+      ];
+      restored.add({
+        ...Map<String, dynamic>.from(row),
+        'url': geometryUrl,
+        'tag': null,
+        'json': jsonEncode(geometry),
+      });
+    } catch (_) {
+      // One damaged legacy snapshot must not discard other saved content.
+    }
+  }
+  return {...saved, 'entries': restored, 'migrated': migrated};
+}

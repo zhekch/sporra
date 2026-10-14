@@ -253,11 +253,14 @@ class AppState extends ChangeNotifier {
   int? activitySample;
   int activityRequest = 0;
   dynamic requestedActivity;
+  Stopwatch? activityOpenClock;
   Future<void> openActivity(dynamic id, {bool keepMetric = false}) {
+    final clock = activityOpenClock = Stopwatch()..start();
     final request = ++activityRequest;
     requestedActivity = id;
     return run(() async {
       final path = '/api/render/activity?id=$id';
+      final cached = api.hasCached(path);
       final version = api.revisionFor('/api/render/activity');
       var data = Map<String, dynamic>.from(await api.get(path));
       if (version != api.revisionFor('/api/render/activity')) {
@@ -267,6 +270,7 @@ class AppState extends ChangeNotifier {
       }
       if (request != activityRequest) return;
       applyActivity(data, keepMetric: keepMetric);
+      tracePerformance('activity-ready', clock, {'cached': cached ? 1 : 0});
     });
   }
 
@@ -293,6 +297,7 @@ class AppState extends ChangeNotifier {
     if (activity != null) unawaited(HapticFeedback.lightImpact());
     activityRequest++;
     requestedActivity = null;
+    activityOpenClock = null;
     activity = null;
     activitySample = null;
     activityMetric = null;
@@ -621,17 +626,24 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  String mapDataPath(int level, {bool fine = false}) =>
-      '/api/render/${level < 6 ? 'cells' : 'regions'}?${renderQuery(level)}&info=1&fine=${fine && level >= 6 && level < 8 ? 1 : 0}';
+  String mapDataPath(
+    int level, {
+    bool fine = false,
+    bool? info,
+    String? bbox,
+  }) =>
+      '/api/render/${level < 6 ? 'cells' : 'regions'}?${renderQuery(level, bbox: bbox)}&info=${(info ?? level >= 6) ? 1 : 0}&fine=${fine && level >= 6 && level < 8 ? 1 : 0}';
 
   void warmMap(int level) {
+    if (detail != 'auto') {
+      api.cancelPrefetch();
+      return;
+    }
     final levels = List.generate(9, (i) => i)
       ..sort((a, b) => (a - level).abs().compareTo((b - level).abs()));
     api.prefetch([
       for (final next in levels)
         if (next != level) mapDataPath(next),
-      mapDataPath(6, fine: true),
-      mapDataPath(7, fine: true),
     ]);
   }
 

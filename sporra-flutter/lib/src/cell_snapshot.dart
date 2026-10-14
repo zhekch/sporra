@@ -3,10 +3,13 @@ import 'dart:convert';
 import 'dart:isolate';
 import 'dart:math' as math;
 
+import 'bounded_cache.dart';
+import 'performance.dart';
+
 const _world = 40075016.68557849;
 const _indexColumns = 256;
 const _bucketSize = _world / _indexColumns;
-const cellSnapshotBytes = 24 * 1024 * 1024;
+const cellSnapshotBytes = 64 * 1024 * 1024;
 const cellSnapshotLimit = 3;
 
 // Full account snapshots stay in this isolate. Only the padded viewport crosses
@@ -48,15 +51,16 @@ class CellSnapshotReader {
   Future<Map<String, dynamic>> read(
     String key,
     String json,
-    List<double>? bounds,
-  ) async {
+    List<double>? bounds, {
+    bool speculative = false,
+  }) async {
     if (_disposed) throw StateError('Cell reader is closed.');
     final worker = await (_worker ??= _start());
     if (_disposed) throw StateError('Cell reader is closed.');
     final id = _next++;
     final result = Completer<Map<String, dynamic>>();
     _pending[id] = result;
-    worker.send([id, key, json, bounds]);
+    worker.send([id, key, json, bounds, speculative]);
     return result.future;
   }
 
@@ -82,7 +86,11 @@ class CellSnapshotReader {
 
 void _readSnapshots(SendPort replies) {
   final requests = ReceivePort();
-  final cache = <String, _CellSnapshot>{};
+  final cache = BoundedCache<String, _CellSnapshot>(
+    maxEntries: cellSnapshotLimit,
+    maxBytes: cellSnapshotBytes,
+    bytesFor: (snapshot) => snapshot.json.length * 2,
+  );
   replies.send(requests.sendPort);
   requests.listen((message) {
     if (message == null) {
@@ -93,19 +101,31 @@ void _readSnapshots(SendPort replies) {
     final id = request[0] as int;
     try {
       final key = request[1] as String, json = request[2] as String;
+      final clock = Stopwatch()..start();
+      if (request[3] == null &&
+          (json.length * 2 > cellSnapshotBytes ||
+              (request[4] == true && !cache.canFit(key, json.length * 2)))) {
+        tracePerformance('cell-index-preparation-skipped', clock, {
+          'estimatedBytes': json.length * 2,
+        });
+        replies.send([id, <String, dynamic>{}, null]);
+        return;
+      }
       var snapshot = cache.remove(key);
+      final reused = snapshot != null && snapshot.json == json;
       if (snapshot == null || snapshot.json != json) {
         snapshot = _CellSnapshot(json);
       }
-      cache[key] = snapshot;
-      var size = cache.values.fold(
-        0,
-        (sum, value) => sum + value.json.length * 2,
-      );
-      while (cache.length > cellSnapshotLimit ||
-          (size > cellSnapshotBytes && cache.isNotEmpty)) {
-        size -= cache.remove(cache.keys.first)!.json.length * 2;
+      if (request[4] == true) {
+        cache.addIfRoom(key, snapshot);
+      } else {
+        cache[key] = snapshot;
       }
+      tracePerformance('cell-index', clock, {
+        'hit': reused ? 1 : 0,
+        'estimatedBytes': json.length * 2,
+        'retained': cache.containsKey(key) ? 1 : 0,
+      });
       replies.send([
         id,
         request[3] == null

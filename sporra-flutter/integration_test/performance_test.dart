@@ -23,6 +23,8 @@ void main() {
   ) async {
     final oldLevel = Completer<http.Response>();
     final overlay = Completer<http.Response>();
+    final closingGround = Completer<http.Response>();
+    var closingGroundRequested = false;
     var oldRequested = false, geometryReads = 0;
     var regionReads = 0;
     var overlayRequested = false;
@@ -57,16 +59,30 @@ void main() {
           final path = request.url.path;
           if (path == '/api/render/cells') {
             final level = int.parse(request.url.queryParameters['level']!);
-            if (level == 5 && !oldRequested) {
+            final info = request.url.queryParameters['info'] == '1';
+            if (level == 5 && !info && !oldRequested) {
               oldRequested = true;
               return oldLevel.future;
+            }
+            if (level == 2 && !info && !closingGroundRequested) {
+              closingGroundRequested = true;
+              return closingGround.future;
             }
             return http.Response(
               jsonEncode({
                 'level': level,
                 'radius': 42,
-                'columns': ['key', 'x', 'y', 'color', 'sparse', 'info'],
-                'rows': rows,
+                'columns': [
+                  'key',
+                  'x',
+                  'y',
+                  'color',
+                  'sparse',
+                  if (info) 'info',
+                ],
+                'rows': info
+                    ? rows
+                    : [for (final row in rows) row.take(5).toList()],
               }),
               200,
             );
@@ -209,6 +225,61 @@ void main() {
       await controller.getFilter('activities-line'),
       activityFilter(1, null),
     );
+    app.applyActivity({
+      'route': {
+        'id': 1,
+        'name': 'Fixture',
+        'sport': 'Ride',
+        'firstAt': 1700000000000,
+        'geom': [(routeFeatures.first['geometry'] as Map)['coordinates']],
+      },
+      'summary': {'distance': '100 m'},
+      'graphs': <String, dynamic>{},
+      'samples': [],
+    });
+    app.activityMetric = 'speed';
+    app.changed();
+    await tester.pump();
+    await until(
+      () =>
+          screen.routeRefreshWork == null &&
+          screen.activityFocusWork == null &&
+          !screen.refreshing,
+    );
+    expect(await controller.getFilter('activities-line'), activityFilter(1, 1));
+    await tester.runAsync(
+      () => screen.map.moveCamera(
+        CameraUpdate.newLatLngZoom(const LatLng(46.95, 8.28), 11.5),
+      ),
+    );
+    await until(
+      () =>
+          closingGroundRequested &&
+          screen.refreshing &&
+          screen.currentLevel == 2 &&
+          screen.routeRefreshWork == null &&
+          screen.activityFocusWork == null,
+    );
+    app.closeActivity();
+    await tester.pump(const Duration(milliseconds: 100));
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    expect(closingGround.isCompleted, isFalse);
+    // The plugin's getFilter crashes when its native predicate simplifies to
+    // boolean true; query the actually rendered collection after closing.
+    final restoredLines = await screen.map.queryRenderedFeaturesInRect(
+      Rect.fromLTWH(0, 0, screen.mapSize.width, screen.mapSize.height),
+      ['activities-line'],
+      null,
+    ) as List;
+    expect(
+      restoredLines.map((feature) => feature['properties']['id']).toSet(),
+      {1, 2},
+      reason: 'Closing restores all activity lines while a ground download is still pending.',
+    );
+    closingGround.complete(
+      http.Response(jsonEncode({'level': 2, 'radius': 42, 'rows': rows}), 200),
+    );
+    await until(() => !screen.refreshing && screen.activityFocusWork == null);
     app.detail = 'country';
     app.changed();
     await tester.pump();

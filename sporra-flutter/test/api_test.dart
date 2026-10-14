@@ -407,6 +407,265 @@ void main() {
     },
   );
 
+  test(
+    'legacy cell histories restore as cached geometry with a new ETag scope',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'sporra-geometry-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/responses.json');
+      const geometryPath =
+          '/api/render/cells?level=0&hidden=a&hidden=b&info=0&fine=0';
+      const legacyPath =
+          '/api/render/cells?level=0&hidden=a&hidden=b&info=1&fine=0';
+      const currentPath = '/api/render/cells?level=1&info=0&fine=0';
+      final old = {
+        'level': 0,
+        'radius': 42,
+        'columns': ['key', 'x', 'y', 'color', 'sparse', 'info'],
+        'rows': [
+          [
+            '1/2',
+            1,
+            2,
+            '#60acff',
+            false,
+            {
+              'visits': [
+                {'date': '2000-01-01'},
+              ],
+            },
+          ],
+        ],
+      };
+      final age = DateTime.now()
+          .subtract(const Duration(days: 800))
+          .millisecondsSinceEpoch;
+      await file.writeAsString(
+        jsonEncode({
+          'scope': 'https://example.test\nalice',
+          'entries': [
+            for (final path in [
+              legacyPath,
+              '/api/render/cells?level=1&info=1&fine=0',
+              currentPath,
+            ])
+              {
+                'url': 'https://example.test$path',
+                'tag': '"legacy"',
+                'json': jsonEncode(
+                  path == currentPath
+                      ? {
+                          'rows': ['current'],
+                        }
+                      : old,
+                ),
+                'at': age,
+              },
+          ],
+        }),
+      );
+      final validation = Completer<http.Response>();
+      final api = SporraApi(
+        client: MockClient((request) {
+          expect(request.url.toString(), 'https://example.test$geometryPath');
+          expect(request.headers.containsKey('If-None-Match'), isFalse);
+          return validation.future;
+        }),
+      )..server = 'https://example.test';
+      addTearDown(api.dispose);
+      await api.restore(file, 'alice');
+      final geometry = await api
+          .get(geometryPath)
+          .timeout(const Duration(seconds: 1));
+      expect(geometry['columns'], ['key', 'x', 'y', 'color', 'sparse']);
+      expect(geometry['rows'], [
+        ['1/2', 1, 2, '#60acff', false],
+      ]);
+      expect(await api.get(currentPath, revalidate: false), {
+        'rows': ['current'],
+      });
+      expect(api.hasCached(legacyPath), isFalse);
+      expect(validation.isCompleted, isFalse);
+      await api.flushCache();
+      final saved = jsonDecode(await file.readAsString());
+      expect((saved['entries'] as List).length, 2);
+      for (final row in saved['entries']) {
+        final body = await File('${file.path}.data/${row['id']}.json')
+            .readAsString();
+        expect(body.contains('visits'), isFalse);
+      }
+      validation.complete(http.Response('', 500));
+      await Future<void>.delayed(Duration.zero);
+    },
+  );
+
+  test('indexed restoration reads only the requested body and repairs missing bodies', () async {
+    final directory = await Directory.systemTemp.createTemp('sporra-indexed-');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/responses.json');
+    final saved = SporraApi(
+      client: MockClient(
+        (request) async => http.Response(
+          jsonEncode({'value': request.url.path}),
+          200,
+          headers: {'etag': '"saved"'},
+        ),
+      ),
+    )..server = 'https://example.test';
+    await saved.restore(file, 'alice');
+    for (final path in ['/api/prefs', '/api/trips', '/api/render/routes']) {
+      await saved.get(path);
+    }
+    await saved.flushCache();
+    saved.dispose();
+    final index = jsonDecode(await file.readAsString());
+    expect(index['format'], SporraApi.cacheFormat);
+    expect(
+      (index['entries'] as List).every((row) => !row.containsKey('json')),
+      isTrue,
+    );
+    final trip = (index['entries'] as List).singleWhere(
+      (row) => Uri.parse(row['url']).path == '/api/trips',
+    );
+    await File('${file.path}.data/${trip['id']}.json').delete();
+    var requests = 0;
+    final restored = SporraApi(
+      client: MockClient((request) async {
+        requests++;
+        expect(request.url.path, '/api/trips');
+        expect(request.headers.containsKey('If-None-Match'), isFalse);
+        return http.Response('{"value":"repaired"}', 200);
+      }),
+    )..server = 'https://example.test';
+    addTearDown(restored.dispose);
+    await restored.restore(file, 'alice');
+    expect(restored.hasCached('/api/trips'), isTrue);
+    expect(await restored.get('/api/prefs', revalidate: false), {
+      'value': '/api/prefs',
+    });
+    expect(await restored.get('/api/render/routes', revalidate: false), {
+      'value': '/api/render/routes',
+    });
+    expect(requests, 0);
+    expect(
+      restored.hasCached('/api/trips'),
+      isTrue,
+      reason: 'Unrelated bodies remain unread.',
+    );
+    expect(await restored.get('/api/trips', revalidate: false), {
+      'value': 'repaired',
+    });
+    expect(requests, 1);
+    await restored.flushCache();
+    final latest = jsonDecode(await file.readAsString());
+    final liveIds = {for (final row in latest['entries']) '${row['id']}.json'};
+    expect(
+      await Directory('${file.path}.data')
+          .list()
+          .map((file) => file.path.split('/').last)
+          .toList(),
+      unorderedEquals(liveIds),
+    );
+    restored.clear();
+    await restored.flushCache();
+    expect(await Directory('${file.path}.data').exists(), isFalse);
+  });
+
+  test(
+    'disk retention survives eviction from the smaller loaded-response cache',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'sporra-disk-budget-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/responses.json');
+      final api = SporraApi(
+        cacheByteLimit: 128,
+        diskByteLimit: 512,
+        client: MockClient(
+          (request) async => http.Response(
+            jsonEncode({'value': request.url.path, 'padding': '1234567890'}),
+            200,
+          ),
+        ),
+      )..server = 'https://example.test';
+      await api.restore(file, 'alice');
+      await api.get('/api/prefs');
+      await api.get('/api/render/routes');
+      await api.flushCache();
+      api.dispose();
+      final restored = SporraApi(
+        cacheByteLimit: 128,
+        diskByteLimit: 512,
+        client: MockClient((_) async => throw const SocketException('offline')),
+      )..server = 'https://example.test';
+      addTearDown(restored.dispose);
+      await restored.restore(file, 'alice');
+      for (final path in ['/api/prefs', '/api/render/routes', '/api/prefs']) {
+        expect((await restored.get(path, revalidate: false))['value'], path);
+      }
+    },
+  );
+
+  test('oversized speculation cannot erase persisted startup data', () async {
+    final directory = await Directory.systemTemp.createTemp('sporra-capacity-');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/responses.json');
+    var requests = 0;
+    final api = SporraApi(
+      cacheByteLimit: 256,
+      diskByteLimit: 256,
+      client: MockClient((request) async {
+        requests++;
+        if (request.url.path == '/api/prefs') {
+          return http.Response('{"prefs":{"heatMode":"flat"}}', 200);
+        }
+        if (request.url.path == '/api/render/routes') {
+          return http.Response('{"features":[1]}', 200);
+        }
+        return http.Response(
+          jsonEncode({'rows': [], 'padding': 'x' * 256}),
+          200,
+        );
+      }),
+    )..server = 'https://example.test';
+    addTearDown(api.dispose);
+    await api.restore(file, 'alice');
+    await api.get('/api/prefs');
+    await api.get('/api/render/routes');
+    expect((await api.get('/api/render/regions?level=8'))['rows'], isEmpty);
+    expect(
+      (await api.get('/api/prefs', revalidate: false))['prefs']['heatMode'],
+      'flat',
+    );
+    expect(
+      (await api.get('/api/render/routes', revalidate: false))['features'],
+      [1],
+    );
+    expect(requests, 3);
+    await api.flushCache();
+    final restored = SporraApi(
+      cacheByteLimit: 256,
+      diskByteLimit: 256,
+      client: MockClient((_) async => throw const SocketException('offline')),
+    )..server = api.server;
+    addTearDown(restored.dispose);
+    await restored.restore(file, 'alice');
+    expect(
+      (await restored.get(
+        '/api/prefs',
+        revalidate: false,
+      ))['prefs']['heatMode'],
+      'flat',
+    );
+    expect(
+      (await restored.get('/api/render/routes', revalidate: false))['features'],
+      [1],
+    );
+  });
+
   test('English string table has not drifted', () async {
     final result = await Process.run('node', ['Tools/gen-arb.mjs', '--check']);
     expect(result.exitCode, 0, reason: '${result.stderr}');
