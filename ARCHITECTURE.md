@@ -36,8 +36,8 @@ Strava continues to request `native: true` and uses the existing
 It uses the same persistent HTTPCookieStorage as background SyncClient. Request
 generations cancel obsolete server/account work, and the uploader rejects
 acknowledgements from a forgotten session. URLCache is bounded to 32 MB memory
-and 256 MB disk per server/account, under the app's Caches directory. Restoring
-a cache requires a successful `/api/me`. External public resources use a
+and 256 MB disk per server/account, alongside the offline store in Application Support. Offline startup restores a server-scoped account snapshot before checking
+`/api/me` in the background. External public resources use a
 separate session without account cookies; authenticated URLs must match the
 configured server's origin. Same-origin rail sprites use the authenticated API.
 Preference writes are serialised and colour/switch changes coalesce for 250 ms.
@@ -72,6 +72,52 @@ A successful generic simulator build does not exercise the UI or device-only
 permissions. This migration was compiled for arm64/x86_64 simulator, with API
 and macOS Metal checks; visual/device QA still requires an installed simulator
 runtime or iPhone. The current machine has no installed iOS simulator runtime.
+
+### Persistent offline access (iOS 0.20.0)
+
+URLCache is only an HTTP optimisation; it is no longer the offline contract.
+`ServerAPI` persists successful allowlisted JSON reads and basemap style/sprite
+resources as atomic files plus an index under Application Support/SporraNative,
+scoped by a SHA-256 of the canonical origin and username. Responses are bounded
+to 256 MB/1,024 entries per account, independent of HTTP freshness headers. Query
+keys are ordered canonically. A world cell/region snapshot can satisfy a later
+viewport query; cell projection culls that snapshot to the padded viewport before
+sending discs to Metal. Successful writes invalidate HTTP validators without
+discarding the last offline readings. Explicit cache clearing removes responses.
+
+A separate atomic snapshot stores the last successful account, preferences, and
+pending preference patch for each server. Startup restores that snapshot and
+opens the map before networking. Five-second JSON requests fall back on saved
+responses for connection failures and server 5xx responses. Cached-only reads
+are immediate after a failure. A server 401 remains a distinct authentication
+failure; the store preserves local browsing and requests reauthentication instead
+of throwing away the saved account. Explicit sign-out cancels obsolete work,
+removes the snapshot and private response files, and clears the upload session.
+
+Foreground entry, a one-minute timer, and Retry probe `/api/me` without a cache.
+Only a verified matching account re-enables online access, merges pending
+preferences with fresh server preferences, and refreshes the screen. Background
+preparation saves map geometry for all nine levels at the current appearance,
+plus activity geometry, calendar/trip/statistics/source summaries. Automatic preparation
+is limited to once per 15 minutes within a session; manual refresh and successful
+sync can force it. Detailed reads
+are saved as they are opened. Missing offline content reports that it has not
+been saved; mutations are never reported as successful without the server.
+
+MapLibre opens a persisted style file, allowing its ambient tile cache to supply
+previously viewed basemaps. Offline Mapbox falls back to the native 2D renderer;
+a neutral local style keeps cached overlays available even if no basemap style
+was saved. Tile regions are not proactively downloaded: offline availability of
+street/satellite context is limited to the map SDK's cached tiles. New geographic
+areas and uncached detail still need a connection. The existing device-fix queue
+continues working independently of the foreground's offline state.
+
+`Tools/test-native.mjs` now also seeds a disposable account, stops the Node
+server, and starts a fresh Swift process against the saved cache. It verifies
+persistent identity, offline reads, changed viewport keys, pending preferences,
+missing-content errors, mutation refusal, account separation, and explicit purge.
+It separately checks that an expired session returns a real 401 while retaining
+the local snapshot.
 
 ## How it works
 

@@ -18,6 +18,9 @@ try {
     path.join(root, 'sporra-ios/Sporra/Native/ServerAPI.swift'),
     path.join(root, 'sporra-ios/Sporra/Native/NativeRail.swift'),
     path.join(root, 'sporra-ios/Tools/NativeAPICheck.swift'), '-o', path.join(temporary, 'native-check')]);
+  await run('xcrun', ['swiftc', '-parse-as-library', '-swift-version', '6',
+    path.join(root, 'sporra-ios/Sporra/Native/ServerAPI.swift'),
+    path.join(root, 'sporra-ios/Tools/OfflineAPICheck.swift'), '-o', path.join(temporary, 'offline-check')]);
   server = spawn(process.execPath, ['server/index.js'], {
     cwd: path.join(root, 'sporra-webserver'),
     env: { ...process.env, PORT: String(port), DB_PATH: path.join(temporary, 'test.db'), BACKUP_DIR: path.join(temporary, 'backups'), ALLOW_REGISTRATION: '1', UPDATE_CHECK: '0' },
@@ -30,6 +33,11 @@ try {
   }
   if (!ready) throw new Error('Disposable server did not start');
   await run(path.join(temporary, 'native-check'), [`http://127.0.0.1:${port}`, path.join(temporary, "cache")]);
+  await run(path.join(temporary, 'offline-check'), [`http://127.0.0.1:${port}`, path.join(temporary, 'offline-cache'), 'seed']);
+  const stopped = new Promise(resolve => server.once('exit', resolve));
+  server.kill(); await stopped; server = null;
+  await run(path.join(temporary, 'offline-check'), [`http://127.0.0.1:${port}`, path.join(temporary, 'offline-cache'), 'offline']);
+
 } finally {
   if (server && server.exitCode === null) { const done = new Promise(resolve => server.once('exit', resolve)); server.kill(); await done; }
   await rm(temporary, { recursive: true, force: true });

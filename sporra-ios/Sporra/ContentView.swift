@@ -101,6 +101,23 @@ struct NativeMapScreen: View {
                 }
                 .safeAreaInset(edge: .bottom, spacing: 8) {
                     VStack(spacing: 8) {
+                        if store.offline || store.needsSignIn {
+                            HStack {
+                                Image(systemName: "wifi.slash")
+                                Text(
+                                    store.needsSignIn
+                                        ? "Saved data · sign in to sync" : "Offline · showing saved data"
+                                )
+                                .font(.caption)
+                                Spacer()
+                                if store.needsSignIn {
+                                    Button("Sign in") { store.beginSignIn() }
+                                } else {
+                                    Button("Retry") { Task { await store.reconnect() } }.disabled(
+                                        store.reconnecting)
+                                }
+                            }.padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+                        }
                         if store.notice.exists { announcement }
                         if store.undo["route"].exists || store.undo["routeUpdate"].exists {
                             HStack {
@@ -190,7 +207,10 @@ struct NativeMapScreen: View {
         .task { await store.checkAnnouncements() }
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) {
             store.lightClock = $0
-            Task { await store.checkAnnouncements() }
+            Task {
+                await store.reconnect()
+                await store.checkAnnouncements()
+            }
         }
         .alert(
             "Sporra",
@@ -204,7 +224,7 @@ struct NativeMapScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) {
             _ in
             store.lightClock = Date()
-            store.changed()
+            Task { await store.reconnect() }
         }
         .sheet(isPresented: Binding(get: { store.shareURL != nil }, set: { if !$0 { store.shareURL = nil } }))
         {

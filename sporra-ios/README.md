@@ -52,6 +52,34 @@ the user list. The system share sheet exports the current map snapshot.
 To set home, search for a place, hold its result, and choose **Set as home**.
 Trips and statistics continue to be calculated by your server.
 
+## Offline use
+
+After signing in once with a connection, opening the app restores your saved
+account and preferences immediately. It checks the server in the background;
+a failed connection keeps you on the map with an **Offline** indicator. An
+expired session keeps your saved map available and offers **Sign in to sync**.
+Only explicit sign-out removes the saved account and its private offline data.
+
+The app saves viewed content and downloads visits at every detail level, activity
+lines, calendar days, trips, and statistics in the background. Settings → Offline
+access shows download progress and lets you refresh that data. Saved activity
+cards, day tracks, searches, and other details remain browsable offline; content
+that has not been downloaded says so. Offline storage is bounded, so sufficiently
+large histories can evict older responses. Let the offline download finish
+before relying on a newly signed-in account away from your server.
+
+Previously viewed basemap tiles use the map SDK's local cache. Tiles for new
+areas need internet access. Offline display uses the native 2D map, with a plain
+background if the basemap is unavailable; your saved visits and activity lines
+still render. This does not download every street or satellite tile worldwide.
+
+Appearance/account preference changes made offline are saved locally and synced
+after reconnecting. Imports, map edits, activity changes, and server sync require
+a connection. The phone's existing background location queue continues recording
+offline and uploads when it can. Reconnection is checked on foreground entry,
+periodically while open, or with **Retry**. Clearing the map cache removes offline
+responses but retains the saved account.
+
 ## Recording and photographs
 
 Settings → Import & sync → **This iPhone** controls background location

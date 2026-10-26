@@ -19,8 +19,12 @@ actor NativeBlobPainter {
         let south = mercY(b[1])
         let scale = Double(width) / (east - west)
         let unit = max(0.85, data["radius"].double * scale)
-        let discs = data["rows"].array.map { row -> BlobDisc in
+        let discs = data["rows"].array.compactMap { row -> BlobDisc? in
             let x = row[1].double + (((west + east) / 2 - row[1].double) / world).rounded() * world
+            let y = row[2].double
+            guard x >= west - data["radius"].double * 3, x <= east + data["radius"].double * 3,
+                y >= south - data["radius"].double * 3, y <= north + data["radius"].double * 3
+            else { return nil }
             let color = UIColor(mapColor: row[3].string)
             var r: CGFloat = 0
             var g: CGFloat = 0
@@ -99,14 +103,14 @@ final class NativeMapController: UIViewController, CLLocationManagerDelegate, UI
         let resolvedLight =
             light == "auto"
             ? Self.sunPhase(store.lightClock, coordinate: location.location?.coordinate) : light
-        let key = "\(store.style):\(store.token):\(resolvedLight)"
+        let key = "\(store.style):\(store.token):\(resolvedLight):\(store.useMapbox && store.offline)"
         if styleKey != key {
             styleKey = key
             install()
             return
         }
         guard loaded, let engine else { return }
-        brushPan?.isEnabled = store.editing && !store.clearingRegion
+        brushPan?.isEnabled = store.editing && !store.clearingRegion && !store.offline
         if cameraID != store.cameraCommand {
             cameraID = store.cameraCommand
             focus(store.focus)
@@ -139,6 +143,17 @@ final class NativeMapController: UIViewController, CLLocationManagerDelegate, UI
         location.stopUpdatingLocation()
         wantsLocation = false
     }
+    private static var offlineStyle: JSON {
+        .object([
+            "version": .number(8), "sources": .object([:]),
+            "layers": .array([
+                .object([
+                    "id": .string("offline-background"), "type": .string("background"),
+                    "paint": .object(["background-color": .string("#20252b")]),
+                ])
+            ]),
+        ])
+    }
     private func install() {
         loaded = false
         generation += 1
@@ -156,7 +171,7 @@ final class NativeMapController: UIViewController, CLLocationManagerDelegate, UI
             guard let self else { return }
             do {
                 let new: any MapEngine
-                if store.useMapbox {
+                if store.useMapbox && !store.offline {
                     let light = store.prefs["mapboxLight"].text("auto")
                     new = BoxEngine(
                         frame: view.bounds, token: store.token, satellite: store.style == "satellite",
@@ -166,17 +181,34 @@ final class NativeMapController: UIViewController, CLLocationManagerDelegate, UI
                 } else {
                     var styleURL: URL
                     if ["satellite", "terrain"].contains(store.style) {
-                        let style = try await store.api.get(
-                            "/api/render/style", query: query(["name": store.style]))
+                        let style: JSON
+                        do {
+                            style = try await store.api.get(
+                                "/api/render/style", query: query(["name": store.style]))
+                        } catch {
+                            guard store.offline else { throw error }
+                            style = Self.offlineStyle
+                        }
                         let url = FileManager.default.temporaryDirectory.appendingPathComponent(
                             "sporra-\(store.style).json")
                         try style.data.write(to: url, options: .atomic)
                         styleURL = url
                     } else {
-                        styleURL = URL(
+                        let remote = URL(
                             string:
                                 "https://basemaps.cartocdn.com/gl/\(store.style == "voyager" ? "voyager" : "dark-matter")-gl-style/style.json"
                         )!
+                        let local = FileManager.default.temporaryDirectory.appendingPathComponent(
+                            "sporra-\(store.style).json")
+                        do {
+                            let bytes = try await store.api.publicResource(remote)
+                            try bytes.write(to: local, options: .atomic)
+                        } catch {
+                            guard store.offline else { throw error }
+                            let fallback = Self.offlineStyle
+                            try fallback.data.write(to: local, options: .atomic)
+                        }
+                        styleURL = local
                     }
                     new = LibreEngine(frame: view.bounds, styleURL: styleURL)
                 }

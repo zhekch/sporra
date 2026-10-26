@@ -10,6 +10,21 @@ struct NativeSettings: View {
     @State private var serverVersion = ""
     var body: some View {
         Form {
+            Section("Offline access") {
+                Text(
+                    store.offline
+                        ? "Showing saved data. Server changes need a connection."
+                        : "Your account and downloaded data are available offline."
+                )
+                .font(.footnote).foregroundStyle(.secondary)
+                Button(store.reconnecting ? "Connecting…" : "Check connection") {
+                    Task { await store.reconnect() }
+                }.disabled(store.reconnecting)
+                Button(store.savingOffline ? "Saving map for offline use…" : "Refresh offline data") {
+                    store.downloadOfflineData(force: true)
+                }
+                .disabled(store.offline || store.savingOffline)
+            }
             Section("Account") {
                 LabeledContent("Username", value: store.user["username"].string)
                 LabeledContent("Server", value: AppSettings.shared.serverURL)
@@ -31,7 +46,8 @@ struct NativeSettings: View {
                         set: { store.save(["whatsNew": .string($0 ? "substantial" : "never")]) }))
             }
             Section("Import & sync") {
-                NavigationLink("Import files or a link", destination: NativeImport(store: store))
+                NavigationLink("Import files or a link", destination: NativeImport(store: store)).disabled(
+                    store.offline)
                 NavigationLink("This iPhone", destination: NativeDeviceSettings(store: store))
                 NavigationLink("Sources", destination: NativeSources(store: store))
                 NavigationLink("Strava", destination: NativeConnector(store: store, kind: "strava"))

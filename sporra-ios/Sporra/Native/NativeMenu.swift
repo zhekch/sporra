@@ -61,7 +61,7 @@ struct NativeMenu: View {
                 Toggle("Activities", isOn: $store.activities)
                 Toggle("Tap places for details", isOn: $store.cellInfo)
                 Toggle("Photographs on this iPhone", isOn: $store.photos)
-                Toggle("Editing", isOn: $store.editing)
+                Toggle("Editing", isOn: $store.editing).disabled(store.offline)
                 NavigationLink("Activities", destination: NativeActivities(store: store, close: close))
                 NavigationLink("Trips", destination: NativeTrips(store: store, close: close))
                 NavigationLink("Statistics", destination: NativeStatistics(store: store))

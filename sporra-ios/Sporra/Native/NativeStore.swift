@@ -5,8 +5,16 @@ import UIKit
 
 @MainActor
 final class NativeStore: ObservableObject {
+    private static let offlineRefreshInterval: TimeInterval = 15 * 60
+    private var lastOfflineDownload: Date?
     let api = ServerAPI.shared
     @Published var ready = false
+    @Published var offline = false
+    @Published var needsSignIn = false
+    @Published var reconnecting = false
+    @Published var savingOffline = false
+    private var connectionTask: Task<Void, Never>?
+    private var offlineDownload: Task<Void, Never>?
     @Published var user: JSON = .null
     @Published var prefs: JSON = .object([:])
     @Published var error: String?
@@ -63,17 +71,124 @@ final class NativeStore: ObservableObject {
     var useMapbox: Bool { !token.isEmpty && ["mapbox", "satellite"].contains(style) }
     var localKey: String { "native-map:\(AppSettings.shared.serverURL):\(user["username"].string)" }
     func initialize() async {
-        defer { ready = true }
-        guard let url = AppSettings.shared.baseURL else { return }
+        connectionTask = Task { [weak self, api] in
+            for await unavailable in api.connectionChanges {
+                guard let self else { return }
+                self.offline = unavailable
+                if unavailable { self.editing = false }
+            }
+        }
+        guard let url = AppSettings.shared.baseURL else {
+            ready = true
+            return
+        }
+        if let saved = await api.savedAccount(for: url) {
+            user = saved["user"]
+            prefs = saved["prefs"]
+            optimisticPreferences = saved["pending"].object
+            await api.configure(url, account: user["username"].string)
+            await api.setOffline(true)
+            offline = true
+            restoreCameraPreference()
+            ready = true
+            Task { await self.reconnect() }
+            return
+        }
         await api.configure(url)
         await perform {
             self.user = try await self.api.get("/api/me", fresh: true)
             if self.signedIn { try await self.restore(url) }
         }
+        ready = true
+    }
+    private func restoreCameraPreference() {
+        if let saved = UserDefaults.standard.dictionary(forKey: localKey) {
+            style = saved["style"] as? String ?? "dark"
+        }
+    }
+    func beginSignIn() {
+        user = .null
+        needsSignIn = false
+    }
+    func reconnect() async {
+        guard signedIn, !reconnecting else { return }
+        reconnecting = true
+        defer { reconnecting = false }
+        let epoch = accountEpoch
+        do {
+            let live = try await api.get("/api/me", fresh: true)
+            guard epoch == accountEpoch else { return }
+            guard live["username"] == user["username"] else {
+                needsSignIn = true
+                offline = true
+                await api.setOffline(true)
+                return
+            }
+            user = live
+            needsSignIn = false
+            offline = false
+            await api.setOffline(false)
+            if !optimisticPreferences.isEmpty {
+                try await patchPrefs(optimisticPreferences)
+            } else {
+                prefs = try await api.get("/api/prefs", fresh: true)["prefs"]
+            }
+            await persistAccount()
+            changed()
+            downloadOfflineData()
+        } catch {
+            guard epoch == accountEpoch else { return }
+            if (error as? ServerFailure)?.status == 401 { needsSignIn = true }
+            offline = true
+            await api.setOffline(true)
+        }
+    }
+    private func persistAccount() async {
+        await api.saveAccount(user: user, prefs: prefs, pending: optimisticPreferences)
+    }
+    func downloadOfflineData(force: Bool = false) {
+        guard signedIn, !offline, !savingOffline else { return }
+        if !force, let lastOfflineDownload,
+            Date().timeIntervalSince(lastOfflineDownload) < Self.offlineRefreshInterval
+        {
+            return
+        }
+        offlineDownload?.cancel()
+        let epoch = accountEpoch
+        offlineDownload = Task {
+            savingOffline = true
+            defer { if epoch == accountEpoch { savingOffline = false } }
+            let paths = [
+                "/api/routes?fold=1", "/api/render/routes", "/api/days", "/api/trips", "/api/stats",
+                "/api/render/activity-stats", "/api/sources",
+            ]
+            do {
+                for path in paths {
+                    try Task.checkCancellation()
+                    _ = try await api.get(path)
+                    guard epoch == accountEpoch, !(await api.isOffline()) else { return }
+                }
+                // World snapshots make cached visits independent of camera size,
+                // orientation and zoom after a cold launch.
+                for level in (0...8).reversed() {
+                    try Task.checkCancellation()
+                    _ = try await api.get(
+                        level < 6 ? "/api/render/cells" : "/api/render/regions",
+                        query: renderQuery(level) + query(["info": "0", "fine": "1"]))
+                    guard epoch == accountEpoch, !(await api.isOffline()) else { return }
+                }
+                lastOfflineDownload = Date()
+            } catch { /* Offline preparation is opportunistic, never a blocking dialog. */  }
+        }
     }
     func login(address: String, username: String, password: String, register: Bool) async {
         await perform {
             let url = try ServerAPI.address(address)
+            let previousAccount = await self.api.savedAccount(for: url)
+            self.accountEpoch += 1
+            self.offlineDownload?.cancel()
+            self.preferenceDebounce?.cancel()
+            self.preferenceWork?.cancel()
             if AppSettings.shared.baseURL != url { await AppSettings.shared.signOut() }
             await self.api.configure(url)
             let health = try await self.api.get("/api/health", fresh: true)
@@ -86,17 +201,28 @@ final class NativeStore: ObservableObject {
                     "username": .string(username.trimmingCharacters(in: .whitespacesAndNewlines)),
                     "password": .string(password),
                 ])
+            if previousAccount?["user"]["username"] == self.user["username"] {
+                self.optimisticPreferences = previousAccount?["pending"].object ?? [:]
+            } else {
+                self.optimisticPreferences = [:]
+            }
+            self.queuedPreferences = [:]
             AppSettings.shared.serverURL = url.absoluteString
             try await self.restore(url)
         }
     }
     private func restore(_ url: URL) async throws {
         accountEpoch += 1
+        lastOfflineDownload = nil
+        savingOffline = false
         await api.configure(url, account: user["username"].string)
         prefs = try await api.get("/api/prefs")["prefs"]
-        if let saved = UserDefaults.standard.dictionary(forKey: localKey) {
-            style = saved["style"] as? String ?? "dark"
-        }
+        restoreCameraPreference()
+        offline = false
+        needsSignIn = false
+        if !optimisticPreferences.isEmpty { try await patchPrefs(optimisticPreferences) }
+        await persistAccount()
+        downloadOfflineData()
         revision += 1
     }
     func renderQuery(_ level: Int, bbox: String? = nil) -> [URLQueryItem] {
@@ -106,6 +232,15 @@ final class NativeStore: ObservableObject {
         return q
     }
     func patchPrefs(_ patch: [String: JSON]) async throws {
+        let unavailable = await api.isOffline()
+        if offline || unavailable {
+            for (key, value) in patch {
+                prefs[key] = value
+                optimisticPreferences[key] = value
+            }
+            await persistAccount()
+            return
+        }
         // Serialise read/merge/write, otherwise two fast switches lose one another.
         let previous = preferenceWork
         let epoch = accountEpoch
@@ -122,6 +257,7 @@ final class NativeStore: ObservableObject {
             }
             for (key, value) in self.optimisticPreferences { current[key] = value }
             self.prefs = current
+            await self.persistAccount()
             self.revision += 1
         }
         preferenceWork = task
@@ -134,6 +270,7 @@ final class NativeStore: ObservableObject {
             optimisticPreferences[key] = value
         }
         revision += 1
+        Task { await self.persistAccount() }
         preferenceDebounce?.cancel()
         preferenceDebounce = Task {
             do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
@@ -142,6 +279,11 @@ final class NativeStore: ObservableObject {
             preferenceDebounce = nil
             await perform {
                 do { try await self.patchPrefs(values) } catch {
+                    if ServerAPI.isUnavailable(error) {
+                        self.offline = true
+                        await self.persistAccount()
+                        return
+                    }
                     for (key, value) in values where self.optimisticPreferences[key] == value {
                         self.optimisticPreferences.removeValue(forKey: key)
                     }
@@ -165,18 +307,35 @@ final class NativeStore: ObservableObject {
         do { try await work() } catch is CancellationError {} catch let cancelled as URLError
             where cancelled.code == .cancelled
         {} catch let failure as ServerFailure {
-            if failure.status == 401 { await clearSession() }
-            error = failure.message
+            if failure.status == 401 && signedIn {
+                needsSignIn = true
+                offline = true
+                await api.setOffline(true)
+            } else if ServerAPI.isUnavailable(failure) && signedIn {
+                offline = true
+                error = failure.message
+            } else {
+                error = failure.message
+            }
         } catch { self.error = error.localizedDescription }
     }
     func report(_ failure: Error) async {
         if failure is CancellationError || (failure as? URLError)?.code == .cancelled { return }
-        if (failure as? ServerFailure)?.status == 401 { await clearSession() }
+        if (failure as? ServerFailure)?.status == 401 && signedIn {
+            needsSignIn = true
+            offline = true
+            await api.setOffline(true)
+            return
+        }
+        if ServerAPI.isUnavailable(failure) && signedIn {
+            offline = true
+            return
+        }
         error = failure.localizedDescription
     }
     func changed() { revision += 1 }
     func checkAnnouncements() async {
-        guard signedIn else { return }
+        guard signedIn, !offline else { return }
         let epoch = accountEpoch
         guard
             let value = try? await api.post(
@@ -291,8 +450,9 @@ final class NativeStore: ObservableObject {
             if let error = TrackingSettings.shared.status.lastError {
                 throw ServerFailure(status: 0, message: error)
             }
-            await self.api.clearCache()
+            await self.api.invalidateHTTPCache()
             self.changed()
+            self.downloadOfflineData(force: true)
         }
     }
     func signOut() async {
@@ -303,13 +463,17 @@ final class NativeStore: ObservableObject {
     }
     private func clearSession() async {
         accountEpoch += 1
+        offlineDownload?.cancel()
+        savingOffline = false
         preferenceWork?.cancel()
         preferenceDebounce?.cancel()
         queuedPreferences = [:]
         optimisticPreferences = [:]
         selectionEpoch += 1
-        await api.clearCache()
+        await api.forgetAccount()
         await AppSettings.shared.signOut()
+        offline = false
+        needsSignIn = false
         user = .null
         prefs = .object([:])
         undo = .null
