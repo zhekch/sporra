@@ -2,30 +2,14 @@ import Foundation
 import UIKit
 import WebKit
 
-/// Talking to the server from Swift rather than from the page.
-///
-/// ## Signing in is still the web app's job
-///
-/// There is no native login and there should not be one — a second session to
-/// keep in step with the first is the bug, not the feature. So this borrows the
-/// one the web view already has: after every page load `WebPanel` copies the
-/// site's cookies into `HTTPCookieStorage.shared`, which is the jar
-/// `URLSession` reaches for without being asked and which persists across
-/// launches on its own.
-///
-/// That it persists at all is a property of the server: `sessionCookie()` in
-/// `server/index.js` sets `Max-Age`, so `sid` is a dated cookie rather than a
-/// session one, and a phone relaunched into the background at 4 a.m. by a
-/// location event still has it. A session cookie would be dropped at every
-/// launch and background syncing would quietly never work — which is the sort
-/// of thing that looks like a networking bug for a week.
-///
-/// When the session does end, nothing here can mend it: a 401 is reported up to
-/// Settings, which says to sign in on the map.
+/// Background uploads use the same persistent cookie jar as the native API.
+/// The generation prevents a reply from a signed-out session acknowledging
+/// fixes that may now belong to a different account.
 @MainActor
 final class SyncClient {
 
     static let shared = SyncClient()
+    private static var sessionGeneration = 0
 
     /// One push at a time, and never more than this many fixes in it. A phone
     /// catching up after a fortnight has thousands to send and a background
@@ -84,10 +68,11 @@ final class SyncClient {
         }
         if !force, let last = lastFlush, Date().timeIntervalSince(last) < Self.minGap { return }
 
+        let generation = Self.sessionGeneration
         flushing = true
         defer {
             flushing = false
-            settings.status.pending = FixQueue.shared.count
+            if generation == Self.sessionGeneration { settings.status.pending = FixQueue.shared.count }
         }
 
         // A background wake is granted seconds; asking for time is what turns
@@ -117,6 +102,7 @@ final class SyncClient {
                 settings.status.lastError = SyncError.signedOut.errorDescription
                 return
             } catch {
+                guard generation == Self.sessionGeneration else { return }
                 // Everything stays queued. The next wake tries again, and a
                 // week in a cellar costs nothing but disk.
                 settings.status.lastError = error.localizedDescription
@@ -190,7 +176,7 @@ final class SyncClient {
             throw SyncError.noServer
         }
         var request = URLRequest(url: url)
-        request.setValue(WebViewController.userAgentTag, forHTTPHeaderField: "X-Sporra-Client")
+        request.setValue("ios-native", forHTTPHeaderField: "X-Sporra-Client")
         return try await run(request)
     }
 
@@ -204,7 +190,7 @@ final class SyncClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         // The same tag the web view carries, so a server log can tell the app's
         // own traffic from the page's.
-        request.setValue(WebViewController.userAgentTag, forHTTPHeaderField: "X-Sporra-Client")
+        request.setValue("ios-native", forHTTPHeaderField: "X-Sporra-Client")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return try await run(request)
     }
@@ -214,7 +200,9 @@ final class SyncClient {
     /// identically either way — it is the one status Settings has words
     /// for, and the one nothing here can mend.
     private func run(_ request: URLRequest) async throws -> [String: Any] {
+        let generation = Self.sessionGeneration
         let (data, response) = try await session.data(for: request)
+        guard generation == Self.sessionGeneration else { throw CancellationError() }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         if status == 401 { throw SyncError.signedOut }
@@ -247,6 +235,7 @@ final class SyncClient {
     /// `HTTPCookieStorage` would mean a phone that had signed out went on
     /// uploading, which is the one thing "sign out" has to mean.
     static func forgetSession() {
+        sessionGeneration += 1
         for cookie in HTTPCookieStorage.shared.cookies ?? [] {
             HTTPCookieStorage.shared.deleteCookie(cookie)
         }

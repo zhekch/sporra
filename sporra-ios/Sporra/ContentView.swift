@@ -1,128 +1,315 @@
-// `Combine` explicitly — this target turns on MemberImportVisibility, so a
-// transitive import does not lend its members, and `onReceive` wants a publisher.
 import Combine
 import SwiftUI
 import UIKit
 
-/// The map, and a door into the little this app knows that the site does not.
-///
-/// The map is the web app — all of it, unmodified. The menu, the import dialogs,
-/// the sync connectors, statistics and backups already work and already have
-/// their own login; the phone hosts them rather than replacing them.
-///
-/// Settings is the handful of things only this app can answer: which server to
-/// open, how this phone records where it has been, and how to forget both. The
-/// second of those is not a duplicate of anything on the site — it is the one
-/// setting that *could not* live on the server, because a schedule stored there
-/// cannot wake a sleeping phone.
-///
-/// It used to be a second tab. A tab bar under a full-bleed map is a strip the
-/// page then has to climb over, and the door belongs with the rest of Settings
-/// anyway: Personal, at the top, labelled App settings, which the page asks
-/// this host to open. See ``SettingsBridge``.
-///
-/// Before there is a server, there is no page to put that row on. The setup
-/// screen is the same card the site uses for Settings, with a sentence and a
-/// button, because the only thing the app can do yet is point at an address.
-///
-/// The derived data behind all of it — trips, coverage, the calendar — is worked
-/// out once by the server (`server/derive.js`), so this phone and a laptop
-/// cannot disagree about what they show.
 struct ContentView: View {
-    @StateObject private var settings = AppSettings.shared
-    @StateObject private var tracking = TrackingSettings.shared
-    @StateObject private var host = SettingsBridge.shared
-
+    @StateObject private var store = NativeStore()
     var body: some View {
         Group {
-            if let url = settings.baseURL {
-                // Edge to edge: the map runs under the status bar, which is how
-                // a map should look. The buttons stay clear of it because the
-                // controller hands the page its own safe area — see
-                // `WebViewController.pushSafeArea`. Ignoring the safe area here
-                // is what gives that controller a view the size of the screen
-                // *and* a correct `safeAreaInsets` describing what covers it.
-                WebPanel(url: url, reloadToken: settings.reloadToken)
-                    .ignoresSafeArea()
+            if !store.ready {
+                ProgressView("Opening Sporra…")
+            } else if store.signedIn {
+                NativeMapScreen(store: store)
             } else {
-                SetupPage { host.open() }
+                NativeLogin(store: store)
             }
         }
-        .environmentObject(settings)
-        .environmentObject(tracking)
-        .sheet(isPresented: $host.isPresented) {
-            SettingsView()
-                .environmentObject(settings)
-                .environmentObject(tracking)
-        }
-        // Leaving is the best moment there is to push: the queue is as full as
-        // it is going to get, and the app is about to stop being handed any
-        // runtime it did not ask for. The notification rather than `scenePhase`
-        // because the one-argument `onChange` this deployment target still needs
-        // is deprecated, and the two-argument one wants iOS 17.
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+        .task { await store.initialize() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) {
+            _ in
             Task { await SyncClient.shared.flush(force: true) }
         }
-        // The site is dark — its login card, its menu, and three of its four
-        // basemaps. A sheet following the system into light mode puts a white
-        // form over all of that, which reads as a page belonging to some other
-        // app. Fixed rather than adaptive, because the thing it sits against is
-        // fixed too.
-        .preferredColorScheme(.dark)
+        .alert(
+            "Sporra",
+            isPresented: Binding(
+                get: { store.error != nil && !store.signedIn }, set: { if !$0 { store.error = nil } })
+        ) {
+            Button("OK") { store.error = nil }
+        } message: {
+            Text(store.error ?? "")
+        }
     }
 }
 
-/// Before there is a server to open. Styled after the site's own settings card
-/// rather than after a system empty state, because this *is* settings: the only
-/// thing the app can do yet is point at an address, and the button that does
-/// that should look like the door it is, not like an error.
-private struct SetupPage: View {
-    let onOpen: () -> Void
-
+private struct NativeLogin: View {
+    @ObservedObject var store: NativeStore
+    @State private var server = AppSettings.shared.serverURL
+    @State private var username = ""
+    @State private var password = ""
+    @State private var register = false
     var body: some View {
-        ZStack {
-            Color(red: 0.07, green: 0.078, blue: 0.102)
-            VStack {
-                Spacer(minLength: 0)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Settings")
-                        .font(.system(size: 17, weight: .bold))
-                        .tracking(0.2)
-                    Text("This app hosts the map you already use. Open settings to add the address of the server you run.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.white.opacity(0.55))
-                        .lineSpacing(2.4)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 8)
-                    Button("Open settings", action: onOpen)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.02, green: 0.071, blue: 0.122))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 11)
-                        .background(
-                            Color(red: 0.376, green: 0.675, blue: 1.0),
-                            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        )
-                        .padding(.top, 22)
+        NavigationStack {
+            Form {
+                Section {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Image(systemName: "globe.europe.africa.fill").font(.system(size: 52)).foregroundStyle(
+                            .tint)
+                        Text("Your world, remembered.").font(.largeTitle.bold())
+                        Text("Connect to your Sporra server to see the places you have been.")
+                            .foregroundStyle(.secondary)
+                    }.padding(.vertical, 20)
+                }.listRowBackground(Color.clear)
+                Section("Your server") {
+                    TextField("https://sporra.example.com", text: $server).keyboardType(.URL).textContentType(
+                        .URL
+                    ).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    TextField("Username", text: $username).textContentType(.username)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("Password", text: $password).textContentType(
+                        register ? .newPassword : .password
+                    ).onSubmit(submit)
                 }
-                .padding(EdgeInsets(top: 22, leading: 22, bottom: 18, trailing: 22))
-                .background {
-                    RoundedRectangle(cornerRadius: 26, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
+                Section {
+                    Button(action: submit) {
+                        HStack {
+                            Spacer()
+                            if store.busy { ProgressView() }
+                            Text(register ? "Create account" : "Sign in")
+                            Spacer()
                         }
+                    }.disabled(store.busy || server.isEmpty || username.isEmpty || password.isEmpty)
+                    Button(register ? "Already have an account? Sign in" : "Create an account") {
+                        register.toggle()
+                    }.disabled(store.busy)
                 }
-                .padding(.horizontal, 28)
-                .frame(maxWidth: 400)
-                Spacer(minLength: 0)
+                Section {
+                    Text(
+                        "Sporra for iOS · \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")"
+                    ).font(.footnote).foregroundStyle(.secondary)
+                }.listRowBackground(Color.clear)
             }
         }
-        .ignoresSafeArea()
+    }
+    private func submit() {
+        Task {
+            await store.login(address: server, username: username, password: password, register: register)
+            if store.signedIn { password = "" }
+        }
     }
 }
 
-#Preview {
-    ContentView()
+struct NativeMapScreen: View {
+    @ObservedObject var store: NativeStore
+    @State private var panel: String?
+    var body: some View {
+        NavigationStack {
+            NativeMap(store: store).ignoresSafeArea()
+                .overlay(alignment: .top) {
+                    if store.busy {
+                        ProgressView().padding(12).background(.regularMaterial, in: Capsule()).padding()
+                    }
+                }
+                .safeAreaInset(edge: .bottom, spacing: 8) {
+                    VStack(spacing: 8) {
+                        if store.notice.exists { announcement }
+                        if store.undo["route"].exists || store.undo["routeUpdate"].exists {
+                            HStack {
+                                Text(store.undo["route"].exists ? "Activity deleted" : "Activity updated")
+                                Spacer()
+                                Button("Undo") { Task { await store.undoEdit() } }
+                                Button {
+                                    store.undo = .null
+                                } label: {
+                                    Image(systemName: "xmark")
+                                }.accessibilityLabel("Dismiss undo")
+                            }.font(.subheadline).padding().background(
+                                .regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+                        }
+                        if store.editing { editBar }
+                        if store.activity.exists {
+                            NativeActivityCard(store: store)
+                        } else if store.track.exists {
+                            trackBar
+                        } else if store.place.exists {
+                            NativePlaceCard(store: store)
+                        }
+                    }.padding(.horizontal).padding(.bottom, 8).frame(maxWidth: 600)
+                }
+                .toolbar {
+                    ToolbarItemGroup(placement: .topBarLeading) {
+                        Button {
+                            panel = "menu"
+                        } label: {
+                            Label("Your map", systemImage: "line.3.horizontal")
+                        }
+                        Button {
+                            panel = "search"
+                        } label: {
+                            Label("Search", systemImage: "magnifyingglass")
+                        }
+                    }
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        Button {
+                            panel = "calendar"
+                        } label: {
+                            Label("Calendar", systemImage: "calendar")
+                        }
+                        Button {
+                            store.locationCommand = UUID()
+                        } label: {
+                            Label("My location", systemImage: "location")
+                        }
+                    }
+                }
+                .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+                .navigationBarTitleDisplayMode(.inline)
+        }
+        .sheet(isPresented: Binding(get: { panel != nil }, set: { if !$0 { panel = nil } })) {
+            NavigationStack {
+                Group {
+                    switch panel {
+                    case "search": NativeSearch(store: store, close: { panel = nil })
+                    case "calendar": NativeCalendarScreen(store: store, close: { panel = nil })
+                    default: NativeMenu(store: store, close: { panel = nil })
+                    }
+                }
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { panel = nil } } }
+                .alert(
+                    "Sporra",
+                    isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })
+                ) {
+                    Button("OK") { store.error = nil }
+                } message: {
+                    Text(store.error ?? "")
+                }
+            }.presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+        }
+        .confirmationDialog(
+            "Choose an activity",
+            isPresented: Binding(
+                get: { !store.routeChoices.isEmpty }, set: { if !$0 { store.routeChoices = [] } }),
+            titleVisibility: .visible
+        ) {
+            ForEach(Array(store.routeChoices.enumerated()), id: \.offset) { _, route in
+                Button(route["name"].text("Activity")) {
+                    store.routeChoices = []
+                    Task { await store.openActivity(route["id"]) }
+                }
+            }
+        }
+        .task { await store.checkAnnouncements() }
+        .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) {
+            store.lightClock = $0
+            Task { await store.checkAnnouncements() }
+        }
+        .alert(
+            "Sporra",
+            isPresented: Binding(
+                get: { store.error != nil && panel == nil }, set: { if !$0 { store.error = nil } })
+        ) {
+            Button("OK") { store.error = nil }
+        } message: {
+            Text(store.error ?? "")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) {
+            _ in
+            store.lightClock = Date()
+            store.changed()
+        }
+        .sheet(isPresented: Binding(get: { store.shareURL != nil }, set: { if !$0 { store.shareURL = nil } }))
+        {
+            if let url = store.shareURL { NativeShare(items: [url]) }
+        }
+    }
+    private var announcement: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(store.notice["title"].string).font(.headline)
+                Text(store.notice["detail"].string).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if let id = store.notice["activityIds"].array.first {
+                Button("View") {
+                    store.notice = .null
+                    Task { await store.openActivity(id) }
+                }
+            }
+            Button {
+                store.notice = .null
+            } label: {
+                Image(systemName: "xmark")
+            }.accessibilityLabel("Dismiss news")
+        }.padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+    }
+    private var editBar: some View {
+        HStack {
+            Picker("Brush", selection: $store.brushAction) {
+                Text("Paint").tag("paint")
+                Text("Erase").tag("erase")
+            }.pickerStyle(.segmented)
+            Picker("Size", selection: $store.brushSize) {
+                ForEach([1, 3, 8, 15, 30], id: \.self) { Text("\($0)").tag($0) }
+            }.frame(width: 70)
+            Button {
+                store.clearingRegion.toggle()
+            } label: {
+                Image(systemName: store.clearingRegion ? "map.fill" : "map")
+            }.accessibilityLabel("Clear a region")
+            Button {
+                Task { await store.undoEdit() }
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }.disabled(!store.undo.exists).accessibilityLabel("Undo edit")
+            Button {
+                store.editing = false
+            } label: {
+                Image(systemName: "checkmark")
+            }.accessibilityLabel("Finish editing")
+        }.padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+    }
+    private var trackBar: some View {
+        HStack {
+            Button {
+                Task { await store.step(-1) }
+            } label: {
+                Image(systemName: "chevron.left")
+            }.accessibilityLabel("Previous")
+            VStack(alignment: .leading) {
+                Text(store.track["label"].text("Your track")).font(.headline)
+                Text(String(format: "%.1f km", store.track["km"].double)).font(.caption).foregroundStyle(
+                    .secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            Button {
+                Task { await store.step(1) }
+            } label: {
+                Image(systemName: "chevron.right")
+            }.accessibilityLabel("Next")
+            Button {
+                store.closeSelection()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+            }.accessibilityLabel("Close track")
+        }.padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+    }
+}
+
+struct NativeShare: UIViewControllerRepresentable {
+    var items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+func nativeDate(_ value: JSON) -> String {
+    if !value.exists || value == .number(0) { return "Unknown" }
+    let date =
+        value.double > 0
+        ? Date(timeIntervalSince1970: value.double) : ISO8601DateFormatter().date(from: value.string)
+    return date?.formatted(date: .abbreviated, time: .omitted) ?? value.string
+}
+
+func nativeDateTime(_ value: JSON, clock: String) -> String {
+    guard value.double > 0 else { return "Unknown" }
+    let date = Date(timeIntervalSince1970: value.double)
+    let formatter = DateFormatter()
+    if clock == "24" {
+        formatter.dateFormat = "d MMM yyyy HH:mm"
+    } else if clock == "12" {
+        formatter.dateFormat = "d MMM yyyy h:mm a"
+    } else {
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+    }
+    return formatter.string(from: date)
 }

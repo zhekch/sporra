@@ -73,15 +73,18 @@ console.log('\nThe row is a door, not a control that cannot work');
   check(appAt >= 0 && homeAt >= 0 && appAt < homeAt, 'and at the top of it, above Home');
 }
 
-console.log('\nThe screen it opens is the existing one');
+console.log('\nThe iOS app uses native screens and the browser bridge remains compatible');
 {
-  check(content.includes('SettingsView()'), 'ContentView presents SettingsView');
-  check(content.includes('SettingsBridge.shared'), 'from the same bridge the page talks to');
-  check(content.includes('.sheet(isPresented'), 'as a sheet over the map');
-  check(settings.includes('Button("Done")'), 'and the sheet can be put away');
-  check(content.includes('SetupPage'), 'before there is a server, a setup page offers the same door');
-  check(content.includes('Open settings'), 'with a button that says so');
-  check(!content.includes('TabView'), 'and there is no tab bar under the map');
+  const menu = readApp('sporra-ios/Sporra/Native/NativeMenu.swift');
+  const nativeSettings = readApp('sporra-ios/Sporra/Native/NativeSettings.swift');
+  check(content.includes('NativeMap(store:'), 'the map is a native SDK view');
+  check(!content.includes('WebPanel('), 'the native interface does not host the web app');
+  check(menu.includes('NativeSettings(store:'), 'the native menu opens native settings');
+  check(content.includes('.sheet(isPresented'), 'menus use system sheets over the map');
+  check(content.includes('Button("Done")'), 'the sheet can be put away');
+  check(content.includes('NativeLogin(store:'), 'before signing in, native setup connects to the server');
+  check(nativeSettings.includes('NativeDeviceSettings(store:'), 'native settings retain phone recording controls');
+  check(!content.includes('TabView'), 'there is no tab bar under the map');
 }
 
 console.log('\nIt is styled, and only in the app');

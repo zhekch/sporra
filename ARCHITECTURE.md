@@ -10,6 +10,69 @@ An interactive world map covered by a hexagonal grid tied to real geographic
 coordinates, rendered with MapLibre GL on a dark basemap with a visionOS-style
 glass look. Click hexagons to mark places you've visited.
 
+## Native Swift iOS interface
+
+The iOS application now enters `NativeStore` and `NativeMapScreen` from
+`ContentView`. The previous web-host descriptions below document the browser
+and the retained compatibility adapters; `WebPanel` is no longer in the iOS
+view hierarchy. Flutter and Pigeon are not linked by the Swift app target.
+The Flutter source remains in place as the migration reference.
+
+`Sporra/Native/` holds SwiftUI forms, navigation, sheets, colour pickers,
+UICalendarView, annual Charts, and native import/share/authentication flows.
+`NativeMapController` uses MapLibre 6.28.0 for free basemaps and Mapbox 11.32.0
+for Standard/Standard Satellite with a public account token. SDK versions are
+pinned in Package.resolved. Device/Health/photo services and the background
+launch delegate are retained. The macOS web host has not migrated.
+
+The server remains the authority for cells and colours, regional fills, trips,
+recorded days, coverage, activity samples, graphs, palettes, and import parsing.
+The Swift client consumes the existing render API; there is no second Swift
+implementation of the visit or trip heuristics and no new backend protocol.
+Strava continues to request `native: true` and uses the existing
+`sporra-flutter` OAuth callback scheme for server compatibility.
+
+`ServerAPI` is an actor: JSON decoding and requests stay outside the main actor.
+It uses the same persistent HTTPCookieStorage as background SyncClient. Request
+generations cancel obsolete server/account work, and the uploader rejects
+acknowledgements from a forgotten session. URLCache is bounded to 32 MB memory
+and 256 MB disk per server/account, under the app's Caches directory. Restoring
+a cache requires a successful `/api/me`. External public resources use a
+separate session without account cookies; authenticated URLs must match the
+configured server's origin. Same-origin rail sprites use the authenticated API.
+Preference writes are serialised and colour/switch changes coalesce for 250 ms.
+Signing out clears the current account cache, cookies, queued fixes, and Health
+anchor. Camera/basemap preferences are local and scoped by server/account.
+
+`SporraCore` is linked again. `NativeBlobPainter` turns server cell centres into
+georeferenced image sources through its Metal blur/cut/feather pipeline. Map
+reads are viewport-bounded, padded 15% on each side, and debounced 100 ms. Image
+sides are bounded to 1,600 pixels. Request generations discard obsolete paint
+results. Vertex data uses a Metal buffer instead of setVertexBytes: the latter
+accepts at most 4 KB and cannot represent a real map's cell population. Rail
+match/case colours and dash arrays are split into native-compatible layers.
+
+Verification from the repository root:
+
+```sh
+xcodebuild -project sporra-ios/Sporra.xcodeproj -scheme Sporra \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath /tmp/sporra-native-build CODE_SIGNING_ALLOWED=NO build
+node sporra-ios/Tools/test-native.mjs
+sporra-ios/Tools/test-core.sh
+```
+
+The native API check compiles the actual Swift networking and rail adapter
+sources, starts the real Node server with a disposable database, and exercises
+registration, persistent cookies, preferences, paint/undo, reviewed imports,
+server graphs, account cache separation, origin checks, and logout. It never
+opens the personal database. The core tests include a 600-cell regression for
+the Metal vertex-buffer limit. Run `npm test` in `sporra-webserver/` as well.
+A successful generic simulator build does not exercise the UI or device-only
+permissions. This migration was compiled for arm64/x86_64 simulator, with API
+and macOS Metal checks; visual/device QA still requires an installed simulator
+runtime or iPhone. The current machine has no installed iOS simulator runtime.
+
 ## How it works
 
 - **Startup view**: the viewer's approximate **IP-based location** (fetched

@@ -12,12 +12,12 @@ Point it at your location history and it fills itself in.
 | | |
 |---|---|
 | **[sporra-webserver/](sporra-webserver/README.md)** | The web app and its Node/SQLite server. This is the product; the other two are ways to carry it. |
-| **[sporra-ios/](sporra-ios/README.md)** | An iPhone app that hosts the web app in a web view and adds the one thing a browser cannot do: record where you have been with the screen off. |
-| **[sporra-flutter/](sporra-flutter/README.md)** | An installable iOS simulator preview with Flutter menus and a native map. |
-| **[sporra-macos/](sporra-macos/README.md)** | The same program on a Mac. Its README is written as a diff against the iOS one, because the places the two differ are the only interesting part. |
+| **[sporra-ios/](sporra-ios/README.md)** | A native SwiftUI iPhone and iPad app, with native maps, the same server, and background location recording. |
+| **[sporra-flutter/](sporra-flutter/README.md)** | The previous Flutter preview, retained as a migration reference. |
+| **[sporra-macos/](sporra-macos/README.md)** | The web app hosted on a Mac, with access to the local photo library. |
 
-They live in one repo because they share the same server. The original apps
-are web views over the same site; the Flutter preview uses native screens.
+They live in one repo because they share the same server. The iOS app uses SwiftUI and native map SDKs; the Mac app hosts the site.
+The previous Flutter preview remains available as a migration reference.
 The Swift hex-grid maths in `SporraCore` is checked against the JavaScript that
 defines it. A change to the shape of the app usually lands
 in more than one folder at once.

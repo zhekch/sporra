@@ -1,5 +1,9 @@
 # Sporra Preview
 
+The Swift replacement is now in [sporra-ios](../sporra-ios/README.md). Build
+that project for the native iOS interface. This Flutter preview remains here
+as a migration reference; it is not part of the Swift app build.
+
 The Flutter iOS preview lives here. It installs alongside the original Sporra
 app and connects to your Sporra server. Use server version **0.136.0 or newer**.
 Open `ios/Runner.xcworkspace` for the native project; Flutter development starts
