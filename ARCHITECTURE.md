@@ -3058,19 +3058,26 @@ the name, and clearing gives back the derived one.
 
 Picking a trip draws it as **the track it was**, not as a wash over the ground
 it covered: a dot at the centre of every cell it touched, threaded in the order
-those cells were first seen (`showTrack`/`trackFC` in `src/main.js`,
+of recorded visits (`showTrack` in `src/main.js`, `trackFC` in `src/track-data.js`,
 `TRACK_COLOR` and the two width ramps beside it).
 
-- **The order is free.** Each spot already carries `at`, the first moment that
-  place was reached, so the shape of the days comes back without storing
-  anything. A translucent tint over the same hexagons said *somewhere in here*;
-  a line through them says where you went and which way round.
-- **The thread is cut where there is nothing to thread with.** No timestamp, the
-  *same* timestamp as the point before it, or a gap over `TRACK_LINK_GAP_SEC`
-  (36 h). The middle one is the case that matters: an afternoon imported from
-  one photo album carries a single timestamp on every cell of it, and joining
-  those in whatever order they came out of storage draws a zigzag and calls it a
-  route. Dots with no line is the honest answer, and it is what that data gets.
+- **Visits and places are separate.** `spots` summarizes unique places for
+  naming; `points` retains both recorded timestamp endpoints of each cell row,
+  sorted by time and deduplicated by cell and timestamp across sources. Using
+  only a place's first visit loses the return leg of a there-and-back journey.
+  Activity bounding-box centres are summaries rather than fixes and contribute
+  no track points. Intermediate visits absent from the stored rows remain
+  unknown. Day tracks use the same endpoints while their cell counts stay unique.
+- **The thread is cut where there is nothing to thread with.** Missing or
+  backwards timestamps and gaps over `TRACK_LINK_GAP_SEC` (36 h) break it.
+  Simultaneous cells within `TRACK_SAME_TIME_RADIUS_KM` (0.5 km) of their mean
+  describe one approximate location, including a coarse fix expanded into fine
+  cells by migration. Wider simultaneous groups retain their dots and break
+  both incoming and outgoing links: neither their first nor last storage row
+  identifies a known arrival or departure. Longitude averaging wraps at 180°.
+  The distance is measured from these same lines. Regression coverage in
+  `scripts/test/track-data.mjs` checks a journey across the Limmat valley once
+  each way and rejects arbitrary links through unordered groups.
 - **Solid dots with a dark rim**, because the highlight has to read on four
   basemaps including a photograph. The old 16% fill was legible on the dark one
   and nearly invisible on Satellite.
@@ -8905,8 +8912,9 @@ crossed, reusing the existing fine-boundary loader. The cache includes the fine
 geometry generation; a repeated country load cannot continually bump it.
 
 `/api/render/track` selects exactly one account-owned trip or local day and
-uses `src/track-data.js`, also consumed by web. Missing/duplicate timestamps and
-36-hour gaps break the connecting thread. Flutter draws the web yellow links,
+uses `src/track-data.js`, also consumed by web. Missing timestamps, spatially
+ambiguous simultaneous groups and 36-hour gaps break the thread; nearby tied
+cells share one approximate location. Flutter draws the web yellow links,
 glow and dark-cased dots, provides recorded-day stepping and filters local
 photos to the full calendar window with an exclusive end. Cached photo indices
 are reused for pins, thumbnails and gallery selection. The recorded month grid

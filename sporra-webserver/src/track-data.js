@@ -1,6 +1,8 @@
 import { dayBounds, dayKey, dayLabel, distanceKm } from './trips.js';
 /** Longer a silence than this and the thread is cut rather than drawn across. */
 const TRACK_LINK_GAP_SEC = 36 * 3600;
+/** A coarse fix expanded into fine cells still describes one small location. */
+const TRACK_SAME_TIME_RADIUS_KM = 0.5;
 
 /**
  * Points in time order → dots, plus the thread between them.
@@ -9,6 +11,7 @@ const TRACK_LINK_GAP_SEC = 36 * 3600;
  * layer ignores the points, so this stays a single setData.
  */
 export function trackFC(points) {
+  points = points ?? [];
   const features = [];
   let run = [];
   let prev = 0;
@@ -18,28 +21,35 @@ export function trackFC(points) {
     }
     run = [];
   };
-  for (const p of points ?? []) {
-    if (!Number.isFinite(p?.lng) || !Number.isFinite(p?.lat)) continue;
+  const valid = p => Number.isFinite(p?.lng) && Number.isFinite(p?.lat);
+  for (const p of points) {
+    if (!valid(p)) continue;
     features.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } });
-    // Nothing to thread them with, and the dots stand on their own. Three
-    // reasons a point doesn't join the one before it:
-    //
-    //   no time at all      — it can't be placed in the order
-    //   the *same* time     — neither can it. A whole afternoon's worth of
-    //                         ground imported from one photo album carries one
-    //                         timestamp on every cell of it, and joining those
-    //                         in the order they happen to come out of storage
-    //                         draws a zigzag and calls it a route
-    //   a long gap          — a day out and the next day out are two threads,
-    //                         not one line drawn across the night between them
-    if (!p.at || (prev && p.at <= prev)) {
+  }
+  for (let i = 0; i < points.length;) {
+    const p = points[i++];
+    if (!valid(p) || !Number.isFinite(p.at) || p.at <= 0) {
       cut();
-      if (p.at) run.push([p.lng, p.lat]);
-      prev = p.at || 0;
+      prev = 0;
       continue;
     }
+    const group = [p];
+    while (i < points.length && points[i]?.at === p.at && valid(points[i])) group.push(points[i++]);
+    // Choosing the first or last cell in a tied group depends on storage order
+    // and draws arbitrary chords. Nearby simultaneous cells are one approximate
+    // fix (including old coarse cells expanded by the grid migration). A broad
+    // group has no known order, so neither side may connect through it.
+    const wrap = lng => ((lng + 180) % 360 + 360) % 360 - 180;
+    const lng = wrap(p.lng + group.reduce((sum, q) => sum + wrap(q.lng - p.lng), 0) / group.length);
+    const lat = group.reduce((sum, q) => sum + q.lat, 0) / group.length;
+    if (group.some(q => distanceKm(lng, lat, q.lng, q.lat) > TRACK_SAME_TIME_RADIUS_KM)) {
+      cut();
+      prev = 0;
+      continue;
+    }
+    if (prev && p.at <= prev) cut();
     if (prev && p.at - prev > TRACK_LINK_GAP_SEC) cut();
-    run.push([p.lng, p.lat]);
+    run.push([lng, lat]);
     prev = p.at;
   }
   cut();

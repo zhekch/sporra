@@ -417,9 +417,8 @@ export function buildTrips(cellMeta, routes = [], opts = {}) {
       // has no id, and two of them must not merge into one place.
       const key = e.cell ?? e.route;
       let spot = spots.get(key);
-      // `at` is when you first got there, which is what threads the spots into
-      // the order they happened — the map draws a trip as its own track, and a
-      // track needs a direction. Events arrive sorted, so the first one wins.
+      // Naming needs one entry per place with its earliest arrival. Drawing
+      // retains the separate visits below. Events arrive sorted, so first wins.
       if (!spot) spots.set(key, (spot = { lng: e.lng, lat: e.lat, hits: 0, secs: 0, at: e.at, days: new Set() }));
       spot.hits += e.hits ?? 0;
       spot.secs += stayOf(e, t.events[i + 1]);
@@ -456,10 +455,10 @@ export function buildTrips(cellMeta, routes = [], opts = {}) {
       lengthM: tripRoutes.reduce((m, r) => m + (r.lengthM || 0), 0),
       bbox,
       center,
-      // Sorted, though the events they were built from already arrive in order:
-      // the map threads these into a line and a scribble is what it draws if
-      // they ever stop being ordered. One line here is cheaper than that being
-      // a property of how events happen to be gathered.
+      // Naming counts places; drawing needs visits. Keeping only each place's
+      // first sighting removes the return leg of an out-and-back journey.
+      points: visitPoints(t.events),
+      // Keep the place summary ordered for consumers of older trip responses.
       spots: [...spots.values()]
         .map((s) => ({ lng: s.lng, lat: s.lat, hits: s.hits, secs: s.secs, at: s.at, days: [...s.days] }))
         .sort((a, b) => a.at - b.at),
@@ -469,6 +468,17 @@ export function buildTrips(cellMeta, routes = [], opts = {}) {
   }
   out.sort((a, b) => b.start - a.start);
   return dropRoutine(out, opts);
+}
+
+function visitPoints(events) {
+  const seen = new Set();
+  return events.filter(e => {
+    if (!e.cell) return false; // an activity's bounding-box centre is not a fix
+    const key = `${e.cell}:${e.at}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map(e => ({ lng: e.lng, lat: e.lat, at: e.at }));
 }
 
 /**
@@ -773,28 +783,38 @@ export const dayBounds = (key) => {
  * @returns {Array<{id:string, lng:number, lat:number, at:number, fresh:boolean}>}
  */
 export function dayCells(key, cellMeta) {
+  return dayEvidence(key, cellMeta).cells;
+}
+
+function dayEvidence(key, cellMeta) {
   const [start, end] = dayBounds(key);
   const inDay = (at) => at >= start && at < end;
   const out = [];
+  const points = [];
   for (const [id, entries] of cellMeta ?? []) {
     const [L, col, row] = parseCellId(id);
     if (!Number.isFinite(L)) continue;
     let at = 0;
     let fresh = false;
+    const times = new Set();
     for (const e of entries) {
       // First seen and last seen are both dates the row actually carries; a
       // cell whose row merely *spans* this day says nothing about it.
       const hit = inDay(e.firstAt || 0) ? e.firstAt : inDay(e.lastAt || 0) ? e.lastAt : 0;
       if (!hit) continue;
       if (inDay(e.firstAt || 0)) fresh = true;
+      if (inDay(e.firstAt || 0)) times.add(e.firstAt);
+      if (inDay(e.lastAt || 0)) times.add(e.lastAt);
       if (!at || hit < at) at = hit;
     }
     if (!at) continue;
     const p = project(cellCenter(L, col, row));
     out.push({ id, lng: wrapLng(p[0]), lat: p[1], at, fresh });
+    for (const time of times) points.push({ lng: wrapLng(p[0]), lat: p[1], at: time });
   }
   out.sort((a, b) => a.at - b.at);
-  return out;
+  points.sort((a, b) => a.at - b.at);
+  return { cells: out, points };
 }
 
 /**
@@ -809,7 +829,7 @@ export function dayDetail(key, trips, routes, cellMeta) {
   const dayRoutes = (routes ?? []).filter((r) => inDay(r.firstAt || r.lastAt || 0));
   // Two different counts, because they answer two different questions: how
   // much of the map you were on that day, and how much of it was new.
-  const cells = dayCells(key, cellMeta);
+  const { cells, points } = dayEvidence(key, cellMeta);
   const trip = (trips ?? []).find((t) => t.start < end && t.end >= start) ?? null;
   return {
     key,
@@ -818,7 +838,7 @@ export function dayDetail(key, trips, routes, cellMeta) {
     routes: dayRoutes,
     cells: cells.length,
     newCells: cells.filter((c) => c.fresh).length,
-    points: cells,
+    points,
     trip,
   };
 }

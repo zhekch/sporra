@@ -6416,7 +6416,7 @@ const showTripOnMap = (trip) =>
     kind: 'trip',
     id: trip.id,
     label: trip.name,
-    points: trip.spots ?? [],
+    points: trip.points ?? trip.spots ?? [],
     first: trip.start ? dayKey(trip.start) : null,
     // Whole days at both ends, not the first and last thing recorded. A trip's
     // ends are evidence timestamps — the last fix of the last evening — and the

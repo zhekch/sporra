@@ -186,6 +186,7 @@ function forWire(trip) {
     ...trip,
     bbox: trip.bbox?.map(round),
     center: trip.center?.map(round),
+    points: trip.points?.map((p) => ({ ...p, lng: round(p.lng), lat: round(p.lat) })),
     spots: trip.spots?.map((s) => ({ ...s, lng: round(s.lng), lat: round(s.lat) })),
   };
 }

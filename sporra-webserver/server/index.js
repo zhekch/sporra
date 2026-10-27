@@ -112,7 +112,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.143.1';
+export const SERVER_VERSION = '0.143.2';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -1522,6 +1522,7 @@ function derivedSignature(user, home) {
     .digest('base64url')
     .slice(0, 12);
   return [
+    SERVER_VERSION,
     cellsSignature(user),
     routes.n, routes.added, routes.len, edits,
     // The gazetteers, for the same reason home is here — see GAZETTEER_STAMP.

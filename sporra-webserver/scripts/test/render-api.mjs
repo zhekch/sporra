@@ -153,14 +153,14 @@ try {
   const { trackFC } = await import('../../src/track-data.js');
   const points = [{lng:0,lat:0,at:1},{lng:1,lat:1,at:2},{lng:2,lat:2,at:2},{lng:3,lat:3,at:200000},{lng:4,lat:4,at:200001}];
   const track = trackFC(points);
-  check(track.features.filter(f => f.geometry.type === 'Point').length === 5 && track.features.filter(f => f.geometry.type === 'LineString').length === 2, 'shared trip geometry retains dots and recording gaps');
+  check(track.features.filter(f => f.geometry.type === 'Point').length === 5 && track.features.filter(f => f.geometry.type === 'LineString').length === 1, 'shared trip geometry retains dots without links through ambiguous timestamps');
   const dayTrack = await api('GET', '/api/render/track?day=2024-08-10');
   check(dayTrack.status === 200 && dayTrack.body.track.features.length > 0, 'day track has drawable geometry');
   const trips = (await api('GET','/api/trips')).body.trips;
   check(trips.length > 0, 'fixture derives a trip');
   if (trips.length) {
     const tripTrack = await api('GET','/api/render/track?trip='+trips[0].id);
-    check(tripTrack.status === 200 && tripTrack.body.track.features.filter(f => f.geometry.type === 'Point').length === trips[0].spots.length, 'trip spots become yellow markers');
+    check(tripTrack.status === 200 && tripTrack.body.track.features.filter(f => f.geometry.type === 'Point').length === trips[0].points.length, 'trip visits become yellow markers');
     await api('POST', '/api/prefs', { prefs: { tripNames: { [trips[0].id]: 'Parity journey' } } });
     const named = await api('GET', '/api/search?q=Parity%20journey');
     check(named.body.results.some(r => r.kind === 'trip' && r.name === 'Parity journey'), 'search uses account trip names');
