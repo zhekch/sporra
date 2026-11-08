@@ -26,6 +26,7 @@
 //   • any other JSON — the generic harvester above still walks the whole tree
 
 import { mercX, mercY, pointToCell, normCol, colsOf } from './hexgrid.js';
+import { normalizeVisitDates, normalizeVisitTimes } from './visit-dates.js';
 import { parseTcx, looksLikeTcx } from './tcx.js';
 import { climb } from './routes.js';
 
@@ -451,12 +452,14 @@ const KML_COORDS = /<coordinates>([\s\S]*?)<\/coordinates>/i;
 const KML_SPAN = /<begin>([^<]*)<\/begin>\s*<end>([^<]*)<\/end>/i;
 const KML_STAMP = /<TimeStamp\b[^>]*>\s*<when>([^<]*)<\/when>/i;
 
-// "lng,lat[,alt]" tuples separated by whitespace.
+// "lng,lat[,alt]" tuples separated by whitespace. The third number is the
+// height; a line that never carried one simply has no third number, and that
+// stays distinct from a real 0 m.
 function kmlCoords(text, t) {
   const out = new PointSink();
   for (const tok of text.trim().split(/\s+/)) {
-    const [lng, lat] = tok.split(',').map(Number);
-    out.add(lat, lng, t);
+    const [lng, lat, alt] = tok.split(',').map(Number);
+    out.add(lat, lng, t, Number.isFinite(alt) ? alt : undefined);
   }
   return out.points;
 }
@@ -481,7 +484,9 @@ function kmlTracks(text, tracks) {
       const coords = [...gx[1].matchAll(/<gx:coord>([^<]*)<\/gx:coord>/gi)].map((c) => c[1].trim().split(/\s+/));
       const paired = whens.length === coords.length;
       const seg = new PointSink();
-      coords.forEach(([lng, lat], i) => seg.add(+lat, +lng, paired ? whens[i] : 0));
+      coords.forEach(([lng, lat, alt], i) => {
+        seg.add(+lat, +lng, paired ? whens[i] : 0, Number.isFinite(+alt) ? +alt : undefined);
+      });
       addTrack(tracks, name, [seg.points], paired ? null : at);
       recorded = true;
     }
@@ -682,7 +687,7 @@ function countVisits(times, runs, gap) {
  * `hits` is the visit count (what the heat map reads); `fixes` is how many raw
  * points landed in the cell, which is only ever shown as a detail.
  * @param {Array<{lat:number,lng:number,t:number}>} points in the order the file listed them
- * @returns {Array<{id:string, first:number, last:number, hits:number, fixes:number}>}
+ * @returns {Array<{id:string, first:number, last:number, hits:number, fixes:number, visitDates:string[], visitTimes:number[]}>}
  */
 export function pointsToCells(points, { visitGap = VISIT_GAP_SEC } = {}) {
   const N = colsOf(0);
@@ -705,5 +710,7 @@ export function pointsToCells(points, { visitGap = VISIT_GAP_SEC } = {}) {
   return [...cells.values()].map(({ times, runs, ...cell }) => ({
     ...cell,
     hits: countVisits(times, runs, visitGap),
+    visitDates: normalizeVisitDates(times),
+    visitTimes: normalizeVisitTimes(times),
   }));
 }

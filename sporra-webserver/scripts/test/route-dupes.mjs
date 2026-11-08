@@ -63,6 +63,15 @@ check(routesLookAlike(bounded({ id: 14 }), bounded({ id: 47, lengthM: 9845 })),
 check(routesLookAlike(bounded({ id: 14 }), route({ id: 47, lengthM: 9845 })),
   'even when the two rows disagree about which name to use');
 
+check(routesLookAlike(route({ lengthM: 2059 }), route({ id: 2, lengthM: 2189 })),
+  'matching start clocks allow the phone/watch distance estimate to differ by 5.94%');
+check(!routesLookAlike(route({ lengthM: 2059 }), route({ id: 2, lengthM: 2189, firstAt: T('2025-04-03T11:13:59Z') })),
+  'extra distance tolerance does not widen the normal start window');
+check(!routesLookAlike(route({ lengthM: 1900 }), route({ id: 2, lengthM: 2189 })),
+  'even an identical start clock does not merge a distance difference over ten percent');
+check(!routesLookAlike(route({ lengthM: 2059 }), route({ id: 2, lengthM: 2189, bbox: [8, 47, 8.1, 47.1] })),
+  'matching start clocks and length still require matching route coverage');
+
 console.log('\nthings that are not duplicates');
 check(!routesLookAlike(route({}), route({ id: 2, firstAt: T('2025-04-03T14:00:00Z') })),
   'a second outing later the same day', 'started nearly 3 h apart');
@@ -151,6 +160,18 @@ check(preferredRoute(route({ id: 9, elevUp: 0 }), route({ id: 8, elevUp: 404 }))
   'and a row that knows the climb beats one that does not');
 check(preferredRoute(route({ id: 9 }), route({ id: 8 })).id === 8,
   'ties break on the older row, so the answer never changes between loads');
+// Pasting the tour again used to keep the older row, which is the one whose
+// clock was left running. The corrected copy is the one with a duration.
+const openClock = route({
+  id: 2, source: 'komoot', link: 'https://komoot.com/tour/1',
+  lengthM: 11800, lastAt: T('2025-04-03T11:13:53Z') + 163 * 3600,
+});
+const retimed = route({
+  id: 30, source: 'komoot', link: 'https://komoot.com/tour/1',
+  lengthM: 11800, lastAt: T('2025-04-03T11:13:53Z') + 6586,
+});
+check(preferredRoute(openClock, retimed).id === 30, 'a re-import with a real duration replaces the clock left running');
+check(preferredRoute(retimed, openClock).id === 30, 'whichever order the two copies are compared in');
 
 console.log('\nfolding a list');
 const list = [komoot, strava, route({ id: 3, firstAt: T('2025-06-01T08:00:00Z'), lastAt: T('2025-06-01T09:00:00Z') })];

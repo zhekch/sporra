@@ -21,6 +21,7 @@ struct SporraApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .toggleStyle(SwitchToggleStyle(tint: .green))
         }
     }
 }

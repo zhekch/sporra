@@ -54,14 +54,14 @@ number of approaches that were tried and abandoned.
   over the map in the basemap's own light or dark. Switch it on in the layers
   menu; choose what it draws in Settings → Map layers — tracks, stations,
   platforms, line numbers, signals and crossings, kilometre posts, and the
-  sidings, yards and disused track that are off until you ask for them. Turn on
-  **Interactable** and the railway answers the pointer: whatever is under it
-  lights up, and a tap opens a card with the track number, the operator, the
-  voltage, the platform, and every service that calls there. In **edit mode**
-  a tap on a track does something else: it paints every cell the line touches,
+  sidings, yards and disused track that are off until you ask for them. The
+  overlay is there to look at: a tap does not open a card about the line. In
+  **edit mode** a tap on a track paints every cell the line touches,
   from the previous station or junction to the next. A second track running
   alongside does not split it. The stretch stays marked
-  for half a minute. Further taps wait their turn.
+  for half a minute. Further taps wait their turn. **Add** in that same panel
+  takes a start and a destination, a city you type or a point you tap, by car or by train,
+  draws the line, and colours those cells in when you confirm.
 - **Trails.** The waymarked routes — the ones somebody has signed and painted
   onto a post — from Waymarked Trails, over whatever basemap you are on. Switch
   it on in the layers menu and pick which map of them you want: **Hiking**,
@@ -548,3 +548,18 @@ allowed to connect to, and why each limit is where it is — is in
 
 Built with no runtime dependencies beyond MapLibre and a polygon-clipping
 library; the server has none at all.
+
+### Visit times and trip paths
+
+New imports and syncs retain every distinct recorded Unix timestamp in
+`cell_sources.visit_times`, alongside the existing daily `visit_dates` list.
+The ninth field in `/api/cells` rows carries those timestamps. Import and
+restore requests require the current timestamp-bearing row schema. Imports, source renames and Undo
+preserve retained times. Trips and day tracks sort all recorded visits, including
+returns to the same cell between its earliest and latest sightings.
+
+Saved activity traces can supply measured vertex times for older trip histories.
+A date-only record cannot supply a time; missing timestamps from older location
+imports require reimporting the original data. Cell-based tracks use cell centres
+and straight links between observations, so their accuracy still depends on the
+original location sampling.

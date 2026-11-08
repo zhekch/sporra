@@ -1,0 +1,2863 @@
+import 'dart:ui' as ui;
+
+import 'photo_markers.dart';
+import 'sf_icon.dart';
+import 'loading.dart';
+import 'place_card.dart';
+import 'native_map.dart';
+import 'mapbox_view.dart';
+import 'mapbox.dart' as mb;
+import 'rail_style.dart';
+
+import 'dart:async';
+
+import 'package:flutter/cupertino.dart';
+
+import 'map_interaction.dart';
+import 'toast.dart';
+import 'measured.dart';
+
+import 'dart:convert';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:maplibre_gl/maplibre_gl.dart';
+
+import 'blob.dart';
+import 'api.dart';
+import 'performance.dart';
+import 'state.dart';
+import 'sheets.dart';
+import 'activity_graph.dart';
+import 'activity_metric.dart';
+
+// MapLibre's setter serializes omitted properties as null, which resets them.
+// A patch must retain the colors/widths already installed on the native layer.
+class LayerPatch implements LayerProperties {
+  const LayerPatch(this.properties);
+  final LayerProperties properties;
+  @override
+  Map<String, dynamic> toJson({bool skipNulls = true}) => properties.toJson();
+}
+
+const sheetZoomTolerance = 0.35;
+const sheetReuseInset = 0.1;
+const brushBridgeBatch = 32;
+const connectionRetryDelay = Duration(seconds: 2);
+const blobCrossfadeSteps = 8;
+const gestureRefreshInterval = Duration(milliseconds: 150);
+const gestureSheetMaxPixels = 1024;
+const gestureSheetMinPixels = 256;
+
+int mapLevel(String detail, double zoom) => switch (detail) {
+  'tiny' => 0,
+  'region' => 6,
+  'country' => 7,
+  'continent' => 8,
+  _ => levelForZoom(zoom),
+};
+
+Object groundRenderKey(
+  AppState app,
+  int generation,
+  int focus,
+  int level,
+  bool fine,
+  Size size,
+) => (
+  generation,
+  app.api.revisionFor(app.mapDataPath(level, fine: fine)),
+  focus,
+  app.renderQuery(level),
+  fine && level >= 6 && level < 8,
+  level < 6 ? size : Size.zero,
+);
+
+const activityCardMaxHeight = 430.0;
+const activityCardHeightShare = 0.64;
+const landscapeActivityWidthShare = 0.5;
+
+BoxConstraints activityOverlayConstraints(Size viewport, EdgeInsets safeArea) =>
+    BoxConstraints(
+      maxWidth: viewport.width > viewport.height
+          ? viewport.width * landscapeActivityWidthShare
+          : 440,
+      maxHeight: viewport.width > viewport.height
+          ? math.max(0, viewport.height - safeArea.top - 24)
+          : math.min(
+              activityCardMaxHeight,
+              viewport.height * activityCardHeightShare,
+            ),
+    );
+Alignment mapControlsAlignment(Size viewport) =>
+    viewport.width > viewport.height || viewport.width < 600
+    ? Alignment.bottomRight
+    : Alignment.topLeft;
+
+const styles = {
+  'dark': 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  'voyager': 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
+  'terrain': 'https://tiles.openfreemap.org/styles/liberty',
+};
+String mapStyle(String style) =>
+    styles[style] ??
+    jsonEncode({
+      'version': 8,
+      'sources': {
+        'satellite': {
+          'type': 'raster',
+          'tileSize': 256,
+          'tiles': [
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+          ],
+          'attribution': 'Esri, Maxar, Earthstar Geographics',
+        },
+      },
+      'layers': [
+        {'id': 'satellite', 'type': 'raster', 'source': 'satellite'},
+      ],
+    });
+
+class MapScreen extends ConsumerStatefulWidget {
+  const MapScreen({super.key, this.styleOverride, this.enableLocation = true});
+  // Integration tests use a local style so native overlay checks are independent
+  // of a tile provider, account credentials, or internet connectivity.
+  final String? styleOverride;
+  final bool enableLocation;
+  @override
+  ConsumerState<MapScreen> createState() => _MapScreenState();
+}
+
+class _MapScreenState extends ConsumerState<MapScreen>
+    with WidgetsBindingObserver {
+  NativeMapController? map;
+  Timer? sunTimer;
+  final painter = BlobPainter();
+  final startupClock = Stopwatch()..start();
+  bool firstGroundTraced = false, firstRoutesTraced = false;
+  Future<void> patchLayer(String id, LayerProperties properties) =>
+      map!.setLayerProperties(id, LayerPatch(properties));
+  bool loaded = false, refreshing = false;
+  bool pending = false;
+  bool pendingValidation = false;
+  bool cameraMoving = false, activeGroundLive = false;
+  bool startupWarmed = false, renderedLive = false;
+  Timer? cameraRefreshTimer;
+  Future<BlobSheet>? groundPaintWork;
+  StreamSubscription<Uri>? responseUpdates;
+  String? placePath;
+  final airportViews = <String, Object>{};
+  double selectionHorizontalDrag = 0, selectionVerticalDrag = 0;
+  int generation = 0;
+  int observed = -1;
+  int? observedSample;
+  Object? observedActivityLines;
+  dynamic observedActivity;
+  dynamic pendingActivityFit;
+  Size activityCardSize = const Size(440, 330);
+  int sheetSlot = 0;
+  int currentLevel = 0;
+  final sources = <String>{};
+  final layers = <String>{};
+  LatLng? location;
+  bool locationEnabled = true;
+  bool locating = true;
+  bool locationFocused = false;
+  CameraPosition camera = const CameraPosition(
+    target: LatLng(46.95, 8.28),
+    zoom: 7,
+  );
+  String? mapError;
+  Timer? errorToastTimer;
+  Timer? mapRetryTimer;
+  Map<String, dynamic>? placeInfo;
+  int observedTrackRequest = -1;
+  final cellFacts = <String, Map<String, dynamic>>{};
+  String? activeFactsPath, loadedFactsPath, selectedCellKey;
+  Object? selectedFactsScope;
+  int factsRequest = 0;
+  bool loadingFacts = false;
+  final areaFacts =
+      <
+        ({Path shape, Map<String, dynamic> info, Map<String, dynamic> geometry})
+      >[];
+  Map<String, dynamic>? observedPlace;
+  int factsLevel = -1;
+  String? factsQuery;
+  List<double>? factsBounds;
+  int tapRequest = 0;
+  List<Map<String, dynamic>> routeSummaries = [];
+  Map<String, dynamic> routeDuplicates = {};
+  Object? routesView, routesStyleView;
+  Object? renderedView, groundOpacityView;
+  Object? activeGroundKey;
+  int activeGroundLevel = 0;
+  bool activeGroundFine = false;
+  Completer<void>? obsoleteRefresh;
+  double? renderedZoom;
+  DateTime? renderedAt;
+  Object? trackView, activityView, activityLinesView, overlaysView, outlineView;
+  DateTime? routesUpdated;
+  int routesReadRevision = -1;
+  String? routesDataPath;
+  Object? photosView;
+  String? observedError;
+  int observedAnnouncement = 0;
+  Timer? fade;
+  double activityCardHeight = 330, placeCardHeight = 150;
+  Size mapSize = const Size(390, 844);
+  final empty = {'type': 'FeatureCollection', 'features': <dynamic>[]};
+
+  String? requestedStyle;
+  String? resolvedStyle;
+  final stroke = <Offset>[];
+  Offset? pointer;
+  Future<void> resolveStyle(
+    AppState app,
+    String name,
+    String identity, {
+    bool revalidate = true,
+  }) async {
+    try {
+      final data = await app.api.get(
+        '/api/render/style?name=$name',
+        revalidate: revalidate,
+      );
+      if (mounted && requestedStyle == identity) {
+        final json = jsonEncode(data);
+        if (resolvedStyle == json) return;
+        setState(() {
+          loaded = false;
+          generation++;
+          resolvedStyle = json;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => mapError = 'Basemap unavailable: $e');
+    }
+  }
+
+  Future<void> finishStroke(AppState app) async {
+    final pixels = List<Offset>.from(stroke);
+    if (pixels.isEmpty) return;
+    await app.run(() async {
+      final points = <List<double>>[];
+      // Bound the native queue while eliminating one round trip per sample.
+      for (var start = 0; start < pixels.length; start += brushBridgeBatch) {
+        final batch = pixels.skip(start).take(brushBridgeBatch);
+        final coordinates = await Future.wait(
+          batch.map((p) => map!.toLatLng(math.Point(p.dx, p.dy))),
+        );
+        points.addAll(coordinates.map((p) => [p.longitude, p.latitude]));
+      }
+      final result = await app.api.post('/api/render/brush', {
+        'level': 0,
+        'size': app.brushSize,
+        'action': app.brushAction,
+        'points': points,
+      });
+      app.undo = Map<String, dynamic>.from(result['undo']);
+      app.changed();
+    });
+    if (mounted) {
+      setState(() {
+        stroke.clear();
+        pointer = null;
+      });
+    }
+  }
+
+  Future<void> geoSource(String id, Map<String, dynamic> data) async {
+    if (sources.contains(id)) {
+      await map!.setGeoJsonSource(id, data);
+    } else {
+      await map!.addSource(
+        id,
+        GeojsonSourceProperties(
+          data: data,
+          tolerance: id == 'activity-metric' || id == 'trip' ? 0 : 0.375,
+        ),
+      );
+      sources.add(id);
+    }
+  }
+
+  void updateCamera(CameraPosition position) {
+    final moved =
+        (camera.target.latitude - position.target.latitude).abs() > 1e-7 ||
+        (camera.target.longitude - position.target.longitude).abs() > 1e-7 ||
+        (camera.zoom - position.zoom).abs() > 1e-6 ||
+        (camera.tilt - position.tilt).abs() > 1e-5 ||
+        (camera.bearing - position.bearing).abs() > 1e-5;
+    final app = ref.read(appProvider);
+    final nextLevel = mapLevel(app.detail, position.zoom);
+    final sameLiveLevel =
+        activeGroundLive &&
+        nextLevel == activeGroundLevel &&
+        (nextLevel < 6 ||
+            nextLevel >= 8 ||
+            (position.zoom >= regionFineZoom) == activeGroundFine);
+    if (moved && !sameLiveLevel && !(obsoleteRefresh?.isCompleted ?? true)) {
+      obsoleteRefresh!.complete();
+    }
+    camera = position;
+    final focused = cameraAtLocation(position, location);
+    if (mounted && focused != locationFocused) {
+      setState(() => locationFocused = focused);
+    }
+  }
+
+  bool focusingLocation = false;
+  void scheduleCameraRefresh() {
+    if (cameraRefreshTimer != null || !mounted || !loaded) return;
+    cameraRefreshTimer = Timer(gestureRefreshInterval, () {
+      cameraRefreshTimer = null;
+      if (cameraMoving && mounted && loaded) {
+        unawaited(refresh(live: true, validate: false));
+      }
+    });
+  }
+
+  void cameraMoved(CameraPosition position) {
+    final app = ref.read(appProvider);
+    app.api.cancelPrefetch();
+    cameraMoving = true;
+    updateCamera(position);
+    app.rememberPerspective(position.tilt, position.bearing);
+    if (!focusingLocation) scheduleCameraRefresh();
+  }
+
+  void cameraIdle() {
+    cameraMoving = false;
+    cameraRefreshTimer?.cancel();
+    cameraRefreshTimer = null;
+    final position = map?.cameraPosition;
+    if (position != null) {
+      updateCamera(position);
+      final app = ref.read(appProvider);
+      app.rememberPerspective(position.tilt, position.bearing);
+      app.rememberViewport(
+        position.target.latitude,
+        position.target.longitude,
+        position.zoom,
+      );
+    }
+    unawaited(refresh());
+  }
+
+  int locationFocusGeneration = 0;
+  Future<void> focusLocation() async {
+    final controller = map;
+    if (!mounted ||
+        !loaded ||
+        !locating ||
+        controller == null ||
+        focusingLocation) {
+      return;
+    }
+    final token = generation;
+    focusingLocation = true;
+    try {
+      final point = location ?? await controller.requestMyLocationLatLng();
+      if (point == null ||
+          !mounted ||
+          !locating ||
+          !loaded ||
+          token != generation ||
+          !identical(map, controller)) {
+        return;
+      }
+      final destination = locationCamera(point, camera);
+      locationFocusGeneration++;
+      if (!(obsoleteRefresh?.isCompleted ?? true)) obsoleteRefresh!.complete();
+      // A focus jump has one render level; animation frames must not request
+      // or paint the coarse levels between startup and the location zoom.
+      await controller.moveCamera(CameraUpdate.newCameraPosition(destination));
+      camera = destination;
+      if (mounted && token == generation) {
+        setState(() {
+          locating = false;
+          location = point;
+          locationFocused = true;
+          updateSun();
+        });
+      }
+    } on PlatformException catch (e) {
+      if (e.code != 'LOCATION_UNAVAILABLE' && mounted && token == generation) {
+        setState(() => mapError = e.message);
+      }
+    } on MissingPluginException {
+      // The old platform view may have departed.
+    } catch (e) {
+      if (mounted && token == generation) {
+        setState(() => mapError = 'Location unavailable: $e');
+      }
+    } finally {
+      focusingLocation = false;
+      if (mounted && loaded && token == generation) unawaited(refresh());
+      if (mounted && locating && loaded && token != generation) {
+        unawaited(focusLocation());
+      }
+    }
+  }
+
+  void warmMap(AppState app, int level) {
+    if (mounted &&
+        loaded &&
+        !cameraMoving &&
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+      app.warmMap(level);
+      if (!startupWarmed) {
+        startupWarmed = true;
+        app.warmData();
+      }
+    }
+  }
+
+  Future<void>? routeRefreshWork;
+  Future<void>? routeMetadataWork;
+  void refreshRoutes(AppState app) {
+    if (routeRefreshWork != null) return;
+    final token = generation, revision = app.revision;
+    routeRefreshWork = () async {
+      try {
+        await updateRoutes(app);
+        if (!mounted || token != generation || !loaded) return;
+        await refreshActivityFocus(app);
+        await updateTrack(app);
+      } catch (error) {
+        if (mounted && token == generation && loaded) {
+          setState(() => mapError = readableError('$error'));
+        }
+      } finally {
+        routeRefreshWork = null;
+        if (mounted &&
+            loaded &&
+            (token != generation || revision != app.revision)) {
+          refreshRoutes(ref.read(appProvider));
+        }
+      }
+    }();
+  }
+
+  Future<void> refresh({bool live = false, bool validate = true}) async {
+    if (!mounted || !loaded || map == null) return;
+    live = live || cameraMoving;
+    if (refreshing) {
+      pending = true;
+      pendingValidation = pendingValidation || (validate && !live);
+      final next = groundRenderKey(
+        ref.read(appProvider),
+        generation,
+        locationFocusGeneration,
+        activeGroundLevel,
+        activeGroundFine,
+        mapSize,
+      );
+      if (activeGroundKey != null &&
+          activeGroundKey != next &&
+          !(obsoleteRefresh?.isCompleted ?? true)) {
+        obsoleteRefresh!.complete();
+      }
+      return;
+    }
+    refreshing = true;
+    activeGroundLive = live;
+    final obsolete = obsoleteRefresh = Completer<void>();
+    Future<T?> latest<T>(Future<T> work) =>
+        Future.any<T?>([work, obsolete.future.then<T?>((_) => null)]);
+    final token = generation;
+    final app = ref.read(appProvider);
+    app.api.cancelPrefetch();
+    try {
+      if (!mounted || token != generation) return;
+      final focusToken = locationFocusGeneration;
+      final controller = map!;
+      final viewport = await controller.getVisibleRegion();
+      if (!mounted ||
+          token != generation ||
+          !identical(map, controller) ||
+          !loaded) {
+        return;
+      }
+      final zoom = camera.zoom;
+      final level = mapLevel(app.detail, zoom);
+      currentLevel = level;
+      final fine = zoom >= regionFineZoom;
+      final view = groundRenderKey(
+        app,
+        token,
+        focusToken,
+        level,
+        fine,
+        mapSize,
+      );
+      activeGroundKey = view;
+      activeGroundLevel = level;
+      activeGroundFine = fine;
+      bool current() =>
+          mounted &&
+          token == generation &&
+          !obsolete.isCompleted &&
+          focusToken == locationFocusGeneration &&
+          mapLevel(app.detail, camera.zoom) == level &&
+          view ==
+              groundRenderKey(
+                app,
+                generation,
+                locationFocusGeneration,
+                level,
+                fine,
+                mapSize,
+              );
+      final visible = [
+        viewport.southwest.longitude,
+        viewport.southwest.latitude,
+        viewport.northeast.longitude,
+        viewport.northeast.latitude,
+      ];
+      final path = app.mapDataPath(level, fine: fine);
+      final validateSnapshot = !live && validate && app.api.hasCached(path);
+      if (renderedView == view &&
+          renderedAt != null &&
+          (!renderedLive || live) &&
+          (level >= 6 ||
+              (factsBounds != null &&
+                  renderedZoom != null &&
+                  (zoom - renderedZoom!).abs() <= sheetZoomTolerance &&
+                  viewportWithin(
+                    factsBounds!,
+                    visible,
+                    inset: sheetReuseInset,
+                  )))) {
+        if (!live) refreshRoutes(app);
+        await updateGroundOpacity(app);
+        if (!live) {
+          refreshOverlays(app);
+          if (level < 6 && factsBounds != null) {
+            unawaited(refreshCellFacts(app, level, factsBounds!));
+          }
+          await updatePlaceOutline();
+        }
+        if (validateSnapshot) app.api.revalidate(path);
+        warmMap(app, level);
+        if (mounted) setState(() => mapError = null);
+        return;
+      }
+      var west = viewport.southwest.longitude,
+          east = viewport.northeast.longitude;
+      var span = east - west;
+      if (span <= 0) span += 360;
+      final pad = span * 0.35;
+      final latPad =
+          (viewport.northeast.latitude - viewport.southwest.latitude) * 0.35;
+      final south = (viewport.southwest.latitude - latPad).clamp(
+        -85.051129,
+        85.051129,
+      );
+      final north = (viewport.northeast.latitude + latPad).clamp(
+        -85.051129,
+        85.051129,
+      );
+      if (span * 1.7 >= 360) {
+        west = -180;
+        east = 180;
+      } else {
+        west = ((west - pad + 180) % 360) - 180;
+        east = ((east + pad + 180) % 360) - 180;
+      }
+      final bounds = <double>[west, south, east, north];
+      if (!live) refreshRoutes(app);
+      // Movement reads warm snapshots without a validation on every frame.
+      // A missing level downloads once; the final viewport validates at idle.
+      final result = await latest(
+        level < 6
+            ? app.api.getCells(path, bounds, revalidate: false)
+            : app.api
+                  .get(path, revalidate: false)
+                  .then((value) => Map<String, dynamic>.from(value)),
+      );
+      if (result == null || !current()) {
+        if (!obsolete.isCompleted) pending = true;
+        return;
+      }
+      final data = result;
+      renderedView = null;
+      factsBounds = level < 6 ? bounds : [-180, -85.051129, 180, 85.051129];
+      final opacity = app.groundOpacity;
+      if (level < 6) {
+        final query = app.renderQuery(level);
+        final savedFacts = factsLevel == level && factsQuery == query
+            ? Map.of(cellFacts)
+            : <String, Map<String, dynamic>>{};
+        cellFacts.clear();
+        for (final row in data['rows'] as List) {
+          cellFacts['${row[0]}'] = row.length > 5
+              ? Map<String, dynamic>.from(row[5])
+              : savedFacts['${row[0]}'] ?? {'visited': true};
+        }
+        factsLevel = level;
+        factsQuery = query;
+        final width = math.min(
+          live ? gestureSheetMaxPixels : 1536,
+          math.max(
+            live ? gestureSheetMinPixels : 512,
+            (mapSize.width * (live ? 1 : 1.7)).round(),
+          ),
+        );
+        final h =
+            (width *
+                    (mercY(north) - mercY(south)) /
+                    (mercX(east <= west ? east + 360 : east) - mercX(west)))
+                .round()
+                .clamp(64, live ? gestureSheetMaxPixels : 1536);
+        // GPU paint/PNG encoding cannot be cancelled. Retire it before the
+        // next sheet, even when an obsolete viewport has already been skipped.
+        final previousPaint = groundPaintWork;
+        if (previousPaint != null) await latest(previousPaint);
+        if (!current()) return;
+        final paintClock = Stopwatch()..start();
+        final paint = painter.paint(data, bounds, width, h, app.mode != 'flat');
+        groundPaintWork = paint;
+        unawaited(
+          paint.then<void>(
+            (_) {
+              tracePerformance('cells-paint', paintClock);
+              if (identical(groundPaintWork, paint)) groundPaintWork = null;
+            },
+            onError: (Object _) {
+              if (identical(groundPaintWork, paint)) groundPaintWork = null;
+            },
+          ),
+        );
+        final sheet = await latest(paint);
+        if (sheet == null || !current()) {
+          if (!obsolete.isCompleted) pending = true;
+          return;
+        }
+        final nextSlot = 1 - sheetSlot, id = 'blob-$nextSlot';
+        if (sources.contains(id)) {
+          await map!.updateImageSource(id, sheet.bytes, sheet.coordinates);
+        } else {
+          await map!.addImageSource(id, sheet.bytes, sheet.coordinates);
+          sources.add(id);
+          await map!.addRasterLayer(
+            id,
+            id,
+            const RasterLayerProperties(
+              rasterOpacity: 0,
+              rasterFadeDuration: 0,
+            ),
+            belowLayerId: await below(),
+          );
+          layers.add(id);
+        }
+        fade?.cancel();
+        final old = sheetSlot;
+        sheetSlot = nextSlot;
+        var step = 0;
+        if (live) {
+          await patchLayer(id, RasterLayerProperties(rasterOpacity: opacity));
+          if (layers.contains('blob-$old')) {
+            await patchLayer(
+              'blob-$old',
+              const RasterLayerProperties(rasterOpacity: 0),
+            );
+          }
+        } else {
+          fade = Timer.periodic(const Duration(milliseconds: 16), (timer) {
+            if (!mounted || token != generation) {
+              timer.cancel();
+              return;
+            }
+            final t = (++step / blobCrossfadeSteps).clamp(0.0, 1.0);
+            unawaited(
+              patchLayer(
+                id,
+                RasterLayerProperties(rasterOpacity: opacity * t),
+              ).catchError((_) {}),
+            );
+            if (layers.contains('blob-$old')) {
+              unawaited(
+                patchLayer(
+                  'blob-$old',
+                  RasterLayerProperties(rasterOpacity: opacity * (1 - t)),
+                ).catchError((_) {}),
+              );
+            }
+            if (t >= 1) timer.cancel();
+          });
+        }
+        if (layers.contains('areas-fill')) {
+          await patchLayer(
+            'areas-fill',
+            const FillLayerProperties(fillOpacity: 0),
+          );
+        }
+      } else {
+        areaFacts.clear();
+        for (final feature in data['infoFeatures'] ?? []) {
+          final geometry = feature['geometry'];
+          final polygons = geometry['type'] == 'Polygon'
+              ? [geometry['coordinates']]
+              : geometry['coordinates'];
+          final shape = Path()..fillType = PathFillType.evenOdd;
+          for (final polygon in polygons) {
+            for (final ring in polygon) {
+              if ((ring as List).isEmpty) continue;
+              shape.moveTo(
+                (ring.first[0] as num).toDouble(),
+                (ring.first[1] as num).toDouble(),
+              );
+              for (final p in ring.skip(1)) {
+                shape.lineTo(
+                  (p[0] as num).toDouble(),
+                  (p[1] as num).toDouble(),
+                );
+              }
+              shape.close();
+            }
+          }
+          areaFacts.add((
+            shape: shape,
+            geometry: Map<String, dynamic>.from(geometry),
+            info: Map<String, dynamic>.from(feature['properties']),
+          ));
+        }
+        factsLevel = level;
+        factsQuery = data.containsKey('infoFeatures')
+            ? app.renderQuery(level)
+            : null;
+        final fills = Map<String, dynamic>.from(data)..remove('infoFeatures');
+        fills['features'] = (data['features'] as List)
+            .where((f) => f['properties']['k'] == 1)
+            .toList();
+        await geoSource('areas', fills);
+        if (!layers.contains('areas-fill')) {
+          await map!.addFillLayer(
+            'areas',
+            'areas-fill',
+            FillLayerProperties(
+              fillColor: ['get', 'color'],
+              fillOpacity: opacity,
+            ),
+            belowLayerId: await below(),
+          );
+          layers.add('areas-fill');
+        } else {
+          await patchLayer(
+            'areas-fill',
+            FillLayerProperties(fillOpacity: opacity),
+          );
+        }
+        fade?.cancel();
+        for (final id in ['blob-0', 'blob-1']) {
+          if (layers.contains(id)) {
+            await patchLayer(id, const RasterLayerProperties(rasterOpacity: 0));
+          }
+        }
+      }
+      renderedView = view;
+      groundOpacityView = (generation, level, opacity);
+      renderedZoom = zoom;
+      renderedAt = DateTime.now();
+      renderedLive = live && level < 6;
+      if (!firstGroundTraced) {
+        firstGroundTraced = true;
+        tracePerformance('first-ground', startupClock, {
+          'level': level,
+          'cells': cellFacts.length,
+        });
+      }
+      if (validateSnapshot) app.api.revalidate(path);
+      warmMap(app, level);
+      if (!live) {
+        refreshOverlays(app);
+        if (level < 6) unawaited(refreshCellFacts(app, level, bounds));
+        await updatePlaceOutline();
+      }
+      if (mounted) setState(() => mapError = null);
+    } catch (e) {
+      if (mounted && token == generation && loaded) {
+        setState(() => mapError = readableError('$e'));
+        if (isConnectionFailure(e)) {
+          mapRetryTimer?.cancel();
+          mapRetryTimer = Timer(connectionRetryDelay, () {
+            mapRetryTimer = null;
+            if (mounted && mapError != null && loaded) unawaited(refresh());
+          });
+        }
+      }
+    } finally {
+      refreshing = false;
+      if (pending) {
+        pending = false;
+        final validateNext = pendingValidation;
+        pendingValidation = false;
+        if (cameraMoving) {
+          scheduleCameraRefresh();
+        } else {
+          unawaited(refresh(validate: validateNext));
+        }
+      }
+    }
+  }
+
+  Future<void> updateGroundOpacity(AppState app) async {
+    final opacity = app.groundOpacity;
+    final view = (generation, currentLevel, opacity);
+    if (groundOpacityView == view) return;
+    fade?.cancel();
+    for (final id in ['blob-0', 'blob-1']) {
+      if (layers.contains(id)) {
+        await patchLayer(
+          id,
+          RasterLayerProperties(
+            rasterOpacity: currentLevel < 6 && id == 'blob-$sheetSlot'
+                ? opacity
+                : 0,
+          ),
+        );
+      }
+    }
+    if (layers.contains('areas-fill')) {
+      await patchLayer(
+        'areas-fill',
+        FillLayerProperties(fillOpacity: currentLevel >= 6 ? opacity : 0),
+      );
+    }
+    groundOpacityView = view;
+  }
+
+  Future<void> refreshCellFacts(
+    AppState app,
+    int level,
+    List<double> bounds, {
+    bool revalidate = true,
+  }) async {
+    if (!mounted || !loaded || !app.cellInfo || cameraMoving) return;
+    final path = app.mapDataPath(level, info: true, bbox: bounds.join(','));
+    final url = app.api.uri(path).toString();
+    if (activeFactsPath == url && loadingFacts) return;
+    if (activeFactsPath == url && loadedFactsPath == url) {
+      if (revalidate) app.api.revalidate(path);
+      return;
+    }
+    activeFactsPath = url;
+    loadingFacts = true;
+    final request = ++factsRequest, token = generation;
+    final query = app.renderQuery(level);
+    final clock = Stopwatch()..start();
+    try {
+      final version = app.api.revisionFor(path);
+      var data = await app.api.get(path, revalidate: revalidate);
+      if (version != app.api.revisionFor(path)) {
+        data = await app.api.get(path, revalidate: false);
+      }
+      if (!mounted ||
+          request != factsRequest ||
+          token != generation ||
+          factsLevel != level ||
+          factsQuery != query ||
+          app.renderQuery(level) != query) {
+        tracePerformance('viewport-facts-obsolete', clock, {
+          'request-current': request == factsRequest ? 1 : 0,
+          'style-current': token == generation ? 1 : 0,
+          'level-current': factsLevel == level ? 1 : 0,
+          'query-current':
+              factsQuery == query && app.renderQuery(level) == query ? 1 : 0,
+        });
+        return;
+      }
+      for (final row in data['rows'] as List) {
+        if (row.length > 5 && cellFacts.containsKey('${row[0]}')) {
+          cellFacts['${row[0]}'] = Map<String, dynamic>.from(row[5]);
+        }
+      }
+      loadedFactsPath = url;
+      final selected = cellFacts[selectedCellKey];
+      if (placeInfo != null &&
+          selected != null &&
+          selectedFactsScope == (level, query)) {
+        setState(() => placeInfo = {...?placeInfo, ...selected});
+      }
+      tracePerformance('viewport-facts', clock, {
+        'cells': (data['rows'] as List).length,
+      });
+    } catch (error) {
+      tracePerformance('viewport-facts-failed ${error.runtimeType}', clock);
+      // The geometry preview and a point's independent lookup remain usable.
+    } finally {
+      if (request == factsRequest) loadingFacts = false;
+    }
+  }
+
+  Future<String?> below() async {
+    if (map!.box != null) return null;
+    final ids = await map!.getLayerIds();
+    for (final id in ids) {
+      if (id.contains('label') || id.contains('place')) return id;
+    }
+    return null;
+  }
+
+  Future<void> updateRoutes(AppState app) async {
+    final token = generation;
+    final revision = app.api.revision;
+    final view = (
+      generation,
+      app.api.revisionFor('/api/render/routes'),
+      app.api.revisionFor('/api/routes'),
+      app.accentTheme,
+      app.stackIds.join(','),
+    );
+    final path =
+        '/api/render/routes${app.stackIds.isEmpty ? '' : '?${Uri(queryParameters: {'stack': app.stackIds.map((id) => '$id').toList()}).query}'}';
+    final expired =
+        routesUpdated == null ||
+        DateTime.now().difference(routesUpdated!) >= SporraApi.dataFreshness;
+    final validate =
+        routesView == null ||
+        routesReadRevision != revision ||
+        routesDataPath != path ||
+        expired;
+    final geometryWasCached = app.api.hasCached(path);
+    final summariesWereCached = app.api.hasCached('/api/routes?fold=1');
+    final needsData = app.routes && (routesView != view || expired);
+    if (needsData) {
+      final geometry = app.api.get(path, revalidate: false);
+      // Tap/list metadata must not hold a cached native line collection hostage.
+      final metadata = app.api
+          .get('/api/routes?fold=1', revalidate: false)
+          .then<void>(
+            (data) {
+              if (!mounted ||
+                  !loaded ||
+                  token != generation ||
+                  revision != app.api.revision) {
+                return;
+              }
+              routeSummaries = List<Map<String, dynamic>>.from(data['routes']);
+              routeDuplicates = Map<String, dynamic>.from(
+                data['duplicates'] ?? {},
+              );
+              if (validate && summariesWereCached) {
+                app.api.revalidate('/api/routes?fold=1');
+              }
+            },
+            onError: (Object error) {
+              if (mounted && loaded && token == generation) {
+                setState(() => mapError = readableError('$error'));
+              }
+            },
+          );
+      routeMetadataWork = metadata;
+      unawaited(
+        metadata.whenComplete(() {
+          if (identical(routeMetadataWork, metadata)) routeMetadataWork = null;
+        }),
+      );
+      final result = await geometry;
+      if (!mounted ||
+          !loaded ||
+          token != generation ||
+          revision != app.api.revision) {
+        return;
+      }
+      final data = Map<String, dynamic>.from(result);
+      final light = app.accentTheme == 'light';
+      for (final f in data['features'] as List) {
+        final props = f['properties'] as Map;
+        final hex = '${props['color']}';
+        final rgb = int.parse(hex.substring(1), radix: 16);
+        int mix(int shift) {
+          final c = (rgb >> shift) & 255;
+          return (light ? c * 0.7 : c + (255 - c) * 0.35).round();
+        }
+
+        props['coreColor'] =
+            '#${((mix(16) << 16) | (mix(8) << 8) | mix(0)).toRadixString(16).padLeft(6, '0')}';
+      }
+      await geoSource('activities', data);
+      routesView = view;
+      routesUpdated = DateTime.now();
+      routesReadRevision = revision;
+      routesDataPath = path;
+    }
+    await refreshRouteStyle(app);
+    if (needsData && validate && geometryWasCached) app.api.revalidate(path);
+  }
+
+  Object routeStyleKey(AppState app) => (
+    generation,
+    routesView,
+    app.routes,
+    app.activity?['route']['id'] ?? app.selectedRoute,
+    app.selectedRoute,
+    app.activityMetric == null ? null : app.activity?['route']['id'],
+    app.accentTheme,
+  );
+
+  Future<void>? routeStyleWork;
+  Future<void> refreshRouteStyle(AppState app) {
+    if (!mounted || !loaded || !sources.contains('activities')) {
+      return Future.value();
+    }
+    // Visibility must catch up even while ground or route downloads are waiting.
+    // Keep a single writer so a late selection cannot overwrite a later close.
+    return routeStyleWork ??= () async {
+      final token = generation;
+      try {
+        do {
+          await updateRouteStyle(app);
+        } while (mounted &&
+            loaded &&
+            token == generation &&
+            sources.contains('activities') &&
+            routesStyleView != routeStyleKey(app));
+      } catch (error) {
+        if (mounted && loaded && token == generation) {
+          setState(() => mapError = readableError('$error'));
+        }
+      } finally {
+        routeStyleWork = null;
+      }
+    }();
+  }
+
+  Future<void> updateRouteStyle(AppState app) async {
+    final styleView = routeStyleKey(app);
+    if (routesStyleView == styleView || !sources.contains('activities')) return;
+    final clock = Stopwatch()..start();
+    final light = app.accentTheme == 'light';
+    final selected = app.activity?['route']['id'] ?? app.selectedRoute;
+    final metricRoute = app.activityMetric == null
+        ? null
+        : app.activity?['route']['id'];
+    final restriction = app.selectedRoute;
+    final filter = activityFilter(restriction, metricRoute);
+    final glow = [
+      '*',
+      ['get', 'alpha'],
+      if (selected == null)
+        (light ? 0.26 : 0.35)
+      else
+        [
+          'case',
+          [
+            '==',
+            ['get', 'id'],
+            selected,
+          ],
+          light ? 0.5 : 0.6,
+          light ? 0.26 : 0.35,
+        ],
+    ];
+    // The web uses four concentric phone rings. Blur introduces cracks at
+    // bends on the native renderer too, so use the same composited opacity.
+    for (var ring = 1; ring <= 4; ring++) {
+      final id = 'activities-glow-$ring';
+      final props = LineLayerProperties(
+        lineColor: ['get', 'color'],
+        lineCap: 'round',
+        lineJoin: 'round',
+        lineWidth: routeWidth(
+          selectedId: selected,
+          scale: 3.4 * (5 - ring) / 4,
+        ),
+        lineOpacity: [
+          '-',
+          1,
+          [
+            '^',
+            ['-', 1, glow],
+            0.25,
+          ],
+        ],
+      );
+      if (layers.contains(id)) {
+        await patchLayer(id, props);
+      } else {
+        await map!.addLineLayer('activities', id, props);
+        layers.add(id);
+      }
+      await map!.setFilter(id, filter);
+      await map!.setLayerVisibility(id, app.routes);
+    }
+    final core = LineLayerProperties(
+      lineColor: ['get', 'coreColor'],
+      lineCap: 'round',
+      lineJoin: 'round',
+      lineWidth: routeWidth(selectedId: selected),
+      lineOpacity: [
+        '*',
+        0.95,
+        ['get', 'alpha'],
+      ],
+    );
+    if (layers.contains('activities-line')) {
+      await patchLayer('activities-line', core);
+    } else {
+      await map!.addLineLayer('activities', 'activities-line', core);
+      layers.add('activities-line');
+    }
+    await map!.setFilter('activities-line', filter);
+    await map!.setLayerVisibility('activities-line', app.routes);
+    if (!firstRoutesTraced) {
+      firstRoutesTraced = true;
+      tracePerformance('first-activities', startupClock);
+    }
+    routesStyleView = styleView;
+    tracePerformance('route-style', clock, {
+      'restricted': restriction == null ? 0 : 1,
+      'metric': metricRoute == null ? 0 : 1,
+      'visible': app.routes ? 1 : 0,
+    });
+  }
+
+  Future<void> updateTrack(AppState app) async {
+    final view = (generation, app.track);
+    if (trackView == view) return;
+    await geoSource(
+      'trip',
+      app.track == null
+          ? Map<String, dynamic>.from(empty)
+          : Map<String, dynamic>.from(app.track!['track']),
+    );
+    if (!layers.contains('trip-dot')) {
+      await map!.addLineLayer(
+        'trip',
+        'trip-glow',
+        const LineLayerProperties(
+          lineCap: 'round',
+          lineJoin: 'round',
+          lineColor: trackColor,
+          lineOpacity: 0.4,
+          lineWidth: 9,
+          lineBlur: 7,
+        ),
+      );
+      await map!.addLineLayer(
+        'trip',
+        'trip-link',
+        LineLayerProperties(
+          lineCap: 'round',
+          lineJoin: 'round',
+          lineColor: trackColor,
+          lineOpacity: 0.85,
+          lineWidth: [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            2,
+            1.4,
+            11,
+            2.2,
+            16,
+            3,
+          ],
+        ),
+      );
+      await map!.addCircleLayer(
+        'trip',
+        'trip-dot',
+        CircleLayerProperties(
+          circleColor: trackColor,
+          circleRadius: [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            2,
+            2.4,
+            6,
+            3.6,
+            11,
+            5.5,
+            16,
+            8,
+          ],
+          circleStrokeColor: 'rgba(14,16,22,0.75)',
+          circleStrokeWidth: [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            4,
+            0.8,
+            12,
+            1.6,
+          ],
+        ),
+      );
+      layers.addAll(['trip-glow', 'trip-link', 'trip-dot']);
+    }
+    trackView = view;
+  }
+
+  Future<void> updateActivityFocus(AppState app) async {
+    final view = (
+      generation,
+      app.activity,
+      app.activityMetric,
+      app.activitySample,
+    );
+    if (activityView == view) return;
+    final data = app.activity;
+    final sampleIndex = app.activitySample;
+    final lineView = (generation, data, app.activityMetric);
+    if (activityLinesView != lineView) {
+      await geoSource(
+        'activity-metric',
+        activityMetricLines(data, app.activityMetric),
+      );
+      if (!layers.contains('activity-metric-line')) {
+        await map!.addLineLayer(
+          'activity-metric',
+          'activity-metric-casing',
+          LineLayerProperties(
+            lineCap: 'round',
+            lineJoin: 'round',
+            lineColor: 'rgba(20,16,12,0.85)',
+            lineWidth: metricWidth(scale: 1.45),
+            lineSortKey: ['get', 'metricOrder'],
+            lineOpacity: 1,
+          ),
+        );
+        layers.add('activity-metric-casing');
+        await map!.addLineLayer(
+          'activity-metric',
+          'activity-metric-line',
+          LineLayerProperties(
+            lineColor: ['get', 'color'],
+            lineCap: 'round',
+            lineJoin: 'round',
+            lineWidth: metricWidth(),
+            lineSortKey: ['get', 'metricOrder'],
+            lineOpacity: 1,
+          ),
+        );
+        layers.add('activity-metric-line');
+      }
+      activityLinesView = lineView;
+    }
+    final sample =
+        data != null &&
+            sampleIndex != null &&
+            sampleIndex < (data['samples'] as List).length
+        ? data['samples'][sampleIndex]
+        : null;
+    await geoSource('activity-cursor', {
+      'type': 'FeatureCollection',
+      'features': [
+        if (sample != null)
+          {
+            'type': 'Feature',
+            'properties': <String, dynamic>{},
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [sample['lng'], sample['lat']],
+            },
+          },
+      ],
+    });
+    if (!layers.contains('activity-cursor-dot')) {
+      await map!.addCircleLayer(
+        'activity-cursor',
+        'activity-cursor-dot',
+        const CircleLayerProperties(
+          circleRadius: 6,
+          circleColor: '#ffffff',
+          circleStrokeColor: '#262626',
+          circleStrokeWidth: 2,
+        ),
+      );
+      layers.add('activity-cursor-dot');
+    }
+    activityView = view;
+  }
+
+  Future<void>? activityFocusWork;
+  Future<void> refreshActivityFocus(AppState app) {
+    return activityFocusWork ??= () async {
+      final token = generation;
+      try {
+        do {
+          await updateActivityFocus(app);
+        } while (mounted &&
+            loaded &&
+            token == generation &&
+            activityView !=
+                (
+                  generation,
+                  app.activity,
+                  app.activityMetric,
+                  app.activitySample,
+                ));
+      } catch (error) {
+        if (mounted && loaded && token == generation) {
+          setState(() => mapError = readableError('$error'));
+        }
+      } finally {
+        activityFocusWork = null;
+      }
+    }();
+  }
+
+  Object? railView;
+  Future<void>? overlayRefreshWork;
+  void refreshOverlays(AppState app) {
+    if (!mounted || !loaded || map == null || overlayRefreshWork != null) {
+      return;
+    }
+    final token = generation, revision = app.revision;
+    final referenceRevision = app.api.revisionFor('/api/render/reference');
+    overlayRefreshWork = () async {
+      try {
+        await updateOverlays(app);
+      } catch (error) {
+        if (mounted && loaded && token == generation) {
+          setState(() => mapError = readableError('$error'));
+        }
+      } finally {
+        overlayRefreshWork = null;
+        if (mounted &&
+            loaded &&
+            (token != generation ||
+                revision != app.revision ||
+                referenceRevision !=
+                    app.api.revisionFor('/api/render/reference'))) {
+          refreshOverlays(ref.read(appProvider));
+        }
+      }
+    }();
+  }
+
+  final railSpecs = <String, Map<String, dynamic>>{};
+  final railSprites = <String>{};
+
+  Future<void> installRailSprites(AppState app, List sprites) async {
+    final token = generation;
+    for (final sprite in sprites) {
+      final id = sprite['id'] as String;
+      final key = '$generation:$id';
+      if (railSprites.contains(key)) continue;
+      final url = sprite['url'] as String;
+      final index = await app.api.get('$url.json');
+      final codec = await ui.instantiateImageCodec(
+        await app.api.download('$url.png'),
+      );
+      final atlas = (await codec.getNextFrame()).image;
+      try {
+        for (final entry in index.entries) {
+          if (!mounted || token != generation) return;
+          final item = entry.value as Map;
+          final w = (item['width'] as num).toInt(),
+              h = (item['height'] as num).toInt();
+          final recorder = ui.PictureRecorder();
+          final canvas = ui.Canvas(recorder);
+          canvas.drawImageRect(
+            atlas,
+            ui.Rect.fromLTWH(
+              (item['x'] as num).toDouble(),
+              (item['y'] as num).toDouble(),
+              w.toDouble(),
+              h.toDouble(),
+            ),
+            ui.Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
+            ui.Paint(),
+          );
+          final picture = recorder.endRecording();
+          final image = await picture.toImage(w, h);
+          final png = await image.toByteData(format: ui.ImageByteFormat.png);
+          await map!.addImage(
+            '$id:${entry.key}',
+            png!.buffer.asUint8List(),
+            sdf: item['sdf'] == true || id.endsWith('-sdf'),
+          );
+          image.dispose();
+          picture.dispose();
+        }
+        if (mounted && token == generation) railSprites.add(key);
+      } finally {
+        atlas.dispose();
+        codec.dispose();
+      }
+    }
+  }
+
+  Future<void> updateOverlays(AppState app) async {
+    final view = (
+      generation,
+      app.api.revisionFor('/api/render/reference'),
+      app.airports,
+      app.airportGroups.toList().join(','),
+      app.rail,
+      app.railTechnical,
+      jsonEncode(app.prefs['railGroups']),
+      app.accentTheme,
+      app.trails,
+      app.trailTheme,
+      app.trailStrength,
+      app.photos,
+      app.track,
+      app.photoItems,
+    );
+    if (overlaysView == view) return;
+    for (final group in ['airline', 'airfields', 'helipads', 'closed']) {
+      final source = 'airports-$group';
+      final enabled = app.airports && app.airportGroups.contains(group);
+      final path = '/api/render/reference?kind=airports&group=$group';
+      final version = app.api.revisionFor(path);
+      if (enabled &&
+          (airportViews[source] != version || !sources.contains(source))) {
+        final data = Map<String, dynamic>.from(await app.api.get(path));
+        final specs = data.remove('layers') as List;
+        await geoSource(source, data);
+        airportViews[source] = version;
+        for (final spec in specs.reversed) {
+          final id = 'airport-pins-${spec['id']}';
+          if (layers.contains(id)) continue;
+          await map!.addCircleLayer(
+            source,
+            id,
+            const CircleLayerProperties(
+              circleColor: '#f4cc69',
+              circleRadius: 4,
+              circleStrokeColor: '#20252d',
+              circleStrokeWidth: 1,
+            ),
+            belowLayerId:
+                group != 'airline' &&
+                    layers.contains('airport-pins-sporra-air-medium')
+                ? 'airport-pins-sporra-air-medium'
+                : null,
+            minzoom: (spec['minzoom'] as num).toDouble(),
+            filter: spec['filter'],
+          );
+          layers.add(id);
+          await map!.addSymbolLayer(
+            source,
+            '$id-label',
+            SymbolLayerProperties(
+              textField: [
+                'step',
+                ['zoom'],
+                [
+                  'case',
+                  [
+                    '!=',
+                    ['get', 'code'],
+                    '',
+                  ],
+                  ['get', 'code'],
+                  ['get', 'name'],
+                ],
+                10,
+                ['get', 'name'],
+              ],
+              textSize: 11,
+              textColor: '#f4cc69',
+              textHaloColor: '#20252d',
+              textHaloWidth: 1.5,
+              textOffset: [0, 1.1],
+              textAnchor: 'top',
+            ),
+            belowLayerId:
+                group != 'airline' &&
+                    layers.contains('airport-pins-sporra-air-medium')
+                ? 'airport-pins-sporra-air-medium'
+                : null,
+            minzoom: (spec['minzoom'] as num).toDouble(),
+            filter: spec['filter'],
+          );
+          layers.add('$id-label');
+        }
+      }
+      for (final spec in airportLayerGroups[group]!) {
+        final id = 'airport-pins-sporra-air-$spec';
+        for (final layer in [id, '$id-label']) {
+          if (layers.contains(layer)) {
+            await map!.setLayerVisibility(layer, enabled);
+          }
+        }
+      }
+    }
+    final railGeneration = generation;
+    final railKey = (
+      generation,
+      app.api.revisionFor('/api/render/reference'),
+      app.railTechnical,
+      app.accentTheme,
+    );
+    if (app.rail && railView != railKey) {
+      final data = await app.api.get(
+        '/api/render/reference?kind=rail&native=1&technical=${app.railTechnical ? 1 : 0}&theme=${app.accentTheme}',
+      );
+      if (!mounted || generation != railGeneration) return;
+      await installRailSprites(app, data['sprites'] as List? ?? []);
+      if (!mounted || generation != railGeneration) return;
+      for (final id
+          in layers
+              .where((id) => id.startsWith('sporra-orm-'))
+              .toList()
+              .reversed) {
+        await map!.removeLayer(id);
+        layers.remove(id);
+      }
+      railSpecs.clear();
+      for (final entry in (data['sources'] as Map).entries) {
+        if (sources.contains(entry.key)) continue;
+        final source = entry.value as Map;
+        await map!.addSource(
+          entry.key,
+          VectorSourceProperties(
+            tiles: List<String>.from(source['tiles']),
+            minzoom: (source['minzoom'] as num?)?.toDouble(),
+            maxzoom: (source['maxzoom'] as num?)?.toDouble(),
+          ),
+        );
+        sources.add(entry.key);
+      }
+      final anchor = await below();
+      for (final layer in (data['layers'] as List).expand(
+        (layer) => nativeRailLayers(Map<String, dynamic>.from(layer)),
+      )) {
+        if (!mounted || generation != railGeneration) return;
+        await map!.addReferenceLayer(layer, below: anchor);
+        layers.add(layer['id']);
+        railSpecs[layer['id']] = layer;
+      }
+      railView = railKey;
+    }
+    for (final entry in railSpecs.entries) {
+      if (!layers.contains(entry.key)) continue;
+      final spec = entry.value;
+      final group = spec['metadata']?['sporra:group'] as String?;
+      await map!.setLayerVisibility(
+        entry.key,
+        app.rail &&
+            spec['layout']?['visibility'] != 'none' &&
+            (group == null || app.railGroupOn(group)),
+      );
+    }
+    final trailSource = 'trails-${app.trailTheme}';
+    final trailLayer = '$trailSource-layer';
+    if (app.trails && !sources.contains(trailSource)) {
+      await map!.addSource(
+        trailSource,
+        RasterSourceProperties(
+          tiles: [
+            app.api
+                .uri('/api/trails/tile/${app.trailTheme}/{z}/{x}/{y}.png')
+                .toString()
+                .replaceAll('%7B', '{')
+                .replaceAll('%7D', '}'),
+          ],
+          tileSize: 256,
+          maxzoom: 18,
+        ),
+      );
+      sources.add(trailSource);
+      await map!.addRasterLayer(
+        trailSource,
+        trailLayer,
+        RasterLayerProperties(
+          rasterOpacity: app.trailStrength,
+          rasterResampling: 'linear',
+          rasterFadeDuration: 0,
+        ),
+        belowLayerId: await below(),
+      );
+      layers.add(trailLayer);
+    }
+    for (final id in layers.where(
+      (id) => id.startsWith('trails-') && id.endsWith('-layer'),
+    )) {
+      await patchLayer(
+        id,
+        RasterLayerProperties(
+          rasterOpacity: app.trails && id == trailLayer ? app.trailStrength : 0,
+        ),
+      );
+    }
+    if (app.photos &&
+        (!sources.contains('photos') ||
+            photosView != (generation, app.photoItems, app.track))) {
+      final photos = app.photosInTrack(await app.readPhotos());
+
+      if (sources.contains('photos')) {
+        await map!.setGeoJsonSource(
+          'photos',
+          photoSource(photos).data as Map<String, dynamic>,
+        );
+      } else {
+        await map!.addSource('photos', photoSource(photos));
+        sources.add('photos');
+      }
+      if (!layers.contains('photos-pins')) {
+        await map!.addCircleLayer('photos', 'photos-pins', photoPinStyle);
+        layers.add('photos-pins');
+      }
+      if (!layers.contains('photos-counts')) {
+        await map!.addSymbolLayer('photos', 'photos-counts', photoCountStyle);
+        layers.add('photos-counts');
+      }
+      photosView = (generation, app.photoItems, app.track);
+    }
+    for (final id in ['photos-pins', 'photos-counts']) {
+      if (layers.contains(id)) await map!.setLayerVisibility(id, app.photos);
+    }
+    overlaysView = view;
+  }
+
+  void showCachedPlace(LatLng point, AppState app) {
+    if (!app.cellInfo || app.activity != null) return;
+    final b = factsBounds;
+    final inBounds =
+        b != null &&
+        point.latitude >= b[1] &&
+        point.latitude <= b[3] &&
+        (b[0] <= b[2]
+            ? point.longitude >= b[0] && point.longitude <= b[2]
+            : point.longitude >= b[0] || point.longitude <= b[2]);
+    final factsReady =
+        inBounds &&
+        factsLevel == currentLevel &&
+        factsQuery == app.renderQuery(currentLevel);
+    selectedCellKey = currentLevel < 6
+        ? cellKey(currentLevel, point.longitude, point.latitude)
+        : null;
+    selectedFactsScope = (currentLevel, app.renderQuery(currentLevel));
+    final local = factsReady
+        ? currentLevel < 6
+              ? cellFacts[cellKey(
+                  currentLevel,
+                  point.longitude,
+                  point.latitude,
+                )]
+              : areaFacts
+                    .where(
+                      (a) => a.shape.contains(
+                        Offset(point.longitude, point.latitude),
+                      ),
+                    )
+                    .firstOrNull
+                    ?.info
+        : null;
+    final geometry = currentLevel < 6
+        ? cellOutline(currentLevel, point.longitude, point.latitude)
+        : areaFacts
+              .where(
+                (a) =>
+                    a.shape.contains(Offset(point.longitude, point.latitude)),
+              )
+              .firstOrNull
+              ?.geometry;
+    setState(
+      () => placeInfo = {
+        'name': null,
+        'geometry': geometry,
+        if (factsReady) 'visited': local != null,
+        ...?local,
+      },
+    );
+  }
+
+  Future<void> updatePlaceOutline() async {
+    final view = (generation, placeInfo);
+    if (outlineView == view) return;
+    final geometry = placeInfo?['geometry'];
+    await geoSource('place-selection', {
+      'type': 'FeatureCollection',
+      'features': geometry == null
+          ? []
+          : [
+              {'type': 'Feature', 'properties': {}, 'geometry': geometry},
+            ],
+    });
+    if (!layers.contains('place-selection-halo')) {
+      await map!.addLineLayer(
+        'place-selection',
+        'place-selection-halo',
+        const LineLayerProperties(
+          lineColor: 'rgba(8, 10, 16, 0.85)',
+          lineWidth: [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            2,
+            3.6,
+            17,
+            5.4,
+          ],
+          lineJoin: 'round',
+          lineCap: 'round',
+        ),
+      );
+      layers.add('place-selection-halo');
+    }
+    if (!layers.contains('place-selection-outline')) {
+      await map!.addLineLayer(
+        'place-selection',
+        'place-selection-outline',
+        const LineLayerProperties(
+          lineColor: '#ffffff',
+          lineWidth: [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            2,
+            1.7,
+            17,
+            2.7,
+          ],
+          lineJoin: 'round',
+        ),
+      );
+      layers.add('place-selection-outline');
+    }
+    outlineView = view;
+  }
+
+  Future<void> tap(LatLng point, {math.Point<double>? pixel}) async {
+    final app = ref.read(appProvider);
+    if (app.editing) {
+      await app.run(() async {
+        final result = await app.api.post(
+          app.clearingRegion ? '/api/render/region-clear' : '/api/render/brush',
+          {
+            if (app.clearingRegion) ...{
+              'lng': point.longitude,
+              'lat': point.latitude,
+            },
+            'level': 0,
+            'size': app.brushSize,
+            'action': app.brushAction,
+            'points': [
+              [point.longitude, point.latitude],
+            ],
+          },
+        );
+        app.undo = Map<String, dynamic>.from(result['undo']);
+        app.changed();
+      });
+      return;
+    }
+    final request = ++tapRequest;
+    placePath = null;
+    showCachedPlace(point, app);
+    try {
+      if (pixel != null) {
+        final rect = Rect.fromCenter(
+          center: Offset(pixel.x, pixel.y),
+          width: routeTapPadding * 2,
+          height: routeTapPadding * 2,
+        );
+        Future<List> query(List<String> ids) {
+          final available = ids.where(layers.contains).toList();
+          return available.isEmpty
+              ? Future.value([])
+              : map!.queryRenderedFeaturesInRect(rect, available, null);
+        }
+
+        // Native GeoJSON replies carry no layer id. Query categories separately
+        // instead of trying to recover the JS SDK's feature.layer property.
+        final results = await Future.wait([
+          query(['activity-metric-line']),
+          query(['photos-pins']),
+          query(layers.where((id) => id.startsWith('airport-pins-')).toList()),
+          query(['activities-line']),
+        ]);
+        if (!mounted || request != tapRequest) return;
+        if (results[0].isNotEmpty) {
+          final sample = results[0]
+              .map((hit) => hit['properties']?['i'])
+              .whereType<num>()
+              .firstOrNull;
+          if (sample != null) app.scrubActivity(sample.toInt());
+          return;
+        }
+        if (results[1].isNotEmpty) {
+          setState(() => placeInfo = null);
+          final controller = map!;
+          final indices = await photoHitIndices(
+            [nearestPhotoHit(results[1], point.latitude, point.longitude)],
+            (cluster, limit, offset) => controller.getClusterLeaves(
+              'photos',
+              cluster,
+              limit: limit,
+              offset: offset,
+            ),
+          );
+          if (!mounted || request != tapRequest) return;
+          await showPhotos(context, app, indices: indices);
+          return;
+        }
+        if (results[2].isNotEmpty) {
+          setState(() => placeInfo = null);
+          final hit = results[2].first;
+          final props = hit['properties'];
+          final data = await app.api.get(
+            '/api/render/reference?kind=airport&group=${Uri.encodeQueryComponent(props['group'])}&index=${(props['index'] as num).toInt()}',
+          );
+          if (mounted && request == tapRequest) {
+            await showAirport(context, Map<String, dynamic>.from(data));
+          }
+          return;
+        }
+        final routeIds = activityHitIds(results[3], routeDuplicates);
+        if (routeIds.length > 1 &&
+            routeSummaries.isEmpty &&
+            routeMetadataWork != null) {
+          await routeMetadataWork;
+          if (!mounted || request != tapRequest) return;
+        }
+        final candidates = routeSummaries
+            .where((r) => routeIds.contains(r['id']))
+            .toList();
+        if (candidates.isNotEmpty) {
+          routeIds.retainAll(candidates.map((r) => r['id']));
+        }
+        if (routeIds.isNotEmpty) {
+          setState(() => placeInfo = null);
+          if (routeIds.length == 1) {
+            await app.openActivity(routeIds.first);
+          } else {
+            final ordered =
+                routeSummaries.where((r) => routeIds.contains(r['id'])).toList()
+                  ..sort(
+                    (a, b) =>
+                        (b['firstAt'] as num).compareTo(a['firstAt'] as num),
+                  );
+            final groups = <String, List<Map<String, dynamic>>>{};
+            for (final route in ordered) {
+              final sport = '${route['sport'] ?? ''}';
+              (groups[sport.isEmpty ? 'Not set' : sport] ??= []).add(route);
+            }
+            app.stackIds = groups.values
+                .expand((routes) => routes)
+                .map((r) => r['id'])
+                .toList();
+            app.changed();
+            try {
+              final stack = await app.api.get(
+                '/api/render/routes?${Uri(queryParameters: {'stack': app.stackIds.map((id) => '$id').toList()}).query}',
+              );
+              final colors = {
+                for (final f in stack['features'])
+                  f['properties']['id']: '${f['properties']['color']}',
+              };
+              if (!mounted || request != tapRequest) return;
+              await panel(
+                context,
+                'Choose an activity',
+                ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final group in groups.entries) ...[
+                      if (groups.length > 1) section(group.key),
+                      for (final r in group.value)
+                        ListTile(
+                          leading: SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: FittedBox(
+                              child: ColorDot(colors[r['id']] ?? '#ff9147'),
+                            ),
+                          ),
+                          title: Text('${r['name']}'),
+                          subtitle: Text(
+                            '${date(r['firstAt'])} · ${((r['lengthM'] as num) / 1000).toStringAsFixed(1)} km',
+                          ),
+                          onTap: () {
+                            Navigator.pop(context);
+                            app.openActivity(r['id']);
+                          },
+                        ),
+                    ],
+                  ],
+                ),
+                height: math.min(
+                  0.42,
+                  (76 + routeIds.length * 64) /
+                      MediaQuery.sizeOf(context).height,
+                ),
+              );
+            } finally {
+              app.stackIds = [];
+              app.changed();
+            }
+          }
+          return;
+        }
+      }
+      if (!app.cellInfo || app.activity != null) return;
+      final path =
+          '/api/render/at?lng=${point.longitude}&lat=${point.latitude}&${app.renderQuery(currentLevel)}';
+      placePath = app.api.uri(path).toString();
+      final info = await app.api.get(path);
+      if (mounted && request == tapRequest && placeInfo != null) {
+        setState(
+          () => placeInfo = {...?placeInfo, ...Map<String, dynamic>.from(info)},
+        );
+      }
+    } catch (e) {
+      if (mounted && request == tapRequest) {
+        showToast(context, '$e', top: app.track == null ? 12 : 76);
+      }
+    }
+  }
+
+  void focusActivity(AppState app) {
+    if (!mounted || map == null || app.activity == null) return;
+    goTo(
+      map!,
+      app.activity!['route'],
+      padding: activityMapPadding(
+        mapSize,
+        activityCardSize,
+        MediaQuery.paddingOf(context),
+      ),
+    );
+  }
+
+  void updateSun() => ref
+      .read(appProvider)
+      .refreshSun(latitude: location?.latitude, longitude: location?.longitude);
+  void styleLoaded() {
+    generation++;
+    sources.clear();
+    layers.clear();
+    airportViews.clear();
+    renderedView = null;
+    routesView = null;
+    routesStyleView = null;
+    groundOpacityView = null;
+    routesUpdated = null;
+    trackView = null;
+    activityView = null;
+    activityLinesView = null;
+    overlaysView = null;
+    outlineView = null;
+    photosView = null;
+    fade?.cancel();
+    loaded = true;
+    factsRequest++;
+    activeFactsPath = loadedFactsPath = null;
+    loadingFacts = false;
+    tracePerformance('native-style-ready', startupClock);
+    refreshRoutes(ref.read(appProvider));
+    // Saved layers can appear while the location service obtains a fresh fix.
+    unawaited(refresh());
+    unawaited(focusLocation());
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    locationEnabled = widget.enableLocation;
+    locating = widget.enableLocation;
+    final preferences = ref.read(appProvider).mapPreferences;
+    camera = CameraPosition(
+      target: preferences.latitude == null
+          ? camera.target
+          : LatLng(preferences.latitude!, preferences.longitude!),
+      zoom: preferences.zoom ?? camera.zoom,
+      tilt: preferences.tilt,
+      bearing: preferences.bearing,
+    );
+    final app = ref.read(appProvider);
+    responseUpdates = app.api.updates.listen((url) {
+      if (!mounted) return;
+      if (url.toString() == activeFactsPath && factsBounds != null) {
+        loadedFactsPath = null;
+        unawaited(
+          refreshCellFacts(app, factsLevel, factsBounds!, revalidate: false),
+        );
+      } else if (url.path == '/api/render/reference') {
+        refreshOverlays(app);
+      } else if (url.path == '/api/render/style' &&
+          requestedStyle != null &&
+          url.queryParameters['name'] ==
+              mb.effectiveBasemap(app.style, app.mapboxToken)) {
+        unawaited(
+          resolveStyle(
+            app,
+            url.queryParameters['name']!,
+            requestedStyle!,
+            revalidate: false,
+          ),
+        );
+      } else if (url.toString() == placePath && placeInfo != null) {
+        final request = tapRequest;
+        unawaited(
+          app.api.get(url.toString(), revalidate: false).then<void>((info) {
+            if (mounted && request == tapRequest && placeInfo != null) {
+              setState(
+                () => placeInfo = {
+                  ...?placeInfo,
+                  ...Map<String, dynamic>.from(info),
+                },
+              );
+            }
+          }, onError: (Object _) {}),
+        );
+      }
+    });
+    final level = mapLevel(app.detail, camera.zoom);
+    if (level < 6) {
+      unawaited(
+        app.api.prepareCells(app.mapDataPath(level)).catchError((Object _) {}),
+      );
+    }
+    WidgetsBinding.instance.addObserver(this);
+    sunTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      updateSun();
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        unawaited(ref.read(appProvider).checkAnnouncements());
+      }
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      if (state == AppLifecycleState.paused) setState(() => locating = false);
+      ref.read(appProvider).api.cancelPrefetch();
+      cameraRefreshTimer?.cancel();
+      cameraRefreshTimer = null;
+      cameraMoving = false;
+      unawaited(ref.read(appProvider).api.flushCache());
+      unawaited(ref.read(appProvider).mapPreferences.flush());
+    } else if (state == AppLifecycleState.resumed) {
+      updateSun();
+      unawaited(ref.read(appProvider).checkAnnouncements());
+      unawaited(refresh());
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    errorToastTimer?.cancel();
+    mapRetryTimer?.cancel();
+    cameraRefreshTimer?.cancel();
+    unawaited(responseUpdates?.cancel());
+    generation++;
+    factsRequest++;
+    if (!(obsoleteRefresh?.isCompleted ?? true)) obsoleteRefresh!.complete();
+    tapRequest++;
+    sunTimer?.cancel();
+    dismissToast();
+    fade?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = ref.watch(appProvider);
+    if (observedAnnouncement != app.announcementRevision) {
+      observedAnnouncement = app.announcementRevision;
+      final notice = app.announcement;
+      if (notice != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted ||
+              !app.announcementsEnabled ||
+              app.announcement != notice) {
+            return;
+          }
+          final ids = notice['activityIds'] as List? ?? [];
+          showToast(
+            context,
+            '${notice['title']}\n${notice['detail']}',
+            duration: const Duration(seconds: 12),
+            action: 'Show',
+            onAction: () {
+              if (ids.length == 1) {
+                unawaited(app.openActivity(ids.single));
+              } else {
+                unawaited(showStats(context, app));
+              }
+            },
+          );
+        });
+      }
+    }
+    if (app.activity != null) placeInfo = null;
+    if (observedTrackRequest != app.trackLoadedRequest) {
+      observedTrackRequest = app.trackLoadedRequest;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && map != null && app.track != null) goTo(map!, app.track!);
+      });
+    }
+    if (observedError != app.error) {
+      observedError = app.error;
+      if (app.error == null) {
+        errorToastTimer?.cancel();
+        errorToastTimer = null;
+      } else {
+        errorToastTimer ??= Timer(persistentErrorDelay, () {
+          final current = ref.read(appProvider);
+          if (mounted && current.error != null) {
+            showToast(
+              context,
+              readableError(current.error!),
+              top: current.track == null ? 12 : 76,
+            );
+          }
+        });
+      }
+    }
+    final nativeStyle = mb.effectiveBasemap(app.style, app.mapboxToken);
+    final styleIdentity =
+        '${app.style}:${app.isMapbox}:${app.isMapbox ? app.mapboxToken : ''}';
+    if (requestedStyle != styleIdentity) {
+      loaded = false;
+      generation++;
+      requestedStyle = styleIdentity;
+      resolvedStyle = null;
+      if (!app.isMapbox &&
+          (nativeStyle == 'terrain' || nativeStyle == 'satellite')) {
+        unawaited(resolveStyle(app, nativeStyle, styleIdentity));
+      }
+    }
+
+    if (observed != app.revision) {
+      observed = app.revision;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (loaded) unawaited(refreshRouteStyle(app));
+        unawaited(refresh(validate: false));
+      });
+    }
+    if (!identical(observedPlace, placeInfo)) {
+      observedPlace = placeInfo;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (loaded) unawaited(updatePlaceOutline());
+      });
+    }
+    final activityLines = (app.activity, app.activityMetric);
+    if (observedSample != app.activitySample ||
+        observedActivityLines != activityLines) {
+      observedSample = app.activitySample;
+      observedActivityLines = activityLines;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (loaded) unawaited(refreshActivityFocus(app));
+      });
+    }
+    if (observedActivity != app.activity?['route']['id']) {
+      observedActivity = app.activity?['route']['id'];
+      // The first layout supplies the real card height before fitting the route.
+      pendingActivityFit = observedActivity;
+    }
+    return Scaffold(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          mapSize = constraints.biggest;
+          return Stack(
+            children: [
+              if (app.isMapbox)
+                MapboxView(
+                  key: ValueKey('mapbox:${app.mapboxToken}'),
+                  token: app.mapboxToken,
+                  satellite: app.style == 'satellite',
+                  light: app.lightPreset,
+                  camera: camera,
+                  onCreated: (c) {
+                    map = c;
+                    loaded = false;
+                    generation++;
+                    sources.clear();
+                    layers.clear();
+                  },
+                  onLoaded: styleLoaded,
+                  onCamera: cameraMoved,
+                  onIdle: cameraIdle,
+                  onTap: (p, pixel) => unawaited(tap(p, pixel: pixel)),
+                  onError: (message) {
+                    if (mounted) setState(() => mapError = message);
+                  },
+                )
+              else
+                MapLibreMap(
+                  key: const ValueKey('sporra-map'),
+                  // All annotations are style sources owned by this screen.
+                  // The plugin's unused managers add sources during style loads.
+                  annotationOrder: const [],
+                  styleString:
+                      widget.styleOverride ??
+                      resolvedStyle ??
+                      mapStyle(nativeStyle),
+                  initialCameraPosition: camera,
+                  trackCameraPosition: true,
+                  featureTapsTriggersMapClick: true,
+                  myLocationEnabled: locationEnabled,
+                  myLocationTrackingMode: locating
+                      ? MyLocationTrackingMode.tracking
+                      : MyLocationTrackingMode.none,
+                  myLocationRenderMode: locationEnabled
+                      ? MyLocationRenderMode.compass
+                      : MyLocationRenderMode.normal,
+                  scaleControlEnabled: true,
+                  attributionButtonPosition:
+                      AttributionButtonPosition.bottomLeft,
+                  attributionButtonMargins: math.Point(
+                    12,
+                    MediaQuery.paddingOf(context).bottom + 8,
+                  ),
+                  onMapCreated: (c) {
+                    generation++;
+                    loaded = false;
+                    sources.clear();
+                    layers.clear();
+                    map = NativeMapController.libre(c);
+                  },
+                  onStyleLoadedCallback: styleLoaded,
+                  onCameraIdle: cameraIdle,
+                  onCameraMove: (p) {
+                    cameraMoved(p);
+                    if (p.tilt > 60) {
+                      unawaited(map!.moveCamera(CameraUpdate.tiltTo(60)));
+                    }
+                  },
+                  onUserLocationUpdated: (p) {
+                    location = p.position;
+                    updateCamera(camera);
+                    updateSun();
+                    unawaited(focusLocation());
+                  },
+                  onMapClick: (pixel, p) => unawaited(tap(p, pixel: pixel)),
+                ),
+              if (!loaded && mapError == null)
+                const Positioned.fill(
+                  child: IgnorePointer(
+                    child: Center(child: LoadingIndicator(showLabel: false)),
+                  ),
+                ),
+              if (app.editing && !app.clearingRegion)
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onPanStart: app.busy
+                        ? null
+                        : (d) => setState(() {
+                            stroke.clear();
+                            stroke.add(d.localPosition);
+                            pointer = d.localPosition;
+                          }),
+                    onPanUpdate: app.busy
+                        ? null
+                        : (d) {
+                            if (stroke.length < 2000 &&
+                                (stroke.isEmpty ||
+                                    (stroke.last - d.localPosition).distance >
+                                        3)) {
+                              setState(() {
+                                stroke.add(d.localPosition);
+                                pointer = d.localPosition;
+                              });
+                            }
+                          },
+                    onPanEnd: app.busy
+                        ? null
+                        : (_) => unawaited(finishStroke(app)),
+                    onTapUp: app.busy
+                        ? null
+                        : (d) {
+                            stroke.clear();
+                            stroke.add(d.localPosition);
+                            unawaited(finishStroke(app));
+                          },
+                    child: CustomPaint(
+                      painter: StrokePreview(
+                        List<Offset>.from(stroke),
+                        pointer,
+                        app.brushAction == 'erase'
+                            ? Colors.orangeAccent
+                            : Colors.white,
+                        math.max(
+                          4,
+                          app.brushSize *
+                              42.7 *
+                              math.pow(2, map?.cameraPosition?.zoom ?? 7) *
+                              512 /
+                              world,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (!app.menuOpen && !app.editing && app.activity == null)
+                SafeArea(
+                  key: const ValueKey('map-controls'),
+                  child: Align(
+                    alignment: mapControlsAlignment(constraints.biggest),
+                    child: AnimatedPadding(
+                      duration: MediaQuery.disableAnimationsOf(context)
+                          ? Duration.zero
+                          : const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
+                      padding: EdgeInsets.fromLTRB(
+                        16,
+                        16,
+                        16,
+                        16 +
+                            (app.activity != null && constraints.maxWidth < 600
+                                ? activityCardHeight + 14
+                                : placeInfo != null
+                                ? placeCardHeight + 14
+                                : 0),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (camera.bearing.abs() > 1 || camera.tilt > 1)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Glass(
+                                child: CupertinoButton(
+                                  padding: const EdgeInsets.all(12),
+                                  minimumSize: Size.zero,
+                                  onPressed: () => map?.animateCamera(
+                                    CameraUpdate.newCameraPosition(
+                                      CameraPosition(
+                                        target: camera.target,
+                                        zoom: camera.zoom,
+                                      ),
+                                    ),
+                                  ),
+                                  child: Transform.rotate(
+                                    angle: -camera.bearing * math.pi / 180,
+                                    child: const Icon(
+                                      CupertinoIcons.compass,
+                                      color: Colors.white,
+                                      size: 21,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          Glass(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Search',
+                                  onPressed: map == null
+                                      ? null
+                                      : () {
+                                          HapticFeedback.lightImpact();
+                                          showSporraSearch(context, app, map!);
+                                        },
+                                  icon: const SFIcon(
+                                    'magnifyingglass',
+                                    weight: FontWeight.w600,
+                                    fallback: CupertinoIcons.search,
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Menu',
+                                  onPressed: () {
+                                    HapticFeedback.lightImpact();
+                                    showMenuSheet(
+                                      context,
+                                      app,
+                                      () => unawaited(refresh()),
+                                      map,
+                                    );
+                                  },
+                                  icon: const SFIcon(
+                                    'line.3.horizontal',
+                                    weight: FontWeight.w600,
+                                    fallback: CupertinoIcons.line_horizontal_3,
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Your location',
+                                  onPressed: () {
+                                    HapticFeedback.lightImpact();
+                                    setState(() {
+                                      locationEnabled = true;
+                                      locating = true;
+                                    });
+                                    unawaited(focusLocation());
+                                  },
+                                  icon: SFIcon(
+                                    locationFocused
+                                        ? 'location.fill'
+                                        : 'location',
+                                    weight: FontWeight.w600,
+                                    fallback: locationFocused
+                                        ? CupertinoIcons.location_fill
+                                        : CupertinoIcons.location,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              if (app.editing)
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.bottomLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 80, 48),
+                      child: Glass(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: 'Paint',
+                              onPressed: () {
+                                app.clearingRegion = false;
+                                app.brushAction = 'paint';
+                                app.changed();
+                              },
+                              icon: SFIcon(
+                                'paintbrush',
+                                fallback: CupertinoIcons.paintbrush,
+                                color: app.brushAction == 'paint'
+                                    ? Colors.white
+                                    : null,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Erase',
+                              onPressed: () {
+                                app.clearingRegion = false;
+                                app.brushAction = 'erase';
+                                app.changed();
+                              },
+                              icon: Icon(
+                                Icons.auto_fix_normal,
+                                color: app.brushAction == 'erase'
+                                    ? Colors.white
+                                    : null,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Clear a region',
+                              onPressed: () {
+                                app.clearingRegion = !app.clearingRegion;
+                                app.changed();
+                              },
+                              icon: Icon(
+                                Icons.map_outlined,
+                                color: app.clearingRegion
+                                    ? Colors.orangeAccent
+                                    : null,
+                              ),
+                            ),
+                            DropdownButton<int>(
+                              value: app.brushSize,
+                              items: [1, 3, 8, 15, 24, 35, 48, 63, 80, 99]
+                                  .map(
+                                    (n) => DropdownMenuItem(
+                                      value: n,
+                                      child: Text('$n'),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (n) {
+                                app.brushSize = n!;
+                                app.changed();
+                              },
+                            ),
+                            IconButton(
+                              tooltip: 'Undo',
+                              onPressed: app.undo == null
+                                  ? null
+                                  : () => app.run(() async {
+                                      final undo = app.undo!;
+                                      await app.api.post('/api/cells/mutate', {
+                                        'remove': undo['remove'],
+                                      });
+                                      await app.api.post('/api/cells/restore', {
+                                        'rows': undo['rows'],
+                                      });
+                                      app.undo = null;
+                                      app.changed();
+                                    }),
+                              icon: const SFIcon(
+                                'arrow.uturn.backward',
+                                fallback: CupertinoIcons.arrow_uturn_left,
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Done editing',
+                              onPressed: () {
+                                app.editing = false;
+                                app.changed();
+                              },
+                              icon: const SFIcon(
+                                'checkmark',
+                                fallback: CupertinoIcons.check_mark,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (placeInfo != null && !app.menuOpen && !app.editing)
+                SafeArea(
+                  key: const ValueKey('place-overlay'),
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 380),
+                        child: Measured(
+                          onSize: (size) {
+                            if (mounted && size.height != placeCardHeight) {
+                              setState(() => placeCardHeight = size.height);
+                            }
+                          },
+                          child: Dismissible(
+                            key: const ValueKey('place-card'),
+                            resizeDuration: null,
+                            direction: DismissDirection.down,
+                            onDismissed: (_) => setState(() {
+                              tapRequest++;
+                              placeInfo = null;
+                            }),
+                            child: PlaceCard(
+                              key: ValueKey(('place', tapRequest)),
+                              info: placeInfo!,
+                              onClose: () => setState(() {
+                                tapRequest++;
+                                placeInfo = null;
+                              }),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (app.activity != null && !app.menuOpen && !app.editing)
+                SafeArea(
+                  bottom: false,
+                  child: Align(
+                    alignment: constraints.maxWidth < 600
+                        ? Alignment.bottomCenter
+                        : Alignment.bottomLeft,
+                    child: Padding(
+                      padding: EdgeInsets.only(
+                        left: 12,
+                        right: constraints.maxWidth < 600 ? 12 : 80,
+                        bottom: 12,
+                      ),
+                      child: ConstrainedBox(
+                        constraints: activityOverlayConstraints(
+                          constraints.biggest,
+                          MediaQuery.paddingOf(context),
+                        ),
+                        child: Measured(
+                          key: ValueKey((
+                            'activity-size',
+                            app.activity!['route']['id'],
+                          )),
+                          onSize: (size) {
+                            if (!mounted) return;
+                            if (size != activityCardSize) {
+                              setState(() {
+                                activityCardSize = size;
+                                activityCardHeight = size.height;
+                              });
+                            }
+                            if (pendingActivityFit ==
+                                app.activity?['route']['id']) {
+                              pendingActivityFit = null;
+                              final clock = app.activityOpenClock;
+                              if (clock != null) {
+                                clock.stop();
+                                tracePerformance('activity-card-layout', clock);
+                              }
+                              focusActivity(app);
+                            }
+                          },
+                          child: ActivityCardDrag(
+                            key: ValueKey(
+                              'activity-${app.activity!['route']['id']}',
+                            ),
+                            onDismiss: app.closeActivity,
+                            child: Glass(
+                              child: ActivityCard(
+                                app: app,
+                                onZoom: () => focusActivity(app),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (app.track != null && app.activity == null)
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                      child: GestureDetector(
+                        key: ValueKey(
+                          'track-${app.trackDay ?? app.track!['id']}',
+                        ),
+                        onVerticalDragStart: (_) => selectionVerticalDrag = 0,
+                        onVerticalDragUpdate: (d) =>
+                            selectionVerticalDrag += d.primaryDelta ?? 0,
+                        onVerticalDragEnd: (d) {
+                          if (selectionVerticalDrag.abs() > 60 ||
+                              (d.primaryVelocity ?? 0).abs() > 150) {
+                            app.clearTrack();
+                          }
+                        },
+                        child: GestureDetector(
+                          onHorizontalDragStart: (_) =>
+                              selectionHorizontalDrag = 0,
+                          onHorizontalDragUpdate: (d) =>
+                              selectionHorizontalDrag += d.primaryDelta ?? 0,
+                          onHorizontalDragEnd: (d) {
+                            if (selectionHorizontalDrag.abs() > 60 ||
+                                (d.primaryVelocity ?? 0).abs() >= 150) {
+                              app.run(
+                                () => app.stepTrack(
+                                  selectionHorizontalDrag < 0 ? 1 : -1,
+                                ),
+                              );
+                            }
+                          },
+                          child: Glass(
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (app.trackDay != null && app.canStepDay(-1))
+                                  IconButton(
+                                    tooltip: 'Previous day',
+                                    onPressed: () => app.stepDay(-1),
+                                    icon: const Icon(
+                                      CupertinoIcons.chevron_left,
+                                      size: 16,
+                                    ),
+                                  ),
+                                Flexible(
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      16,
+                                      10,
+                                      8,
+                                      10,
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '${app.track!['label'] ?? app.track!['name']}',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w600,
+                                            letterSpacing: -0.2,
+                                            height: 1.2,
+                                          ),
+                                        ),
+                                        if (app.trackDay != null &&
+                                            app.track!['trip'] != null) ...[
+                                          const SizedBox(height: 3),
+                                          Text(
+                                            '${(app.prefs['tripNames'] as Map?)?[app.track!['trip']['id']] ?? app.track!['trip']['name']}',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.white60,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                if (app.trackDay != null && app.canStepDay(1))
+                                  IconButton(
+                                    tooltip: 'Next day',
+                                    onPressed: () => app.stepDay(1),
+                                    icon: const Icon(
+                                      CupertinoIcons.chevron_right,
+                                      size: 16,
+                                    ),
+                                  ),
+                                if (app.trackDay == null &&
+                                    app.track!['firstDay'] != null)
+                                  IconButton(
+                                    tooltip: 'Explore trip days',
+                                    onPressed: () => app.selectTrack(
+                                      day: '${app.track!['firstDay']}',
+                                    ),
+                                    icon: const Icon(
+                                      CupertinoIcons.chevron_down,
+                                      size: 16,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (app.activity != null)
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                      child: ActivityBanner(
+                        key: ValueKey(
+                          'workout-${app.activity!['route']['id']}',
+                        ),
+                        name: '${app.activity!['route']['name']}',
+                        busy: app.busy,
+                        onStep: (delta) =>
+                            app.run(() => app.stepActivity(delta)),
+                        onDismiss: app.closeActivity,
+                      ),
+                    ),
+                  ),
+                ),
+              if (app.clearingRegion)
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: Glass(
+                        child: TextButton.icon(
+                          icon: const SFIcon(
+                            'xmark',
+                            fallback: CupertinoIcons.xmark,
+                            size: 18,
+                          ),
+                          label: Text(
+                            app.clearingRegion
+                                ? 'Tap a region to clear · Cancel'
+                                : 'One activity · Show all',
+                          ),
+                          onPressed: () {
+                            app.selectedRoute = null;
+                            app.clearingRegion = false;
+                            app.changed();
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (loaded && (refreshing || app.busy) && !app.menuOpen)
+                const SafeArea(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: IgnorePointer(
+                      child: Padding(
+                        padding: EdgeInsets.only(top: 12),
+                        child: LoadingIndicator(showLabel: false),
+                      ),
+                    ),
+                  ),
+                ),
+              if (!app.menuOpen)
+                DelayedErrorNotice(
+                  message: mapError,
+                  builder: (message) => SafeArea(
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          16,
+                          app.track == null ? 12 : 76,
+                          16,
+                          0,
+                        ),
+                        child: Dismissible(
+                          key: ValueKey('map-error-$message'),
+                          direction: DismissDirection.vertical,
+                          onDismissed: (_) => setState(() => mapError = null),
+                          child: Glass(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(child: Text(message)),
+                                  CupertinoButton(
+                                    padding: const EdgeInsets.all(12),
+                                    onPressed: () => unawaited(refresh()),
+                                    child: const Text('Retry'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class StrokePreview extends CustomPainter {
+  StrokePreview(this.points, this.pointer, this.color, this.radius);
+  final List<Offset> points;
+  final Offset? pointer;
+  final Color color;
+  final double radius;
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (points.isNotEmpty) {
+      final path = Path()..moveTo(points.first.dx, points.first.dy);
+      for (final p in points.skip(1)) {
+        path.lineTo(p.dx, p.dy);
+      }
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = color.withValues(alpha: 0.3)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = radius * 2
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round,
+      );
+    }
+    if (pointer != null) {
+      canvas.drawCircle(
+        pointer!,
+        radius,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant StrokePreview old) => true;
+}

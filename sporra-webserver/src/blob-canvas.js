@@ -1,3 +1,4 @@
+import { sparseCell } from './blob-shaping.js';
 // Blob rendering.
 //
 // Visited cells are hexagons in storage, but nobody wants to look at a
@@ -20,6 +21,7 @@
 // pipeline below has never known which of the two it is drawing for.
 
 import { SQRT3, radiusOf, colsOf, normCol, WORLD, lngOf, latOf } from './hexgrid.js';
+import { PERF } from './perf.js';
 
 // Canvas pixels per CSS pixel. Well below 1 because everything here is about
 // to be blurred and re-cut: the softness hides the lower resolution, and the
@@ -189,17 +191,19 @@ const CELL_RADIUS = 0.9;
 // Every cell along the edge of a real blob has at least two neighbours, so the
 // floor never moves a blob. Past the point where a thing is too small to draw
 // honestly, drawing it slightly too big beats drawing nothing at all.
-const SPARSE_NEIGHBOURS = 1;
 const SPARSE_GROW = 1;
 const SPARSE_MIN_PX = 2;
 
-// The six neighbours of a cell, by column parity. Flat-top, odd-q: odd columns
-// sit half a row north, so which two rows the next column along contributes
-// depends on which parity you are standing on. Column counts are even at every
-// level by construction (see BASE_COLS), so a world copy never changes a
-// column's parity and the canonical column can be asked directly.
-const NEIGHBOURS_ODD = [[0, -1], [0, 1], [-1, 0], [-1, 1], [1, 0], [1, 1]];
-const NEIGHBOURS_EVEN = [[0, -1], [0, 1], [-1, -1], [-1, 0], [1, -1], [1, 0]];
+// Most discs one path is allowed before it is filled and a new one started.
+//
+// WebKit rasterizes a canvas path as one shape, and the cost of that grows much
+// faster than the number of discs in it: zoomed out with the finest level pinned,
+// ~50,000 sub-pixel discs in a single path took 3–4 seconds to fill in WebKit on
+// a desktop — and more on a phone — while the same discs filled a thousand at a
+// time cost a few milliseconds. The fill is deferred until the pixels are read,
+// which is why it showed up as a blur that had somehow become slow. A normal
+// view draws far fewer than this per colour and is filled exactly as before.
+const PATH_CHUNK = 16;
 
 // Smallest a cell is ever drawn, in canvas pixels. See the note in paint():
 // anything under a pixel rasterizes at partial alpha and the level-set cut
@@ -528,8 +532,16 @@ export function paintBlobSheet({
   maxPixels = nativeBlur() ? Infinity : JS_BLUR_MAX_PX,
   featherScale = 1,
   maxFeatherCells = Infinity,
+  // Where the cells are — src/cell-index.js, built over the same Map. With it
+  // only the cells near the sheet are visited; without it every entry is, which
+  // is what the export does and is the same picture either way.
+  index = null,
+  // Discs per fill — see PATH_CHUNK. A parameter so the chunked picture can be
+  // compared against the single-path one it replaced.
+  pathChunk = PATH_CHUNK,
 }) {
   const { latest, latestCtx, sheet, sheetCtx, work, workCtx } = buffers;
+  const tStart = PERF ? performance.now() : 0;
   const mercW = bb.xMax - bb.xMin;
   const mercH = bb.yMax - bb.yMin;
   if (!(mercW > 0) || !(mercH > 0)) return null;
@@ -599,13 +611,7 @@ export function paintBlobSheet({
   // Has this cell got enough lit neighbours for the blur to leave it alone?
   // Counted on the canonical column, which is the one the keys are written in,
   // and stopped the moment the answer is no longer in doubt.
-  const sparse = (nc, row) => {
-    let n = 0;
-    for (const [dc, dr] of nc & 1 ? NEIGHBOURS_ODD : NEIGHBOURS_EVEN) {
-      if (cells.has(`${normCol(nc + dc, N)}/${row + dr}`) && ++n > SPARSE_NEIGHBOURS) return false;
-    }
-    return true;
-  };
+  const sparse = (nc, row) => sparseCell(cells, N, nc, row);
 
   // Mercator → canvas pixels (y grows north in Mercator, down on canvas).
   const px = (x) => (x - bb.xMin) * k;
@@ -614,6 +620,8 @@ export function paintBlobSheet({
   // Grouping by color keeps this to one path per distinct shade instead of one
   // fill call per cell.
   const paths = new Map();
+  const pathCount = new Map();
+  let filledAny = false;
   const margin = sparsePx + 2;
   const colMin = Math.floor((bb.xMin - R) / colSp);
   const colMax = Math.ceil((xMax + R) / colSp);
@@ -629,49 +637,90 @@ export function paintBlobSheet({
   // Largest disc actually drawn, which is what the blur has to reach past.
   let inkR = rPx;
 
-  for (const [key, stat] of cells) {
-    const sep = key.indexOf('/');
-    const nc = +key.slice(0, sep);
-    const row = +key.slice(sep + 1);
-    const cyM = row * rowSp; // parity offset added per world copy below
-    // Asked once per canonical cell and only when one of its copies is on the
-    // sheet: six lookups is cheap, but the padded viewport holds a lot of cells
-    // and most repaints draw a fraction of what is stored.
-    let r = 0;
+  // One world copy of one canonical cell. Returns the radius it was drawn at,
+  // or 0 when this copy is off the sheet. `r` is the radius already worked out
+  // for another copy of the same cell, so the neighbour test is asked once.
+  const drawCopy = (nc, row, col, stat, r) => {
+    const cx = px(col * colSp);
+    const cy = py(row * rowSp + (col & 1 ? 0.5 * rowSp : 0));
+    if (cx < -margin || cy < -margin || cx > w + margin || cy > h + margin) return 0;
+    if (!r) {
+      r = sparse(nc, row) ? sparsePx : rPx;
+      if (r > inkR) inkR = r;
+    }
+    const color = colorOf(stat);
+    let path = paths.get(color);
+    if (!path) paths.set(color, (path = new Path2D()));
+    path.moveTo(cx + r, cy);
+    path.arc(cx, cy, r, 0, Math.PI * 2);
+    // See PATH_CHUNK: a colour's path is filled and started again once it is
+    // this long, rather than handed to the rasterizer as one enormous shape.
+    const n = (pathCount.get(color) ?? 0) + 1;
+    if (n >= pathChunk) {
+      sheetCtx.fillStyle = color;
+      sheetCtx.fill(path);
+      paths.set(color, new Path2D());
+      pathCount.set(color, 0);
+      filledAny = true;
+    } else {
+      pathCount.set(color, n);
+    }
+    if (cx < inkX0) inkX0 = cx;
+    if (cx > inkX1) inkX1 = cx;
+    if (cy < inkY0) inkY0 = cy;
+    if (cy > inkY1) inkY1 = cy;
+    return r;
+  };
 
-    // Every world-copy instance of this canonical column in the window.
-    const kMin = Math.ceil((colMin - nc) / N);
-    const kMax = Math.floor((colMax - nc) / N);
-    for (let wc = kMin; wc <= kMax; wc++) {
-      const col = nc + wc * N;
-      const cx = px(col * colSp);
-      const cy = py(cyM + (col & 1 ? 0.5 * rowSp : 0));
-      if (cx < -margin || cy < -margin || cx > w + margin || cy > h + margin) continue;
-
-      if (!r) {
-        r = sparse(nc, row) ? sparsePx : rPx;
-        if (r > inkR) inkR = r;
-      }
-      const color = colorOf(stat);
-      let path = paths.get(color);
-      if (!path) paths.set(color, (path = new Path2D()));
-      path.moveTo(cx + r, cy);
-      path.arc(cx, cy, r, 0, Math.PI * 2);
-      if (cx < inkX0) inkX0 = cx;
-      if (cx > inkX1) inkX1 = cx;
-      if (cy < inkY0) inkY0 = cy;
-      if (cy > inkY1) inkY1 = cy;
+  if (index) {
+    // The rows whose centres can land within `margin` of the sheet, one row of
+    // slack either way for the half-row offset of odd columns. A superset is
+    // all this has to be: drawCopy still makes the exact test.
+    const rowMin = Math.floor((bb.yMax - (h + margin) / k) / rowSp) - 1;
+    const rowMax = Math.ceil((bb.yMax + margin / k) / rowSp) + 1;
+    // Each world copy the window reaches, asked for the canonical columns it
+    // covers. Visiting copy by copy draws the same discs the scan below does —
+    // the arcs go into the same per-colour paths, and a nonzero fill of
+    // circles does not care in which order they were added.
+    for (let wc = Math.floor(colMin / N); wc <= Math.floor(colMax / N); wc++) {
+      const base = wc * N;
+      index.forEachIn(
+        Math.max(0, colMin - base),
+        Math.min(N - 1, colMax - base),
+        rowMin,
+        rowMax,
+        (key, nc, row) => {
+          const stat = cells.get(key);
+          if (stat) drawCopy(nc, row, nc + base, stat, 0);
+        },
+      );
+    }
+  } else {
+    for (const [key, stat] of cells) {
+      const sep = key.indexOf('/');
+      const nc = +key.slice(0, sep);
+      const row = +key.slice(sep + 1);
+      // Asked once per canonical cell and only when one of its copies is on the
+      // sheet: six lookups is cheap, but the padded viewport holds a lot of
+      // cells and most repaints draw a fraction of what is stored.
+      let r = 0;
+      // Every world-copy instance of this canonical column in the window.
+      const kMin = Math.ceil((colMin - nc) / N);
+      const kMax = Math.floor((colMax - nc) / N);
+      for (let wc = kMin; wc <= kMax; wc++) r = drawCopy(nc, row, nc + wc * N, stat, r) || r;
     }
   }
 
   // Nothing lit in this window: the buffers were cleared by the resize above and
   // three blurs of an empty sheet would only confirm it.
-  if (!paths.size) return { w, h, xMax };
+  if (!paths.size && !filledAny) return { w, h, xMax };
+  const tFound = PERF ? performance.now() : 0;
 
   for (const [color, path] of paths) {
     sheetCtx.fillStyle = color;
     sheetCtx.fill(path);
   }
+  const tFilled = PERF ? performance.now() : 0;
 
   // How far the paint can travel from a disc's centre before the pipeline is
   // done with it: the disc's own radius, plus three box passes of every round
@@ -699,6 +748,14 @@ export function paintBlobSheet({
   // anything, which is the whole trick: the cells never grow, the outline just
   // relaxes.
   pour(buffers, w, h, box, unit, edge, feather);
+  if (PERF) {
+    const t = performance.now();
+    console.log(
+      `[perf] sheet ${w}×${h}, ${paths.size} colours: find ${(tFound - tStart).toFixed(0)} ms,` +
+        ` fill ${(tFilled - tFound).toFixed(0)} ms, blur ${(t - tFilled).toFixed(0)} ms` +
+        ` over ${box.w}×${box.h}`,
+    );
+  }
 
   return { w, h, xMax };
 }
@@ -875,13 +932,7 @@ export function patchBlobSheet({ buffers, stamp, cells, colorOf, changed, feathe
   // the full paint would have chosen. Clipped to the clear: the part of a
   // neighbour that was not erased is still the original disc, and painting
   // it again would composite the antialiased rim onto itself.
-  const sparse = (nc, row) => {
-    let n = 0;
-    for (const [dc, dr] of (nc & 1) ? NEIGHBOURS_ODD : NEIGHBOURS_EVEN) {
-      if (cells.has(`${normCol(nc + dc, N)}/${row + dr}`) && ++n > SPARSE_NEIGHBOURS) return false;
-    }
-    return true;
-  };
+  const sparse = (nc, row) => sparseCell(cells, N, nc, row);
   const mercX0 = bb.xMin + (clear.x - sparsePx) / k;
   const mercX1 = bb.xMin + (clear.x + clear.w + sparsePx) / k;
   const mercY1 = bb.yMax - (clear.y - sparsePx) / k;
@@ -1058,6 +1109,8 @@ export function createBlobLayer(map, id) {
    * @param {{xMin:number,xMax:number,yMin:number,yMax:number}} o.bb padded viewport in Mercator metres
    * @param {number} o.level      grid level being drawn
    * @param {Map} o.cells         "col/row" → rolled-up stats
+   * @param {object} [o.index]     src/cell-index.js over the same keys, so the
+   *                              paint visits only the cells near the sheet
    * @param {(stat:object)=>string} o.colorOf  css color for a cell
    * @param {boolean} [o.heat]    a heat map rather than the single-color wash;
    *                              picks which pair of edge knobs applies
@@ -1069,7 +1122,7 @@ export function createBlobLayer(map, id) {
    * @returns {boolean} whether the sheet was painted to the reduced budget, and
    *   therefore still owes a full-resolution repaint
    */
-  function paint({ bb, level, cells, colorOf, heat = false, moving = false, changed = null }) {
+  function paint({ bb, level, cells, index = null, colorOf, heat = false, moving = false, changed = null }) {
     // Screen scale straight from the zoom (MapLibre's world is 512·2^z px).
     // The feather takes the same scale, so a width measured in CSS pixels stays
     // the same on screen whatever the display density.
@@ -1109,6 +1162,7 @@ export function createBlobLayer(map, id) {
       pxPerMerc,
       featherScale: scale,
       maxPixels: coarse ? MOVING_MAX_PX : undefined,
+      index,
     });
     if (!out) {
       sheetStamp = null;

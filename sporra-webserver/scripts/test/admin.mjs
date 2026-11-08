@@ -1,3 +1,4 @@
+import { cellFixtures } from './cell-fixtures.mjs';
 // Who runs the server, and what that gets them — through the real HTTP API.
 //
 // Four things are being checked, and all but the first are the ones that will
@@ -83,7 +84,7 @@ async function api(method, url, body, who = 'a') {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
       ...(jar.has(who) ? { Cookie: jar.get(who) } : {}),
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: body ? JSON.stringify(cellFixtures(body)) : undefined,
   });
   const set = res.headers.get('set-cookie');
   if (set) jar.set(who, set.split(';')[0]);

@@ -1,3 +1,6 @@
+import { trackFC, bboxOfPoints } from './track-data.js';
+import { summarizeCells, recordedVisitDates } from './cell-info-data.js';
+import { areaGeometry, mergeAreas, tallyAreas, areaFeatures } from './area-render.js';
 import './style.css';
 import {
   MAX_LEVEL,
@@ -23,6 +26,7 @@ import {
   sampleOnSegment,
   holdPointerSample,
 } from './hexgrid.js';
+import { placesApart } from './directions.js';
 import {
   loadCountries,
   countriesLoaded,
@@ -39,12 +43,13 @@ import { derived } from './derived.js';
 import { installOffline, forgetAccountOffline, clearOfflineCaches } from './offline.js';
 import { mountCellInfo } from './cell-info.js';
 import { mountScaleBar } from './scale-bar.js';
-import { mountRouteInfo } from './route-info.js';
+import { formatGraphSpeed, mountRouteInfo } from './route-info.js';
 import { mountImport } from './import.js';
 import { mountStats } from './stats-ui.js';
 import { mountHomeAssistant } from './home-assistant-ui.js';
 import { sourceLabel } from './locations.js';
 import { mountColorPicker, hexAlpha, hexOpaque } from './color-picker.js';
+import { readMapOpacities, mapOpacityFor } from './map-opacity.js';
 import {
   HEAT_MODES, HEAT_NEIGHBOURHOOD, TYPE_COLORS, TYPE_MAX, TYPE_OTHER_COLOR, UNDATED_COLOR,
   ageStopsOf, cellColorOf, cellStats, heatMetric, hotOf, isHeatMode as isHeatColoring,
@@ -72,7 +77,6 @@ import {
   rememberSnapshot, setBannerMode,
 } from './whats-new.js';
 import { mountWhatsNew } from './whats-new-ui.js';
-import { HEALTH_SOURCE } from './whats-new.js';
 // `pluralKey` renamed on the way in: src/history.js exports its own `plural`,
 // which is the English-only "3 cells" the undo log is written with. This one
 // picks a locale's plural *category* and looks the phrase up — see i18n.js.
@@ -87,9 +91,8 @@ applyTranslations();
 // The theme is not handed over separately: it only ever changes by switching
 // basemap, which replaces the style and rebuilds the overlay from scratch.
 import {
-  describeRailFeature, forgetRailHover, installRail, loadRailStyle, railDetail, railDetailChanged,
-  railFeature, railLayerIds, removeRail, setRailGroup, setRailHover, setRailTechnical,
-  splitRouteLabel,
+  describeRailFeature, installRail, loadRailStyle, railDetail, railDetailChanged,
+  railLayerIds, removeRail, setRailGroup, setRailTechnical,
 } from './rail.js';
 // The airports overlay is a dataset rather than a tile server, so unlike the
 // railways above there is no proxy, no detail ceiling and no outage to report —
@@ -136,7 +139,7 @@ import { mountIntro } from './intro-ui.js';
 import { INTRO_SEEN_KEY, INTRO_VERSION, hostKind, shouldIntro } from './intro.js';
 import {
   activeDays, dayBounds, dayDetail, dayKey, dayLabel, distanceKm, findHome, nextRecordedDay,
-  TRIP_NAME_MAX,
+  workoutBeside, TRIP_NAME_MAX,
 } from './trips.js';
 import { mountSwipe } from './swipe.js';
 import {
@@ -157,17 +160,26 @@ import { mountAdmin, mountAsUser } from './admin-ui.js';
 import { createHistory, plural } from './history.js';
 import { showToast } from './toast.js';
 import { busy } from './busy.js';
-import { routesToFC, totalLength, formatDistance, canonicalSport, duplicateRoutes } from './routes.js';
+import { routesToFC, totalLength, formatDistance, formatDuration, canonicalSport, duplicateRoutes, routeSamples, nearestSample, ROUTE_TILE_ZOOM } from './routes.js';
+import { metricCollection } from './route-metric.js';
 import { paletteFor, randomPalette } from './route-colors.js';
 import { reconcilePrefs, remoteToken, readHome } from './prefs.js';
-import { loadPlaces, describeRoute, nearestTown } from './places.js';
+import { loadPlaces, describeRoute, nearestTown, searchPlaces } from './places.js';
 import { createBlobLayer, blobsSupported, BLOB_ALPHA, BLOB_HEAT_ALPHA } from './blob-canvas.js';
+import { indexCells } from './cell-index.js';
+import {
+  rollUp, rollUpSteps, finishRollUpSteps, neighbourhoodOf, foldInCell,
+  removeCell, storedUnder as storedUnderKey,
+} from './rollup.js';
+import { runSliced, parseCells, fillCells, nextFrame } from './cells-load.js';
 // The one place that asks the map where its camera is, and the only arithmetic
 // that knows a camera can be turned or leaned. Everything downstream still
 // receives a rectangle of Mercator metres.
 import { boxArea, boxContains, cameraOf, groundBox, lngLatBox, mercPerPixel } from './view.js';
 import { installScrollChain } from './scroll-chain.js';
 import { installCardLift } from './card-lift.js';
+import { isPhone } from './phone.js';
+import { span, gestureStart, gestureEnd } from './perf.js';
 
 // Every panel in the app is a scrolling column with scrolling lists inside it,
 // and on a phone the inner list is a dead end unless the hand-off is written by
@@ -455,7 +467,15 @@ const ROUTE_SIMPLIFY_PX = 2;
 // and the ink lies over its own, which composites twice and always did. At a
 // ring's share of the alpha it is a pixel wide and barely there; it was a
 // hard-edged wedge before.
-const ROUTE_GLOW_RINGS = 8;
+//
+// **A phone gets four.** Every ring is the whole route set drawn again, up to
+// twenty pixels wide and translucent, so eight rings is nine passes of overdraw
+// over every saved track on the screen — at a 2× pixel ratio, over the 3D
+// basemap, on a GPU that is also compositing the glass. Four shows its steps on
+// a laptop held at arm's length; on a 460 ppi screen they are finer than the
+// eye resolves at a phone's distance, and the frame is what was being lost.
+// Decided once at load, because the layer ids are built from it.
+const ROUTE_GLOW_RINGS = isPhone() ? 4 : 8;
 // Widest first, so the first of them is the bottom of the whole route stack and
 // the thing everything else anchors above.
 const ROUTE_GLOW_IDS = Array.from(
@@ -947,16 +967,6 @@ let railGroupsOn = (() => {
 // you can read and a knot of grey.
 const RAIL_TECHNICAL_KEY = 'visited-map:rail-technical:v1';
 let railTechnicalOn = localStorage.getItem(RAIL_TECHNICAL_KEY) === 'on';
-
-// Whether a tap on a railway does anything.
-//
-// Off, and that is the point of it: the overlay's first job is to show where the
-// railways are, and while it is on, every tap on the map has to go through a hit
-// test across 288 layers before it can be about the ground. Someone reading the
-// tracks over their own map wants the second thing; someone reading the railway
-// wants the first, and says so once.
-const RAIL_INTERACTIVE_KEY = 'visited-map:rail-interactive:v1';
-let railInteractive = localStorage.getItem(RAIL_INTERACTIVE_KEY) === 'on';
 
 // Which kinds of airfield the airports overlay draws. Same reasoning as the rail
 // groups above — a shape of the thing rather than a state of this visit — with
@@ -1742,7 +1752,13 @@ function snowModeChanged(mode) {
 }
 
 onMapBuilt(() => map.on('moveend', () => {
-  askChromeAgain();
+  // Only the settled reading, not one in the next frame as well. `readPixels`
+  // stalls until the GPU has finished the frame, and the frame after a release
+  // is the one the blob repaint, the tile requests and the glass coming back
+  // are all landing in — a phone felt that as a hitch on every let-go. Once the
+  // map is idle nothing else is waiting on the GPU, and a gesture's worth of
+  // wrong-coloured chrome is not a thing anyone catches mid-pan.
+  chromeSettleDue = true;
   rememberView();
   refreshSnow();
 }));
@@ -1894,11 +1910,11 @@ function syncAccent() {
   accent = next;
   colorPicker?.set(accent); // the swatch, and the panel behind it
   applyColors();
-  // The opacity half of a colour lands on the layers rather than in them, so
-  // the fades have to be re-pinned — the same reason the picker does it.
+  // A legacy color can still supply the initial opacity on another basemap.
   applyFade(fade.cur);
   applyPrevFade(fade.prev);
   repaintAccent();
+  syncMapOpacityUi();
   return true;
 }
 
@@ -1909,6 +1925,12 @@ function syncAccent() {
 // ramps would be a second answer to the same question. What stays here is what
 // is genuinely the map's: the MapLibre expression built from those ramps, and
 // the roll-up that produces the stats they read.
+const MAP_OPACITIES_KEY = 'visited-map:map-opacities:v1';
+let mapOpacities = {};
+try {
+  mapOpacities = readMapOpacities(JSON.parse(localStorage.getItem(MAP_OPACITIES_KEY) ?? '{}'));
+} catch { /* Missing or damaged preferences use the existing defaults. */ }
+
 const HEAT_KEY = 'visited-map:heat:v1';
 let heatMode = localStorage.getItem(HEAT_KEY) ?? 'flat';
 if (!HEAT_MODES[heatMode]) heatMode = 'flat';
@@ -2163,7 +2185,9 @@ const routeGlowOpacity = () => {
   // crisper is not what a route on this map is for — the haze is how a line
   // drawn on the ground reads as *on* the ground rather than as one more thing
   // in the scene. See glowScale for the other half of that lesson.
-  return ['*', routeAlphaExpr(), ['case', ROUTE_SELECTED, strong, ROUTE_HOVERED, lit, soft]];
+  const glow = ['*', routeAlphaExpr(), ['case', ROUTE_SELECTED, strong, ROUTE_HOVERED, lit, soft]];
+  // The route a stack row is lifting out is drawn without one — see setStackPeek.
+  return stackPeek == null ? glow : ['case', ['==', ['id'], stackPeek], 0, glow];
 };
 // The core line is nearly solid, and an activity you have made translucent
 // scales that down rather than replacing it.
@@ -2263,6 +2287,14 @@ const routeWidth = (scale, hover = 1) => [
       ROUTE_HOVERED, w * scale * hover,
       w * scale],
   ]),
+];
+// The ramp is not a feature of the routes source, so it cannot ask `sel`. It
+// is only ever the route the card has open, which is already the selected width.
+const metricWidth = (extra) => [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  ...ROUTE_WIDTH_STOPS.flatMap(([zoom, w]) => [zoom, w * ROUTE_SELECTED_SCALE * extra]),
 ];
 
 function applyTileVis() {
@@ -2372,31 +2404,27 @@ function applyColors() {
 // here, edge softness in src/blob-canvas.js.
 const isHeatMode = () => isHeatColoring(heatMode);
 
-// Heat-map cells are opaque enough to read as data; flat regions stay a
-// translucent wash over the basemap. Both live in src/blob-canvas.js.
-// How strong the visited wash is, per basemap. The same alpha does not read the
-// same over a near-black basemap, a green one and a photograph — over imagery a
-// light wash vanishes, over Terrain the default drowns the landcover. Each
-// STYLES entry can carry `cellAlpha` (single-colour) and `heatAlpha` (the heat
-// maps) as multipliers of the defaults in src/blob-canvas.js; 1 = unchanged.
-// …and on top of that, whatever opacity the accent itself carries. The colour
-// you pick for the visited areas can now be a translucent one, and the only
-// place that can mean anything is here: the wash is drawn by cutting blurred
-// discs at a fixed alpha, so transparency has to be applied to the finished
-// layer rather than to the ink. Only in the single-colour mode — a heat map
-// doesn't draw the accent at all, so it has no business honouring its opacity.
-//
-// Zero when the visited areas are switched off, which is the same lever pulled
-// all the way: every surface that draws them reads this, so there is one place
-// to turn them off rather than four.
-const accentAlpha = () => (!cellsOn ? 0 : isHeatMode() ? 1 : hexAlpha(accent));
-
-const regionOpacity = () => {
+// Basemap tuning remains the initial value; a saved opacity is absolute so
+// 100% reaches full opacity on every basemap, in every coloring mode.
+const defaultMapOpacity = () => {
   const style = STYLES[styleKey] ?? {};
   const base = isHeatMode() ? BLOB_HEAT_ALPHA : BLOB_ALPHA;
   const scale = (isHeatMode() ? style.heatAlpha : style.cellAlpha) ?? 1;
-  return Math.max(0, Math.min(1, base * scale * accentAlpha()));
+  return Math.max(0, Math.min(1, base * scale * (isHeatMode() ? 1 : hexAlpha(accent))));
 };
+const mapOpacityNow = () => mapOpacityFor(mapOpacities, heatMode, defaultMapOpacity());
+const accentAlpha = () => !cellsOn ? 0 : Math.min(1, mapOpacityNow() / (isHeatMode() ? BLOB_HEAT_ALPHA : BLOB_ALPHA));
+const regionOpacity = () => cellsOn ? mapOpacityNow() : 0;
+
+function syncMapOpacityUi() {
+  const slider = document.getElementById('map-opacity');
+  if (!slider) return;
+  const percent = Math.round(mapOpacityNow() * 100);
+  slider.value = String(percent);
+  slider.style.setProperty('--opacity-fill', `${percent}%`);
+  slider.setAttribute('aria-valuetext', `${percent}%`);
+  document.getElementById('map-opacity-value').textContent = `${percent}%`;
+}
 
 function setHeatMode(next) {
   if (!HEAT_MODES[next]) return;
@@ -2437,6 +2465,9 @@ function setCellsOn(on) {
   applyFade(fade.cur);
   applyPrevFade(fade.prev);
   updateLayersUi();
+  // Hidden cells are not drawn at all, so both directions are a real change:
+  // hiding puts the grid away, showing paints it from scratch.
+  updateGrid(true);
 }
 
 /** Take one source's cells off the map, or put them back. See hiddenSources. */
@@ -2509,6 +2540,18 @@ const nowSec = () => Math.floor(Date.now() / 1000);
 //   ids  — the stored cell ids rolled up into this one, so clearing a cell can
 //          find what to delete with a lookup instead of a sweep of `visited`
 let litSets = [];
+// litIndex[L] files the keys of litSets[L] by place, so the blob paint can ask
+// for a window rather than walking every lit cell — see src/cell-index.js. Built
+// the first time a level is painted rather than with the roll-up: most levels
+// of a session are never looked at, and building one costs about what a single
+// scan did. Dropped whenever litSets is rebuilt; kept in step by the two
+// incremental paths while it exists.
+let litIndex = [];
+
+function litIndexOf(level) {
+  if (!litSets[level]) return null;
+  return (litIndex[level] ??= indexCells(litSets[level]));
+}
 // Cells painted since the last roll-up, waiting to be folded in incrementally
 // (see rollUpPainted). Declared here because recomputeLit() below runs at module
 // load, before anything further down has been initialized.
@@ -2535,66 +2578,13 @@ let typeRollUpStale = true;
 // statistics, the saves and the search read.
 let visibleCells = visited;
 
-// Tally one source's visits onto a rolled-up cell. Nearly every cell only ever
-// sees a single source, so the Map is only allocated once a second turns up.
-function addSource(e, src, hits) {
-  if (e.srcMap) {
-    e.srcMap.set(src, (e.srcMap.get(src) ?? 0) + hits);
-  } else if (e.src1 === undefined) {
-    e.src1 = src;
-    e.n1 = hits;
-  } else if (e.src1 === src) {
-    e.n1 += hits;
-  } else {
-    e.srcMap = new Map([[e.src1, e.n1], [src, hits]]);
-  }
-}
-
-/**
- * How busy the area around one rolled-up cell is: arrivals per cell across the
- * hex `HEAT_NEIGHBOURHOOD` levels above it. Read beside the cell's own count so
- * that being seen once in the middle of a city and being seen once on a
- * motorway are not the same answer — which, before this, they were.
- *
- * Falls back to the cell's own density at the coarsest level, where there is
- * nothing further out to ask.
- */
-function neighbourhoodOf(level, key) {
-  const up = Math.min(MAX_LEVEL, level + HEAT_NEIGHBOURHOOD);
-  const own = (e) => (e ? e.hits / e.cells : 0);
-  if (up === level) return own(litSets[level].get(key));
-  const sep = key.indexOf('/');
-  let col = +key.slice(0, sep);
-  let row = +key.slice(sep + 1);
-  for (let l = level; l < up; l++) [col, row] = parentOf(l, col, row);
-  return own(litSets[up].get(`${col}/${row}`)) || own(litSets[level].get(key));
-}
-
-function attachNeighbourhoods(level) {
-  for (const [key, e] of litSets[level]) e.near = neighbourhoodOf(level, key);
-}
-
-// Which source speaks for this cell: the one that saw you there most often.
-// Ties go to the alphabetically first, so the map doesn't shuffle between loads.
-function dominantSource(e) {
-  if (!e.srcMap) return e.src1;
-  let best;
-  let bestN = -1;
-  for (const [src, n] of e.srcMap) {
-    if (n > bestN || (n === bestN && src < best)) {
-      best = src;
-      bestN = n;
-    }
-  }
-  return best;
-}
-
 // One stored cell's contribution to any roll-up, read off its provenance. The
 // arithmetic lives in src/coloring.js, beside the ramps that consume it.
 const cellStatsOf = (id, byType) => cellStats(cellMeta.get(id) ?? [], byType);
 
 /**
- * Roll every stored cell up through the levels above it.
+ * Roll every stored cell up through the levels above it — src/rollup.js does
+ * the rolling; this decides what is drawn and hands out the palette.
  *
  * @param {boolean} [byType] also build the per-source tally. It is an extra
  *   pass and an extra field on every rolled-up cell, so it defaults to whether
@@ -2602,63 +2592,79 @@ const cellStatsOf = (id, byType) => cellStats(cellMeta.get(id) ?? [], byType);
  *   Type over a map that is showing something else.
  */
 function recomputeLit(byType = HEAT_MODES[heatMode]?.categorical) {
+  // Whatever a sliced rebuild was doing, this one is newer — see recomputeLitSliced.
+  litGen++;
+  litPending = false;
   // A full rebuild already accounts for anything sitting in the queue.
   paintQueue.length = 0;
   eraseQueue.length = 0;
-  litSets = Array.from({ length: MAX_LEVEL + 1 }, () => new Map());
-  const sourceCells = new Map();
   // Which source speaks for a cell is normally only worth working out for the
   // mode that colours by it — but with something hidden it is also what says
-  // whether the cell is drawn at all, so the pass is paid for either way.
-  const filtering = hiddenSources.size > 0;
-  const shown = filtering ? new Set() : null;
+  // whether the cell is drawn at all, so rollUp pays for that pass either way.
+  const rolled = span('roll-up', () => rollUp(visited, cellStatsOf, { byType, hidden: hiddenSources }));
+  drain(finishRollUpSteps(rolled, byType));
+  adoptRollUp(rolled, byType);
+}
 
-  for (const id of visited) {
-    let [L, col, row] = parseCellId(id);
-    // Stored at a level that no longer exists. It draws no hexagon, but it is
-    // not *hidden* either — it still lights the country it is in, which is what
-    // it did before there was anything to hide.
-    //
-    // Written as the negation so an id that did not parse — NaN, which fails
-    // every comparison it is put through — lands here as well, rather than
-    // walking up the lattice as NaN and lighting a cell called "NaN/NaN".
-    if (!(L <= MAX_LEVEL)) {
-      shown?.add(id);
-      continue;
-    }
+// Bumped by every synchronous rebuild. A sliced one remembers the value it
+// started under and gives up if it has moved: something newer — an edit made
+// while the cells were still arriving — has already rebuilt from a later state.
+let litGen = 0;
+// A sliced rebuild is running. The incremental paint path declines while it
+// is, because it would be folding a cell into the levels about to be replaced.
+let litPending = false;
 
-    const { hits, time, age, own, ownN } = cellStatsOf(id, byType || filtering);
-    // Tallied before it is skipped, and deliberately: the palette is handed out
-    // in this order, so counting only what is drawn would reshuffle everyone
-    // else's colour every time a source was switched off. A hidden source keeps
-    // its slot and its place in the legend, which is also what makes the legend
-    // the way back.
-    if (byType && own) sourceCells.set(own, (sourceCells.get(own) ?? 0) + 1);
-    if (filtering && hiddenSources.has(own)) continue;
-    shown?.add(id);
-
-    for (let l = L; l <= MAX_LEVEL; l++) {
-      if (l > L) [col, row] = parentOf(l - 1, col, row);
-      const key = `${col}/${row}`;
-      let e = litSets[l].get(key);
-      if (e) {
-        e.hits += hits;
-        e.cells++;
-        e.ids.push(id);
-        if (time > e.time) e.time = time;
-        if (age && (!e.age || age < e.age)) e.age = age;
-      } else {
-        litSets[l].set(key, (e = { hits, time, age, cells: 1, ids: [id] }));
-      }
-      if (byType && own) addSource(e, own, ownN);
-    }
+function drain(gen) {
+  for (;;) {
+    const step = gen.next();
+    if (step.done) return step.value;
   }
+}
+
+/**
+ * The same rebuild as recomputeLit, a slice at a time — for signing in, where
+ * half a million cells rolled up in one go froze the camera's fly-in for most of
+ * a second. The new levels are only put in place once they are complete, so
+ * the map keeps showing the old ones until then rather than a half-built set.
+ *
+ * @returns {Promise<boolean>} false when something newer replaced it
+ */
+async function recomputeLitSliced(byType = HEAT_MODES[heatMode]?.categorical) {
+  const gen = ++litGen;
+  litPending = true;
+  const wanted = () => gen === litGen;
+  const t0 = performance.now();
+  try {
+    const rolled = await runSliced(rollUpSteps(visited, cellStatsOf, { byType, hidden: hiddenSources }), wanted);
+    if (!rolled || !wanted()) return false;
+    const done = await runSliced(finishRollUpSteps(rolled, byType), wanted);
+    if (!done || !wanted()) return false;
+    paintQueue.length = 0;
+    eraseQueue.length = 0;
+    adoptRollUp(rolled, byType);
+    span(`roll-up, sliced, ${Math.round(performance.now() - t0)} ms wall`, () => {});
+    return true;
+  } finally {
+    if (gen === litGen) litPending = false;
+  }
+}
+
+/**
+ * Everything a roll-up needs before it can be shown — the palette slots, the
+ * neighbourhoods and the per-level ranges — worked out on the new levels while
+ * they are still private. A generator so the sliced rebuild can stop between
+ * levels; returns true when finished.
+ */
+
+/** Put a finished roll-up on the map. Synchronous, and cheap: only assignments. */
+function adoptRollUp(rolled, byType) {
+  litSets = rolled.litSets;
+  litIndex = [];
+  litRange = rolled.litRange;
+  const { shown } = rolled;
+  sourceOrder = rolled.sourceOrder;
 
   if (byType) {
-    // Hand out palette slots by how much of the map each source accounts for.
-    sourceOrder = [...sourceCells.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([src]) => src);
     // Forget anything hidden that no cell claims any more. A source removed for
     // good in Settings → Sources while it happened to be switched off would
     // otherwise stay in the list for ever, and it is not a harmless entry: it
@@ -2674,41 +2680,7 @@ function recomputeLit(byType = HEAT_MODES[heatMode]?.categorical) {
       }
       if (dropped) saveHiddenSources();
     }
-    const slot = new Map(sourceOrder.map((src, i) => [src, i]));
-    for (const lit of litSets) {
-      for (const e of lit.values()) {
-        e.src = slot.get(dominantSource(e)) ?? TYPE_MAX;
-        // The tally has done its job; drop it so the entries stay small.
-        delete e.srcMap;
-        delete e.src1;
-        delete e.n1;
-      }
-    }
-  } else {
-    sourceOrder = [];
   }
-
-  for (let l = 0; l <= MAX_LEVEL; l++) attachNeighbourhoods(l);
-
-  litRange = litSets.map((lit) => {
-    const r = { maxHits: 1, hotHits: 2, minTime: 0, maxTime: 0, minAge: 0, maxAge: 0 };
-    r.hotHits = hotOf(lit);
-    // What the dates on this level actually look like, for the same reason
-    // `hotHits` exists: the ends of the range do not describe the middle.
-    r.ageStops = ageStopsOf(lit);
-    for (const e of lit.values()) {
-      if (e.hits > r.maxHits) r.maxHits = e.hits;
-      if (e.time) {
-        if (!r.minTime || e.time < r.minTime) r.minTime = e.time;
-        if (e.time > r.maxTime) r.maxTime = e.time;
-      }
-      if (e.age) {
-        if (!r.minAge || e.age < r.minAge) r.minAge = e.age;
-        if (e.age > r.maxAge) r.maxAge = e.age;
-      }
-    }
-    return r;
-  });
 
   visibleCells = shown ?? visited;
   typeRollUpStale = !byType;
@@ -2732,7 +2704,10 @@ function rollUpPainted(id) {
   // is on, and you are painting — to be worth a rebuild rather than a second
   // answer to the same question here.
   if (hiddenSources.size) return false;
-  let [L, col, row] = parseCellId(id);
+  // The levels this would fold into are about to be replaced by a rebuild that
+  // started before the cell existed. Declining sends the caller to a full one.
+  if (litPending) return false;
+  const [L] = parseCellId(id);
   if (!(L <= MAX_LEVEL)) return true; // same skip as recomputeLit()
 
   let hits = 0;
@@ -2747,29 +2722,17 @@ function rollUpPainted(id) {
   if (!age) age = time;
   if (time || age) return false; // dated — litRange would need the full pass
 
-  const touched = [];
-  for (let l = L; l <= MAX_LEVEL; l++) {
-    if (l > L) [col, row] = parentOf(l - 1, col, row);
-    const key = `${col}/${row}`;
-    let e = litSets[l].get(key);
-    if (e) {
-      e.hits += hits;
-      e.cells++;
-      e.ids.push(id);
-    } else {
-      litSets[l].set(key, (e = { hits, time: 0, age: 0, cells: 1, ids: [id] }));
-    }
-    touched.push([l, key]);
+  const touched = foldInCell(litSets, litIndex, id, hits);
+  for (const [l, e] of touched) {
     if (e.hits > litRange[l].maxHits) litRange[l].maxHits = e.hits;
   }
   // Only the chain this cell sits in can have moved, so the neighbourhoods are
-  // refreshed rather than rebuilt. `hotHits` is left alone on purpose: it is a
-  // 98th percentile over tens of thousands of cells, and one hand-painted cell
-  // worth a single visit cannot move it anywhere the next full pass won't.
-  for (const [l, key] of touched) {
-    const e = litSets[l].get(key);
-    if (e) e.near = neighbourhoodOf(l, key);
-  }
+  // refreshed rather than rebuilt — after the whole chain is counted, since a
+  // cell's neighbourhood is read off the entries above it. `hotHits` is left
+  // alone on purpose: it is a 98th percentile over tens of thousands of cells,
+  // and one hand-painted cell worth a single visit cannot move it anywhere the
+  // next full pass won't.
+  for (const [l, e] of touched) e.near = neighbourhoodOf(l, e);
   // This path never works out a source slot — it is only taken when the map is
   // in a mode that would not read one. So any tally built earlier for the image
   // export is now one cell short of the truth, and says so.
@@ -2782,24 +2745,14 @@ function rollUpPainted(id) {
 //
 // Membership is what the picture needs, and it does compose backwards: take
 // this cell's visits back off every ancestor and drop the key when it was the
-// last one. Dates and the ids arrays do not — a parent can hold every cell in
-// a country, and splicing one id out of that on every cell of a sweep is the
-// pass this shortcut exists to avoid. `storedUnder` is not asked again until
-// the gesture's closing recomputeLit() rebuilds them. Called before
-// unmarkCell, which is what deletes the provenance this reads.
+// last one — see removeCell in src/rollup.js. Dates do not, and wait for the
+// gesture's closing recomputeLit(). Called before unmarkCell, which is what
+// deletes the provenance this reads.
 function rollDownCleared(id) {
-  let [L, col, row] = parseCellId(id);
+  const [L] = parseCellId(id);
   if (!(L <= MAX_LEVEL)) return;
   const { hits } = cellStatsOf(id, false);
-  for (let l = L; l <= MAX_LEVEL; l++) {
-    if (l > L) [col, row] = parentOf(l - 1, col, row);
-    const key = `${col}/${row}`;
-    const e = litSets[l].get(key);
-    if (!e) continue;
-    e.cells -= 1;
-    e.hits -= hits;
-    if (e.cells <= 0) litSets[l].delete(key);
-  }
+  removeCell(litSets, litIndex, id, hits);
   typeRollUpStale = true;
   markAreasDirty();
 }
@@ -2874,24 +2827,20 @@ const areaFC = {
 let litRegionIds = null;
 let litCountryIds = null;
 
-// Past this zoom, region outlines are being read rather than glanced at, and the
-// overview set's ~1 km simplification starts to show — a canton border cutting
-// a straight line across the lake it actually follows. Only reachable with
-// Detail pinned to Region: on Auto, this level never survives past ~z5.
-//
-// A whole zoom level earlier than it was (7). At z6 a canton already fills
-// enough of the screen that the straight line across the lake is the thing you
-// notice, and waiting for z7 meant zooming past the view the outlines were
-// worth having in. The cost is real and is the reason it was ever set high: the
-// wider view holds more countries, so more of them are fetched, and there is
-// more geometry to tile at once.
-const REGION_FINE_ZOOM = 6;
-// …and back to the overview geometry below this. The gap is deliberate: swapping
-// resolution re-tiles the source, so a zoom that hovers on the threshold would
-// re-tile on every wobble. Same idea as LEVEL_HYSTERESIS, for the same reason —
-// and it is the zoom-out that matters on an older device, where the point of
-// dropping back to a few hundred points is that the map stays smooth.
-const REGION_COARSE_ZOOM = 5.4;
+// The bottom of the region level's own band (levelBoundary(REGION_LEVEL)).
+// The detailed boundaries used to wait for z6, which is already the next hex
+// level, so on Auto a canton spent the whole of its time on screen drawn from
+// the overview set — a border cutting a straight line across the lake it
+// follows. This level is the one that exists to show those shapes, so it
+// draws the national survey from the moment it appears. The wider view holds
+// more countries and more geometry; that cost is the fetch, and it is one
+// country at a time, for the ones actually on screen.
+const REGION_FINE_ZOOM = LEVEL0_ZOOM - REGION_LEVEL * LEVEL_STEP;
+// Back to the overview geometry once the zoom has left the band, where a
+// several-thousand-point canton is smaller than a pixel. The gap is the same
+// margin as LEVEL_HYSTERESIS: swapping resolution re-tiles the source, so a
+// zoom that hovers on one number would re-tile on every wobble.
+const REGION_COARSE_ZOOM = REGION_FINE_ZOOM - 0.28;
 
 // Boundary credits. Natural Earth is public domain and asks for nothing;
 // geoBoundaries composites national survey data (swisstopo for Switzerland) and
@@ -2958,6 +2907,56 @@ function areaOfCellMemo(kind, id) {
   return at ? continentOf(at) : null;
 }
 
+/**
+ * Answer "which country, which region" for every stored cell ahead of time, a
+ * slice at a time, so the first zoom out to the region level does not have to.
+ *
+ * The first build of either level used to do it inline: one point-in-polygon
+ * test per stored cell, which the note in buildAreaFC measured at 115 ms on a
+ * 23k-cell map. On the half-million-cell map this was written for it was two
+ * seconds for the regions and two more for the countries warmed behind them,
+ * frozen, mid-zoom. The answers are memoised by cell id and never go stale, so
+ * working them out while nobody is looking costs nothing but idle frames.
+ *
+ * Started after a sign-in's first paint rather than beside it, so the two
+ * sliced jobs never share a frame. A newer call — the cells were reloaded —
+ * makes an older one stop.
+ */
+let areaWarmGen = 0;
+async function warmAreaMemos() {
+  const gen = ++areaWarmGen;
+  const wanted = () => gen === areaWarmGen;
+  try {
+    await warmRegionData();
+  } catch {
+    return; // no boundaries, nothing to answer against; the build will ask again
+  }
+  // One frame, so a build that was waiting on the same datasets has run its
+  // own `then` — which clears the memos — before these are filled.
+  await nextFrame();
+  if (!wanted()) return;
+  const t0 = performance.now();
+  const done = await runSliced((function* fill() {
+    let k = 0;
+    for (const id of visited) {
+      areaOfCellMemo('country', id);
+      areaOfCellMemo('region', id);
+      if (++k % 256 === 0) yield;
+    }
+    return true;
+  })(), wanted);
+  if (done) span(`areas warmed for ${visited.size} cells, ${Math.round(performance.now() - t0)} ms wall`, () => {});
+}
+
+// What buildAreaFC tallies from the cells — which areas are lit and each one's
+// stats — keyed by what it was tallied for. The tally is a pass over every
+// stored cell, and it was being run again each time a country's detailed
+// boundaries arrived, which changes the outlines and nothing about which areas
+// are lit: seven countries' worth of boundaries was seven passes over half a
+// million cells, each a stall of its own. Dropped whenever `areaGen` moves.
+const areaTallies = new Map();
+let areaTalliesGen = -1;
+
 // One area's geometry, whichever dataset it came from.
 //
 // A country asked for `fine` is its own regions dissolved (trimmed back to the
@@ -2965,47 +2964,14 @@ function areaOfCellMemo(kind, id) {
 // more than for the map: picking Countries as the detail while the picture is
 // of one country draws a shape four pixels per vertex across, and the seam
 // against the mask around it is the first thing you see.
-function areaGeometry(kind, id, fine) {
-  if (kind === 'continent') return continentGeometry(id);
-  const country = id.startsWith(WHOLE_COUNTRY) ? id.slice(WHOLE_COUNTRY.length) : null;
-  if (country) return sharpCountry(country, fine);
-  return kind === 'region' ? regionGeometry(id, fine) : sharpCountry(id, fine);
-}
 
-const sharpCountry = (id, fine) =>
-  (fine ? fineCountryOutline(countryIso(id)) : null) ?? countryGeometry(id);
+
+
 
 // Dissolve the lit areas into one shape. Countries and continents go straight to
 // their own merge; regions may include whole-country stand-ins, so those are
 // collected separately and unioned with the rest.
-function mergeAreas(kind, litIds, fine) {
-  if (kind === 'continent') return mergeContinents(litIds);
-  if (kind !== 'region') {
-    if (!fine) return mergeCountries(litIds);
-    // Same dissolve, over the sharper outlines where they have been fetched.
-    // Done here rather than inside mergeCountries so that countries.js does not
-    // have to know that regions exist.
-    const geoms = [];
-    for (const id of litIds) {
-      const g = sharpCountry(id, true);
-      if (g) geoms.push(asMulti(g));
-    }
-    return geoms.length ? unionGeometries(geoms) : { fill: [], rings: [] };
-  }
-  const plain = new Set();
-  const extra = [];
-  for (const id of litIds) {
-    if (id.startsWith(WHOLE_COUNTRY)) {
-      const g = countryGeometry(id.slice(WHOLE_COUNTRY.length));
-      if (g) extra.push(asMulti(g));
-    } else {
-      plain.add(id);
-    }
-  }
-  if (!extra.length) return mergeRegions(plain, fine);
-  const merged = mergeRegions(plain, fine);
-  return unionGeometries([...(merged.fill.length ? [merged.fill] : []), ...extra]);
-}
+
 
 /**
  * @param {'region'|'country'|'continent'} kind
@@ -3049,53 +3015,13 @@ function buildAreaFC(kind, { fine = false, mode = heatMode, record = true } = {}
   // shape with more points in it — and one that could still disagree with the
   // level below at a coast the union left a seam along.
   const byType = HEAT_MODES[mode]?.categorical;
-  const slotOf = byType ? new Map(sourceOrder.map((src, i) => [src, i])) : null;
-  const litIds = new Set();
-  // Continent → the countries in it you have been to. The count is the whole
-  // point of the level; the set is what makes it a count of countries rather
-  // than of cells that happen to be in them.
-  const countriesIn = isContinentKind ? new Map() : null;
-  const perArea = new Map(); // id → rolled-up stats, for the heat maps
-  // `visibleCells`, not `visited`: a source switched off in the Type legend is
-  // off the whole map, so it cannot be what lights a region either — a country
-  // nothing visible remains in is a country you have not been to as far as this
-  // picture is concerned. The two are the same Set unless something is hidden.
-  for (const id of visibleCells) {
-    const cid = areaOfCellMemo(kind, id);
-    if (!cid) continue;
-    if (isContinentKind) {
-      const country = areaOfCellMemo('country', id);
-      let seen = countriesIn.get(cid);
-      if (!seen) countriesIn.set(cid, (seen = new Set()));
-      seen.add(country);
-    }
-    litIds.add(cid);
-    const stat = cellStatsOf(id, byType);
-    let e = perArea.get(cid);
-    // `near` stays 0: a whole region is its own neighbourhood, so it is read on
-    // its own count rather than against the ring of hexes around it.
-    if (!e) perArea.set(cid, (e = { hits: 0, time: 0, age: 0, near: 0, srcN: new Map() }));
-    e.hits += stat.hits;
-    if (stat.time > e.time) e.time = stat.time;
-    if (stat.age && (!e.age || stat.age < e.age)) e.age = stat.age;
-    // A whole country is colored by whichever app covers the most of it — by
-    // ground, not by visits, which is the question the country level answers.
-    if (byType && stat.own) {
-      const src = slotOf.get(stat.own) ?? TYPE_MAX;
-      e.srcN.set(src, (e.srcN.get(src) ?? 0) + 1);
-    }
+  if (areaTalliesGen !== areaGen) {
+    areaTallies.clear();
+    areaTalliesGen = areaGen;
   }
-  for (const e of perArea.values()) {
-    let best = TYPE_MAX;
-    let bestN = -1;
-    for (const [src, n] of e.srcN ?? []) {
-      if (n > bestN || (n === bestN && src < best)) {
-        best = src;
-        bestN = n;
-      }
-    }
-    e.src = best;
-  }
+  const tallyKey = `${kind}|${byType ? 'type' : 'plain'}`;
+  const { litIds, perArea, countriesIn } = areaTallies.get(tallyKey) ?? tallyAreas(kind, byType, { sourceOrder, visibleCells, areaOfCellMemo, cellStatsOf });
+  areaTallies.set(tallyKey, { litIds, perArea, countriesIn });
 
   // Recorded before the heat branch, which returns without reaching the merge:
   // considerFineRegions() needs this whichever colouring mode is on.
@@ -3107,47 +3033,15 @@ function buildAreaFC(kind, { fine = false, mode = heatMode, record = true } = {}
   // In a heat mode each country is its own feature so it can carry its own
   // color; otherwise they dissolve into one borderless shape.
   const heat = heatMetric(mode);
-  if (heat) {
-    const range = {
-      maxHits: 1,
-      hotHits: hotOf(perArea),
-      // Areas get their own ladder: a country's first-seen is the earliest of
-      // everything inside it, so a hundred countries spread quite differently
-      // from the twenty thousand cells they are made of.
-      ageStops: ageStopsOf(perArea),
-      minTime: 0, maxTime: 0, minAge: 0, maxAge: 0,
-    };
-    for (const e of perArea.values()) {
-      if (e.hits > range.maxHits) range.maxHits = e.hits;
-      if (e.time) {
-        if (!range.minTime || e.time < range.minTime) range.minTime = e.time;
-        if (e.time > range.maxTime) range.maxTime = e.time;
-      }
-      if (e.age) {
-        if (!range.minAge || e.age < range.minAge) range.minAge = e.age;
-        if (e.age > range.maxAge) range.maxAge = e.age;
-      }
-    }
-    const features = [];
-    for (const [id, stat] of perArea) {
-      const geometry = areaGeometry(kind, id, fine);
-      if (geometry) {
-        features.push({ type: 'Feature', properties: { k: 1, v: heat(stat, range) }, geometry });
-      }
-    }
-    return { type: 'FeatureCollection', features: [...features, ...labels] };
-  }
-
-  const { fill, rings } = mergeAreas(kind, litIds, fine);
-  const features = [];
-  if (fill.length) {
-    features.push({ type: 'Feature', properties: { k: 1 }, geometry: { type: 'MultiPolygon', coordinates: fill } });
-  }
-  if (rings.length) {
-    features.push({ type: 'Feature', properties: { k: 2 }, geometry: { type: 'MultiLineString', coordinates: rings } });
-  }
-  return { type: 'FeatureCollection', features: [...features, ...labels] };
+  return areaFeatures(kind, mode, fine, litIds, perArea, labels, heat);
 }
+
+// The pass over every stored cell that buildAreaFC's result is built from.
+
+
+// The features for a tallied set of areas: one per area in a heat mode, the
+// lit areas dissolved into one shape otherwise.
+
 
 /**
  * One label per lit continent: its name, and how many of its countries you have
@@ -3393,7 +3287,7 @@ async function restoreCells(snapshot) {
     cellMeta.set(id, list.map((e) => ({ ...e })));
     // It's going back on the map, so a queued "remove it" is no longer true.
     pendingRemove.delete(id);
-    for (const e of list) rows.push([id, e.source, e.addedAt, e.firstAt, e.lastAt, e.hits, e.fixes]);
+    for (const e of list) rows.push([id, e.source, e.addedAt, e.firstAt, e.lastAt, e.hits, e.fixes, e.visitDates ?? [], e.visitTimes ?? []]);
   }
   await auth.restoreCells(rows);
   recomputeLit();
@@ -3420,31 +3314,54 @@ async function remarkCells(snapshot) {
 // Runs after login, after the initial session check and after an import; safe
 // to call before or after the map style loads (updateGrid no-ops until the
 // sources exist, then installGrid renders).
+// Which load of the cells is the current one. Two can overlap — a sync that
+// finishes while the sign-in's own load is still filing rows — and only the
+// later may finish; the earlier stops at its next slice.
+let hydrateGen = 0;
+
+/**
+ * Load the account's cells and put them on the map, without stopping it.
+ *
+ * The parse happens in a worker and everything after it in slices — see
+ * src/cells-load.js for what this cost when it was one task. The map keeps
+ * showing what it had until the new roll-up is complete, rather than going
+ * blank while the rows are filed.
+ *
+ * While `paintHeldForPrefs` is set this stops after filing the rows: the sign-in
+ * rolls them up itself once the preferences are in, and doing it here as well
+ * was the second half-second freeze of every sign-in.
+ */
 async function hydrateVisited() {
-  visited.clear();
-  cellMeta.clear();
+  const gen = ++hydrateGen;
+  const current = () => gen === hydrateGen;
+  const loading = busy('Loading your map…');
   try {
-    const { sources = [], rows = [] } = (await auth.getCells()) ?? {};
-    for (const [id, srcIdx, addedAt, firstAt, lastAt, hits, fixes = 0] of rows) {
-      visited.add(id);
-      const entry = { source: sources[srcIdx] ?? 'unknown', addedAt, firstAt, lastAt, hits, fixes };
-      const list = cellMeta.get(id);
-      if (list) list.push(entry);
-      else cellMeta.set(id, [entry]);
+    let parsed = null;
+    try {
+      parsed = await parseCells(await auth.getCellsBuffer());
+    } catch (e) {
+      console.warn('Loading cells failed:', e);
     }
-  } catch (e) {
-    console.warn('Loading cells failed:', e);
+    if (!current()) return;
     visited.clear();
     cellMeta.clear();
+    if (parsed) await runSliced(fillCells(parsed, visited, cellMeta), current);
+    if (!current()) return;
+    closeCellInfo();
+    closeRouteInfo();
+    if (!paintHeldForPrefs) {
+      await recomputeLitSliced();
+      if (!current()) return;
+      updateGrid(true);
+      updateTiles();
+      updateHud(currentLevel);
+      warmAreaMemos();
+    }
+    // The guessed home is read off the cells, so it only exists once they do.
+    syncHomeMarker();
+  } finally {
+    loading();
   }
-  closeCellInfo();
-  closeRouteInfo();
-  recomputeLit();
-  updateGrid(true);
-  updateTiles();
-  updateHud(currentLevel);
-  // The guessed home is read off the cells, so it only exists once they do.
-  syncHomeMarker();
 }
 
 // Ancestor of a stored cell at a coarser level (identity at the same level).
@@ -3456,21 +3373,20 @@ function ancestorAt(L, col, row, targetL) {
   return [col, row];
 }
 
-// Every stored cell that sits inside (or is) the cell (L, col, row).
-// recomputeLit() already walks each stored cell up to every ancestor, so it
-// records the ids on the way past — this is that index, read back. It used to
-// re-split and re-walk all ~20k stored ids on every tap.
+// Every stored cell that sits inside (or is) the cell (L, col, row), read
+// back down the roll-up's own links rather than by re-walking every stored id.
+// A fresh array each time, so a caller can clear what it names as it goes.
 function storedUnder(L, col, row) {
-  return litSets[L]?.get(`${col}/${row}`)?.ids ?? [];
+  return storedUnderKey(litSets, L, `${col}/${row}`);
 }
 
 function toggleCell(id) {
   clearTripHighlight();
   const [L, col, row] = parseCellId(id);
   if (litSets[L].has(`${col}/${row}`)) {
-    // Clear everything stored beneath (or at) this cell. Iterate a copy: the
-    // array belongs to litSets now, and unmarkCell is removing its contents.
-    const ids = [...storedUnder(L, col, row)];
+    // Clear everything stored beneath (or at) this cell. storedUnder hands back
+    // a list of its own, so unmarkCell can take them out while it is walked.
+    const ids = storedUnder(L, col, row);
     // Taken *before* the clear — this is everything those cells knew, and in a
     // moment it will only exist here.
     const snapshot = snapshotCells(ids);
@@ -3539,13 +3455,16 @@ function editClick(lngLat) {
   updateHud(currentLevel);
 }
 
-// The region the pointer is in, and whether Shift is asking to clear it.
-// The name stays put once the pointer leaves the canvas: the Clear button
-// sits over some other piece of ground, and following the pointer onto it
-// would wipe whatever happens to be under the panel.
+// The region the pointer is in, whether Shift is previewing it, and whether
+// Clear has armed a pick. The name stays put once the pointer leaves the
+// canvas: the Clear button sits over some other piece of ground, and
+// following the pointer onto it would name whatever happens to be under the
+// panel. Armed is a mode, not a region: the outline follows the pointer, and
+// the tap clears whichever region it lands in.
 let aimedRegion = null;
 let aimedCell = null;
 let regionShift = false;
+let regionArmed = false;
 let regionClearing = false;
 
 let regionWarm = null;
@@ -3562,28 +3481,40 @@ function warmRegionData() {
   return regionWarm;
 }
 
-// Shift-click. The datasets may still be on their way — edit mode does not
-// wait for them, because painting a cell does not need a canton — so this
-// one does the waiting, then clears the region the click actually landed in.
-async function clearRegionAt(lngLat) {
-  if (regionClearing) return;
-  if (!countriesLoaded() || !regionsLoaded()) {
-    regionClearing = true;
+// The datasets may still be on their way — edit mode does not wait for them,
+// because painting a cell does not need a canton. A clear does, so the click
+// that asks for one waits here first.
+async function ensureRegions() {
+  if (countriesLoaded() && regionsLoaded()) return true;
+  if (regionClearing) return false;
+  regionClearing = true;
+  paintRegionUi();
+  const stop = busy('Loading regions');
+  try {
+    await warmRegionData();
+    return true;
+  } catch (e) {
+    console.warn('Loading regions failed:', e);
+    showToast('Could not load regions', { tone: 'quiet' });
+    return false;
+  } finally {
+    stop();
+    regionClearing = false;
     paintRegionUi();
-    const stop = busy('Loading regions');
-    try {
-      await warmRegionData();
-    } catch (e) {
-      console.warn('Loading regions failed:', e);
-      showToast('Could not load regions', { tone: 'quiet' });
-      return;
-    } finally {
-      stop();
-      regionClearing = false;
-      paintRegionUi();
-    }
   }
-  await clearRegion(regionUnder(lngLat));
+}
+
+// Clear, or a Shift-click, arms the pick. It does not erase and it does not
+// choose a region: the pointer does that, and the tap after this one takes
+// whichever region it is in.
+async function armClearMode() {
+  if (regionClearing || regionArmed) return;
+  if (!(await ensureRegions())) return;
+  regionArmed = true;
+  paintRegionUi();
+  paintRegionOutline();
+  updateBrush();
+  showToast(t('hud-region.hover-then-tap'), { tone: 'quiet' });
 }
 
 function noteRegionAim(lngLat) {
@@ -3599,33 +3530,78 @@ function noteRegionAim(lngLat) {
   const same = (aimedRegion?.id ?? null) === (next?.id ?? null);
   aimedRegion = next;
   if (!same) paintRegionUi();
-  if (regionShift) paintRegionOutline();
+  // Armed follows the pointer the same way Shift does. The region under the
+  // cursor is the one a tap will clear, so the outline has to move with it.
+  if (regionShift || regionArmed) paintRegionOutline();
 }
 
 function paintRegionUi() {
   const label = document.getElementById('hud-region');
   const btn = document.getElementById('hud-region-clear');
   if (!label || !btn) return;
+  // The name is the region under the pointer, including while a clear is
+  // armed: that is the one a tap will take. The button turns the mode on
+  // and, pressed again, turns it off.
   label.textContent = aimedRegion?.name ?? '—';
   label.title = aimedRegion?.name ?? '';
-  btn.disabled = !aimedRegion || regionClearing;
+  btn.disabled = regionClearing;
+  btn.setAttribute('aria-pressed', regionArmed ? 'true' : 'false');
 }
 
-// Shift draws the region's own border and takes the brush circle off, because
-// the next click clears the shape and the disk would be describing a
-// different edit. A preview, not a selection: leaving Shift puts the outline
-// away and does not close a card, which edit mode does not open anyway.
+// The shape on the map. Armed and Shift both follow the pointer, so the
+// outline is whichever region the cursor is in. Add is placing pins of its
+// own, and a region outline under those taps would be a second edit wearing
+// the first one's clothes. A preview, not a selection: taking it down does
+// not close a card, which edit mode does not open anyway.
+function outlinedRegion() {
+  if (mode !== 'edit' || routeOn) return null;
+  if ((regionArmed || regionShift) && aimedRegion) return aimedRegion;
+  return null;
+}
+
 function paintRegionOutline() {
-  if (mode !== 'edit' || !regionShift || !aimedRegion) {
+  const area = outlinedRegion();
+  if (!area) {
     if (selection?.preview) {
       selection = null;
       updateSelection();
     }
     return;
   }
-  if (selection?.preview && selection.area?.id === aimedRegion.id) return;
-  selection = { area: aimedRegion, preview: true };
+  if (selection?.preview && selection.area?.id === area.id) return;
+  selection = { area, preview: true };
   updateSelection();
+  // The overview set is a kilometre of slack, which is a straight cut across
+  // the lake once the shape is the thing on screen. The same fetch the info
+  // card makes: one country, and the outline redraws when it lands.
+  fetchFineRegions(isoOfArea(area), area.name);
+}
+
+function disarmRegion() {
+  if (!regionArmed) {
+    paintRegionOutline();
+    return;
+  }
+  regionArmed = false;
+  paintRegionUi();
+  paintRegionOutline();
+  updateBrush();
+}
+
+// The tap while Clear is armed. It takes the region under the pointer, whichever
+// one the hover has moved to. Sea is not a region, and the mode stays up so
+// the next hover can choose again. Pressing Clear is what puts it away.
+async function confirmArmedRegion(lngLat) {
+  if (!regionArmed || regionClearing) return;
+  if (!(await ensureRegions())) return;
+  if (!regionArmed) return;
+  const under = regionUnder(lngLat);
+  if (!under) {
+    showToast('No region here', { tone: 'quiet' });
+    return;
+  }
+  await clearRegion(under);
+  paintRegionOutline();
 }
 
 function setRegionShift(on) {
@@ -3642,8 +3618,8 @@ function setRegionShift(on) {
 // Every visited cell in one region, as one edit. The same cells the region
 // level painted there — `storedInArea` is that walk — so the clear takes the
 // shape and nothing past its border. Undo puts the rows back with their
-// dates, the way any other clear does. No confirm: it is one undo, and a
-// second press on top of an undo is how the rest of edit mode already works.
+// dates, the way any other clear does. The tap that arrives here already
+// confirmed the outline; this function is the erase, not the question.
 async function clearRegion(region) {
   if (regionClearing) return;
   if (!region) {
@@ -3832,6 +3808,331 @@ function paintRailAt(e) {
   return true;
 }
 
+// Add, in the edit panel. A city from the gazetteer, or a tap, names each
+// end. Car or train names the line, and Confirm is the edit — the same cells
+// a track paints, one undo. The names never leave the machine: it is the same
+// list that titles a route.
+let routeOn = false;
+let routeAim = 'start';
+let routeMode = 'car';
+let routeStart = null;
+let routeEnd = null;
+let routeLine = null;
+let routeStatus = 'hud-route.tap-for-a-start';
+let routeSeq = 0;
+const routeHitList = { start: [], end: [] };
+const routeQuerySeq = { start: 0, end: 0 };
+
+function routeField(which) {
+  return document.getElementById(which === 'start' ? 'hud-route-start-input' : 'hud-route-end-input');
+}
+
+function routeHitsBox(which) {
+  return document.getElementById(which === 'start' ? 'hud-route-start-hits' : 'hud-route-end-hits');
+}
+
+function routeCoord(p) {
+  return `${p.lat.toFixed(3)}, ${p.lng.toFixed(3)}`;
+}
+
+function routeLabel(p) {
+  return p ? (p.name || routeCoord(p)) : '';
+}
+
+function clearRouteHits(which) {
+  const all = which ? [which] : ['start', 'end'];
+  for (const w of all) {
+    routeHitList[w] = [];
+    const box = routeHitsBox(w);
+    if (!box) continue;
+    box.replaceChildren();
+    box.hidden = true;
+  }
+}
+
+function showRouteHits(which, list) {
+  const box = routeHitsBox(which);
+  if (!box) return;
+  routeHitList[which] = list;
+  box.replaceChildren();
+  if (!list.length) {
+    const note = document.createElement('p');
+    note.className = 'hud-route-miss';
+    note.textContent = t('hud-route.no-city');
+    box.append(note);
+    box.hidden = false;
+    return;
+  }
+  for (const p of list) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'hud-route-hit';
+    btn.textContent = p.name;
+    btn.addEventListener('mousedown', (e) => {
+      // Down, not click: the field blurs on the way to a click, and the list
+      // would be gone before the name could be taken.
+      e.preventDefault();
+      chooseRouteCity(which, p);
+    });
+    box.append(btn);
+  }
+  box.hidden = false;
+}
+
+function renderRouteTool() {
+  const form = document.getElementById('hud-route-form');
+  const add = document.getElementById('hud-route-add');
+  if (form) form.hidden = !routeOn;
+  if (add) add.hidden = routeOn;
+  document.getElementById('hud-route-start')?.classList.toggle('is-live', routeOn && routeAim === 'start');
+  document.getElementById('hud-route-end')?.classList.toggle('is-live', routeOn && routeAim === 'end');
+  document.getElementById('hud-route-car')?.classList.toggle('active', routeMode === 'car');
+  document.getElementById('hud-route-train')?.classList.toggle('active', routeMode === 'train');
+  const carCredit = document.getElementById('hud-route-credit-car');
+  const trainCredit = document.getElementById('hud-route-credit-train');
+  if (carCredit) carCredit.hidden = routeMode !== 'car';
+  if (trainCredit) trainCredit.hidden = routeMode !== 'train';
+  const status = document.getElementById('hud-route-status');
+  if (status) status.textContent = routeOn ? t(routeStatus) : '';
+  const confirm = document.getElementById('hud-route-confirm');
+  if (confirm) confirm.disabled = !(routeLine && routeLine.length >= 2);
+}
+
+function syncRouteDraft() {
+  const src = map?.getSource?.('route-draft');
+  if (!src) return;
+  if (!routeOn) {
+    src.setData(EMPTY);
+    return;
+  }
+  const features = [];
+  if (routeStart) {
+    features.push({
+      type: 'Feature',
+      properties: { role: 'start' },
+      geometry: { type: 'Point', coordinates: [routeStart.lng, routeStart.lat] },
+    });
+  }
+  if (routeEnd) {
+    features.push({
+      type: 'Feature',
+      properties: { role: 'end' },
+      geometry: { type: 'Point', coordinates: [routeEnd.lng, routeEnd.lat] },
+    });
+  }
+  if (routeLine && routeLine.length >= 2) {
+    features.push({
+      type: 'Feature',
+      properties: {},
+      geometry: { type: 'LineString', coordinates: routeLine },
+    });
+  }
+  src.setData({ type: 'FeatureCollection', features });
+}
+
+function openRouteTool() {
+  stopGesture();
+  clearSpanHighlight();
+  // The two taps that follow are a start and a destination. A region pin
+  // would take the first of them as its confirm.
+  regionArmed = false;
+  paintRegionUi();
+  routeOn = true;
+  routeAim = 'start';
+  routeMode = 'car';
+  routeStart = null;
+  routeEnd = null;
+  routeLine = null;
+  routeStatus = 'hud-route.tap-for-a-start';
+  routeSeq += 1;
+  for (const which of ['start', 'end']) {
+    const input = routeField(which);
+    if (input) input.value = '';
+  }
+  clearRouteHits();
+  renderRouteTool();
+  syncRouteDraft();
+  paintRegionOutline();
+  updateBrush();
+  routeField('start')?.focus();
+}
+
+function closeRouteTool() {
+  if (!routeOn && !routeLine) return;
+  routeOn = false;
+  routeStart = null;
+  routeEnd = null;
+  routeLine = null;
+  routeSeq += 1;
+  for (const which of ['start', 'end']) {
+    const input = routeField(which);
+    if (input) input.value = '';
+  }
+  clearRouteHits();
+  renderRouteTool();
+  syncRouteDraft();
+  paintRegionOutline();
+  updateBrush();
+}
+
+function commitRouteEnd(which, place, advance) {
+  if (which === 'start') {
+    routeStart = place;
+    routeAim = routeEnd ? null : 'end';
+  } else {
+    routeEnd = place;
+    routeAim = routeStart ? null : 'start';
+  }
+  routeLine = null;
+  const input = routeField(which);
+  if (input) input.value = routeLabel(place);
+  // A typed city is the first of two names. Focusing the empty one keeps the
+  // keyboard where the next word goes. A tap is already aimed, and pulling
+  // the keyboard up over the map would take the second tap away.
+  if (advance) {
+    const next = which === 'start' ? 'end' : 'start';
+    const nextPlace = next === 'start' ? routeStart : routeEnd;
+    if (!nextPlace) routeField(next)?.focus();
+  }
+  void loadRouteLine();
+}
+
+function chooseRouteCity(which, p) {
+  clearRouteHits(which);
+  commitRouteEnd(which, { lng: p.lng, lat: p.lat, name: p.name }, true);
+}
+
+async function onRouteQuery(which) {
+  const input = routeField(which);
+  if (!input || !routeOn) return;
+  const q = input.value.trim();
+  const place = which === 'start' ? routeStart : routeEnd;
+  if (q !== routeLabel(place)) {
+    if (which === 'start') routeStart = null;
+    else routeEnd = null;
+    routeLine = null;
+    routeAim = which;
+    routeStatus = which === 'end' ? 'hud-route.tap-for-a-destination' : 'hud-route.tap-for-a-start';
+    renderRouteTool();
+    syncRouteDraft();
+  }
+  const seq = ++routeQuerySeq[which];
+  if (q.length < 2) {
+    clearRouteHits(which);
+    return;
+  }
+  await loadPlaces();
+  if (seq !== routeQuerySeq[which] || routeField(which)?.value.trim() !== q) return;
+  if (document.activeElement !== routeField(which)) return;
+  showRouteHits(which, searchPlaces(q, 5).filter((p) => p.kind === 'town'));
+}
+
+function placeRoutePoint(lngLat) {
+  const which = !routeStart || routeAim === 'start' ? 'start' : 'end';
+  clearRouteHits(which);
+  commitRouteEnd(which, { lng: lngLat.lng, lat: lngLat.lat }, false);
+}
+
+function setRouteMode(next) {
+  if (next !== 'car' && next !== 'train') return;
+  if (routeMode === next && routeLine) return;
+  routeMode = next;
+  routeLine = null;
+  void loadRouteLine();
+}
+
+async function loadRouteLine() {
+  const seq = ++routeSeq;
+  if (!routeStart) routeStatus = 'hud-route.tap-for-a-start';
+  else if (!routeEnd) routeStatus = 'hud-route.tap-for-a-destination';
+  else if (!placesApart(routeStart, routeEnd)) routeStatus = 'hud-route.pick-two-different-places';
+  else routeStatus = 'hud-route.finding-the-route';
+  const ask = routeStatus === 'hud-route.finding-the-route';
+  renderRouteTool();
+  syncRouteDraft();
+  if (!ask) return;
+  const from = routeStart;
+  const to = routeEnd;
+  const mode = routeMode;
+  try {
+    const q = new URLSearchParams({
+      mode,
+      fromLng: String(from.lng),
+      fromLat: String(from.lat),
+      toLng: String(to.lng),
+      toLat: String(to.lat),
+    });
+    const res = await fetch(`/api/directions?${q}`, { credentials: 'same-origin' });
+    const body = await res.json().catch(() => null);
+    if (seq !== routeSeq || mode !== routeMode) return;
+    const points = body?.points;
+    if (res.ok && Array.isArray(points) && points.length >= 2) {
+      routeLine = points;
+      routeStatus = 'hud-route.confirm-to-colour-it-in';
+      revealRouteLine(points);
+    } else {
+      routeLine = null;
+      const missing = res.status === 404 || body?.error === 'none';
+      routeStatus = missing
+        ? (mode === 'train' ? 'hud-route.no-train' : 'hud-route.no-road')
+        : 'hud-route.router-did-not-answer';
+    }
+  } catch {
+    if (seq !== routeSeq) return;
+    routeLine = null;
+    routeStatus = 'hud-route.router-did-not-answer';
+  }
+  renderRouteTool();
+  syncRouteDraft();
+}
+
+// A typed pair is usually off the screen you were looking at. A pair already
+// in view — two taps in one town — stays where it was put.
+function revealRouteLine(points) {
+  if (!map?.fitBounds || !map.getBounds || points.length < 2) return;
+  let minLng = Infinity;
+  let minLat = Infinity;
+  let maxLng = -Infinity;
+  let maxLat = -Infinity;
+  for (const p of points) {
+    const lng = p[0];
+    const lat = p[1];
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+    minLng = Math.min(minLng, lng);
+    minLat = Math.min(minLat, lat);
+    maxLng = Math.max(maxLng, lng);
+    maxLat = Math.max(maxLat, lat);
+  }
+  if (!Number.isFinite(minLng)) return;
+  const view = map.getBounds();
+  if (view?.contains?.([minLng, minLat]) && view.contains([maxLng, maxLat])) return;
+  const panel = document.getElementById('hud-panel')?.getBoundingClientRect();
+  const pad = 56;
+  let left = pad;
+  let top = pad;
+  let bottom = pad;
+  if (panel && panel.width > 0 && panel.height > 0) {
+    if (panel.left < window.innerWidth * 0.5 && panel.top < window.innerHeight * 0.55) {
+      left = Math.max(pad, panel.right + 16);
+    }
+    if (panel.bottom > window.innerHeight * 0.55) bottom = Math.max(pad, window.innerHeight - panel.top + 16);
+  }
+  map.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
+    padding: { left, top, right: pad, bottom },
+    duration: 600,
+    maxZoom: 12,
+  });
+}
+
+function confirmRoute() {
+  if (!routeLine || routeLine.length < 2) return;
+  const points = routeLine;
+  const phrase = routeMode === 'train' ? 'painting the train' : 'painting the drive';
+  paintCellsOnLine(points, phrase);
+  showSpanHighlight(points);
+  closeRouteTool();
+}
+
 // Debug hooks — handy in devtools for poking at cells and their provenance.
 window.visitedMap = {
   toggle: toggleCell,
@@ -3906,31 +4207,11 @@ const cellSizeLabel = (level) =>
 // Roll the dates and counts of a set of stored cells into one summary. Taken by
 // the cell card and by the region/country card, which differ only in how they
 // decide which cells to ask about.
-function rollUpIds(ids) {
-  let addedAt = 0;
-  let firstAt = 0;
-  let lastAt = 0;
-  let hits = 0;
-  const earlier = (a, b) => (b && (!a || b < a) ? b : a); // 0 means "unknown"
-  for (const id of ids) {
-    for (const m of cellMeta.get(id) ?? []) {
-      // Only imported data has a meaningful count — a hand-marked cell carries
-      // a placeholder 1 that would be nonsense to show.
-      if (m.source !== 'manual' && m.source !== 'unknown') hits += m.hits || 0;
-      addedAt = earlier(addedAt, m.addedAt);
-      firstAt = earlier(firstAt, m.firstAt);
-      lastAt = Math.max(lastAt, m.lastAt || 0);
-    }
-  }
-  // Neither `fixes` nor the per-source breakdown is rolled up. Both are still
-  // stored — the import, sync and Sources screens report them — but as facts
-  // about a place they answer questions about the recording rather than about
-  // where you were: how often a recorder sampled, and which app was running.
-  // The number of cells is not rolled up either, and for the same reason: it
-  // was a count of the storage's own units, and the card that used to lead with
-  // it says how much ground and how much of the place instead.
-  return { hits, addedAt, firstAt, lastAt };
-}
+const rollUpIds = (ids) => {
+  const visibleMeta = new Map(ids.map(id => [id, (cellMeta.get(id) ?? []).filter(m => !hiddenSources.has(m.source))]));
+  const visitDates = recordedVisitDates(ids, visibleMeta);
+  return {...summarizeCells(ids, visibleMeta), visited: ids.length > 0, visitDates, visitCount: visitDates.length};
+};
 
 function gatherInfo(L, col, row) {
   const ids = storedUnder(L, col, row);
@@ -3938,6 +4219,7 @@ function gatherInfo(L, col, row) {
   const [lng, lat] = project(cellCenter(L, col, row));
   return {
     ...rollUpIds(ids),
+    level: L,
     lat,
     lng: wrapLng(lng),
     sizeLabel: cellSizeLabel(L),
@@ -4216,6 +4498,7 @@ function showAreaInfo(area) {
   cellInfo?.show({
     ...rollUpIds(ids),
     title: area.name,
+    area,
     sizeLabel: [what, whole ? `${Math.round(whole).toLocaleString()} km²` : null].filter(Boolean).join(' · '),
     covered,
     coveredPct: whole ? (covered / whole) * 100 : 0,
@@ -4309,8 +4592,14 @@ const ROUTE_LAYERS = [...ROUTE_GLOW_IDS, 'route-line'];
 // rings did not quietly make every tap on the map four times the work.
 const ROUTE_TAP_LAYERS = [ROUTE_GLOW_IDS[0], 'route-line'];
 /** Everything drawn for a route, ghost included, for showing and hiding. */
-const routeDrawLayers = () =>
-  (map.getLayer(ROUTE_GHOST_ID) ? [ROUTE_GHOST_ID, ...ROUTE_LAYERS] : ROUTE_LAYERS);
+const routeDrawLayers = () => {
+  const ids = map.getLayer(ROUTE_GHOST_ID) ? [ROUTE_GHOST_ID, ...ROUTE_LAYERS] : [...ROUTE_LAYERS];
+  // Hidden with the rest when Activities is switched off. Not a tap target:
+  // the line underneath is the one a click is about.
+  if (map.getLayer('route-metric-line')) ids.push('route-metric-casing', 'route-metric-line');
+  if (map.getLayer('route-peek-line')) ids.push('route-peek-casing', 'route-peek-line');
+  return ids;
+};
 
 let routesOn = localStorage.getItem(ROUTES_KEY) === 'on';
 let routeList = []; // newest first; carries `geom` only once routeGeom is true
@@ -4342,6 +4631,7 @@ let stravaUi = null; // set by mountStrava()
 let deviceUi = null; // set by mountDevices()
 let statsUi = null; // set by mountStats()
 let whatsNewUi = null; // set by mountWhatsNew()
+let announcementsReady = false;
 let backupUi = null; // set by mountBackup()
 // These two are up here with the other late-bound handles rather than inside the
 // wiring block, because the *auth gate* reaches for both: which tabs Settings
@@ -4371,6 +4661,9 @@ let rainbowColors = new Map();
 // setStackOnly, which is also where the reason it is opacity and not a filter
 // is written down.
 let stackOnly = null;
+// The route a stack row under the pointer is pointing at, drawn again on top of
+// everything — see setStackPeek.
+let stackPeek = null;
 
 function saveRoutesPref() {
   try {
@@ -4598,6 +4891,7 @@ const prefsPayload = () => ({
   // so the better single answer.
   accent: accents.dark,
   accents: { ...accents },
+  mapOpacities: { ...mapOpacities },
   routeView: routeViewJson(),
   home: homePlace,
   hiddenTrips: [...hiddenTripIds],
@@ -4702,6 +4996,7 @@ function touchPrefs() {
   prefsStamp = Date.now();
   prefsDirty = true;
   try {
+    localStorage.setItem(MAP_OPACITIES_KEY, JSON.stringify(mapOpacities));
     localStorage.setItem(PREFS_STAMP_KEY, String(prefsStamp));
     localStorage.setItem(ROUTE_VIEW_KEY, JSON.stringify(routeViewJson()));
     localStorage.setItem(HIDDEN_TRIPS_KEY, JSON.stringify([...hiddenTripIds]));
@@ -4761,6 +5056,10 @@ document.addEventListener('visibilitychange', () => {
 
 /** Adopt a set of preferences wholesale — from the server, or from a reset. */
 function adoptPrefs(prefs) {
+  mapOpacities = readMapOpacities(prefs.mapOpacities);
+  try {
+    localStorage.setItem(MAP_OPACITIES_KEY, JSON.stringify(mapOpacities));
+  } catch { /* The account copy still applies. */ }
   if (prefs.routeView && typeof prefs.routeView === 'object') adoptRouteView(prefs.routeView);
   hiddenTripIds = new Set(
     (Array.isArray(prefs.hiddenTrips) ? prefs.hiddenTrips : [])
@@ -4829,6 +5128,9 @@ function adoptPrefs(prefs) {
     repaintAccent();
   }
   saveAccents();
+  syncMapOpacityUi();
+  applyFade(fade.cur);
+  applyPrevFade(fade.prev);
   try {
     localStorage.setItem(ROUTE_VIEW_KEY, JSON.stringify(routeViewJson()));
     localStorage.setItem(HIDDEN_TRIPS_KEY, JSON.stringify([...hiddenTripIds]));
@@ -4911,16 +5213,8 @@ async function syncPrefs() {
     prefsDirty = true;
     pushPrefs();
   }
-  // Both of these read `remote` rather than the adopted state, and for the same
-  // reason: this is the first moment anything knows what the *account* has
-  // already been told, and the 'push' branch above never fills that in.
-  //
-  // The banner's baseline is merged in before the banner is decided — `onAuthed`
-  // awaits this and shows it afterwards — so a ride the phone already announced
-  // is not announced again here. And when the merge comes out ahead of what the
-  // account holds, the account is the one that is behind: that is a browser
-  // whose own banner never got pushed, and an account left holding the lower
-  // number would let the *other* device announce it a second time.
+  // Keep legacy counter baselines for older clients. Current announcements
+  // use the server's identity baseline and cannot be rolled back by this merge.
   const seen = mergeSnapshots(lastSnapshot(), remote?.whatsNewSeen);
   if (seen) {
     rememberSnapshot(seen);
@@ -4978,11 +5272,16 @@ const visibleRoutes = () => {
   return listedRoutes().filter((r) => !hiddenSports.has(sportKey(r)));
 };
 
-/** Draw only this route, or (with null) go back to everything. */
-function setSoloRoute(id) {
+/**
+ * Draw only this route, or (with null) go back to everything.
+ *
+ * `keepStack` is the stack menu hovering a row. The ordinary call closes that
+ * menu, because a list reload is not the pile you opened — a hover is.
+ */
+function setSoloRoute(id, { keepStack = false } = {}) {
   soloRoute = id ?? null;
   updateSoloChip();
-  syncRoutes();
+  syncRoutes({ keepStack });
 }
 
 // The chip is the only way out of isolation that doesn't mean opening a menu,
@@ -5024,13 +5323,27 @@ function updateSoloChip() {
   // The day's own list has the name before `loadRoutes` has filled `routeList`,
   // which is the window between pressing *Show* and the file arriving.
   const shown = route ?? (showingDay ? dayRoute : null);
-  const canStep = showingDay && dayRoutes.length > 1;
+  // A day that has isolated one activity already has its own series. This chip
+  // walks every workout only when it is naming one you picked out of the map —
+  // *Showing only*, with *Show all*. A row under the pointer is borrowing the
+  // map for as long as the pointer stays; that is not a series to step.
+  const paging = soloRoute != null && !showingDay && stackSoloBefore === undefined;
+  const earlier = paging ? workoutBeside(listedRoutes(), soloRoute, -1) : null;
+  const later = paging ? workoutBeside(listedRoutes(), soloRoute, 1) : null;
+  const canStep = (showingDay && dayRoutes.length > 1) || !!(earlier || later);
 
   chip.classList.toggle('can-swipe', canStep);
-  // Each arrow stands for a direction there is something in, same as the day
-  // chip. The first activity has no arrow backwards.
-  if (prev) prev.hidden = !canStep || dayRouteAt <= 0;
-  if (next) next.hidden = !canStep || dayRouteAt >= dayRoutes.length - 1;
+  // Each arrow stands for a direction there is something in. On a day, the
+  // first of its activities has no arrow backwards. On a workout picked out of
+  // the map, backwards is earlier in time and forwards is later — the same
+  // way the day chip points — so the newest ride has no arrow onwards.
+  if (showingDay) {
+    if (prev) prev.hidden = !canStep || dayRouteAt <= 0;
+    if (next) next.hidden = !canStep || dayRouteAt >= dayRoutes.length - 1;
+  } else {
+    if (prev) prev.hidden = !earlier;
+    if (next) next.hidden = !later;
+  }
 
   if (dayOwned && !showingDay && !route) {
     chip.hidden = false;
@@ -5093,13 +5406,19 @@ const routeColorExpr = (mix) => {
 // case here empties the line, all eight glow rings and the ghost together.
 const routeAlphaExpr = () => {
   const base = routeMatchExpr(hexAlpha);
-  return stackOnly ? ['case', inStack(), base, 0] : base;
+  const shown = stackOnly ? ['case', inStack(), base, 0] : base;
+  // `met` is the route whose speed or elevation is drawn as its own line. The
+  // activity colour under that line would show through at every join.
+  return ['case', ['boolean', ['feature-state', 'met'], false], 0, shown];
 };
 const inStack = () => ['in', ['id'], ['literal', [...stackOnly]]];
 // The see-through-buildings copy, which is flat rather than per-activity — so
-// the one thing that can move it is a stack card emptying everything else.
-const routeGhostOpacity = () =>
-  (stackOnly ? ['case', inStack(), ROUTE_GHOST_OPACITY, 0] : ROUTE_GHOST_OPACITY);
+// the one thing that can move it is a stack card emptying everything else, or
+// the same route being drawn again in its ramp.
+const routeGhostOpacity = () => {
+  const shown = stackOnly ? ['case', inStack(), ROUTE_GHOST_OPACITY, 0] : ROUTE_GHOST_OPACITY;
+  return ['case', ['boolean', ['feature-state', 'met'], false], 0, shown];
+};
 
 /**
  * Every route currently drawn in a colour that is not its activity's.
@@ -5181,12 +5500,13 @@ async function namePlaces() {
 }
 
 // Push the current list at the map and keep the menu's count honest.
-function syncRoutes() {
+function syncRoutes({ keepStack = false } = {}) {
   // Whatever is about to be drawn, it is not what the stack menu was opened
   // against: an activity hidden, a route deleted, the list reloaded after a sync
   // all pass through here. A menu offering a line that is no longer on the map
-  // is worse than one that closed.
-  closeRouteStack();
+  // is worse than one that closed. A hover inside that menu is the exception:
+  // it is redrawing one of the rows, not replacing the list.
+  if (!keepStack) closeRouteStack();
   updateSoloChip();
   updateRoutesUi();
   const src = map.getSource('routes');
@@ -5208,6 +5528,8 @@ function syncRoutes() {
   if (hoveredRoute != null && routesOn && routeGeom) {
     map.setFeatureState({ source: 'routes', id: hoveredRoute }, { hov: true });
   } else hoveredRoute = null;
+  // After setData, which is what throws feature state away — the ramp included.
+  paintMetricLayer();
 }
 
 function setRoutesOn(on) {
@@ -5255,7 +5577,208 @@ function setHoveredRoute(id) {
 
 function closeRouteInfo() {
   setSelectedRoute(null);
+  clearMetricLine();
   routeInfo?.hide();
+  // Opening the card is what hid the other lines. Closing it puts them back.
+  // The day chip is a separate isolation — it has its own Hide — and a close
+  // while stepping through a day must not flatten that.
+  if (dayRouteAt < 0 && soloRoute != null) setSoloRoute(null);
+}
+
+// The route whose own line is currently hidden under the ramp. Remembered
+// here because the card's close button hides itself before it tells us, and
+// by then `routeInfo.current()` is already null.
+let metricRouteId = null;
+let metricSamples = [];
+let metricMarker = null;
+// What isolation was, before a stack row under the pointer borrowed it.
+// `undefined` means no row is borrowing it.
+let stackSoloBefore;
+
+/** Drop the ramp, the dot, and the feature state that was hiding the real line. */
+function clearMetricLine() {
+  metricSamples = [];
+  const src = map?.getSource?.('route-metric');
+  if (src) src.setData(EMPTY);
+  liftMetricHide();
+  clearMarker();
+}
+
+function liftMetricHide() {
+  if (metricRouteId == null || !map?.getSource?.('routes')) {
+    metricRouteId = null;
+    return;
+  }
+  map.removeFeatureState({ source: 'routes', id: metricRouteId }, 'met');
+  metricRouteId = null;
+}
+
+/**
+ * Draw the open route in the colour of the pill that is selected.
+ *
+ * Only while that route is actually on the map. A stack row under the pointer
+ * is drawn alone, and leaving the previous ramp up would paint the wrong line.
+ */
+function paintMetricLayer() {
+  const src = map?.getSource?.('route-metric');
+  if (!src) return;
+  const route = routeInfo?.current();
+  const metric = routeInfo?.metric();
+  const visible = !!(route && metric && routesOn && routeGeom
+    && visibleRoutes().some((r) => r.id === route.id));
+  if (!visible) {
+    src.setData(EMPTY);
+    liftMetricHide();
+  } else {
+    metricSamples = routeSamples(route.geom, route.trace);
+    src.setData(metricCollection(metricSamples, metric));
+    if (metricRouteId != null && metricRouteId !== route.id) {
+      map.removeFeatureState({ source: 'routes', id: metricRouteId }, 'met');
+    }
+    metricRouteId = route.id;
+    map.setFeatureState({ source: 'routes', id: route.id }, { met: true });
+  }
+  if (metricMarker) {
+    const showDot = visible && (routeInfo?.scrubIndex() ?? -1) >= 0;
+    metricMarker.getElement().style.display = showDot ? '' : 'none';
+  }
+}
+
+function clearMarker() {
+  metricMarker?.remove();
+  metricMarker = null;
+}
+
+// Under a minute the clock is still seconds. Zero is the start of the line,
+// and it is not a reading — the same rule as the graph, which leaves "0 min"
+// off. `formatDuration` already answers nothing for zero.
+function formatSince(sec) {
+  if (sec == null || !Number.isFinite(sec) || sec <= 0) return null;
+  if (sec < 60) {
+    const s = Math.round(sec);
+    if (s <= 0) return null;
+    return `${s} s`;
+  }
+  return formatDuration(sec);
+}
+
+function formatSpeed(ms) {
+  return formatGraphSpeed(ms);
+}
+
+// The first point of a segment has no incoming span. The label uses the one
+// that leaves, same as the graph, so the start of the line is not a blank.
+function sampleSpeed(samples, index) {
+  const here = samples[index];
+  if (!here) return null;
+  if (here.speed != null) return here.speed;
+  const next = samples[index + 1];
+  if (next && next.seg === here.seg) return next.speed;
+  return null;
+}
+
+function placeMetricMarker() {
+  const index = routeInfo?.scrubIndex() ?? -1;
+  const sample = metricSamples[index];
+  if (!sample || !map) {
+    clearMarker();
+    return;
+  }
+  const bits = [
+    formatSpeed(sampleSpeed(metricSamples, index)),
+    formatSince(sample.elapsed),
+    sample.ele == null ? null : `${Math.round(sample.ele)} m`,
+  ].filter(Boolean);
+  if (!metricMarker) {
+    const el = document.createElement('div');
+    el.className = 'route-metric-pin';
+    const label = document.createElement('div');
+    label.className = 'route-metric-pin-label';
+    const dot = document.createElement('div');
+    dot.className = 'route-metric-pin-dot';
+    el.append(label, dot);
+    metricMarker = new gl.Marker({ element: el, anchor: 'bottom' }).setLngLat([sample.lng, sample.lat]).addTo(map);
+  }
+  const label = metricMarker.getElement().querySelector('.route-metric-pin-label');
+  label.hidden = !bits.length;
+  label.textContent = bits.join(' · ');
+  metricMarker.getElement().style.display = '';
+  metricMarker.setLngLat([sample.lng, sample.lat]);
+}
+
+// How far down the screen the open card reaches, pills included. Absolute
+// pills sit outside the card's own height, so both boxes are measured.
+function routeOcclusionTop() {
+  const card = document.getElementById('route-info');
+  if (!card || card.hidden) return null;
+  let top = card.getBoundingClientRect().top;
+  const pills = document.getElementById('route-metric-pills');
+  if (pills && !pills.hidden) top = Math.min(top, pills.getBoundingClientRect().top);
+  return top;
+}
+
+const FRAME_PAD = 70;
+const FRAME_AIR = 16;
+
+function routeFramePadding() {
+  const topEdge = routeOcclusionTop();
+  if (topEdge == null) return FRAME_PAD;
+  // A card taller than the window would ask for more padding than the canvas
+  // has, and fitBounds refuses that outright.
+  const bottom = Math.max(FRAME_PAD, window.innerHeight - topEdge + FRAME_AIR);
+  const room = Math.max(FRAME_PAD, window.innerHeight - FRAME_PAD * 2 - 40);
+  return { top: FRAME_PAD, bottom: Math.min(bottom, room), left: FRAME_PAD, right: FRAME_PAD };
+}
+
+// How long the camera takes to catch a scrubbed point. Short enough that a
+// fast drag does not leave the puck at the edge, long enough that the move
+// is a glide rather than a cut.
+const SCRUB_EASE_MS = 380;
+
+// A scrubbed point that has walked off the map still in view — past the edge,
+// or down behind the card — is eased back into the middle of what is left.
+// Each step of the drag starts that glide again from wherever the camera has
+// got to, so it follows the finger instead of queueing up pans, and instead
+// of cutting there. The zoom stays where the frame put it.
+function revealSample(sample) {
+  if (!sample || !map?.easeTo) return;
+  const padding = routeFramePadding();
+  const pad = typeof padding === 'number'
+    ? { top: padding, bottom: padding, left: padding, right: padding }
+    : padding;
+  const p = map.project([sample.lng, sample.lat]);
+  const margin = 28;
+  const inside = p.x >= pad.left + margin
+    && p.x <= window.innerWidth - pad.right - margin
+    && p.y >= pad.top + margin
+    && p.y <= window.innerHeight - pad.bottom - margin;
+  if (inside) return;
+  releaseCameraLock();
+  map.easeTo({
+    center: [sample.lng, sample.lat],
+    padding,
+    duration: SCRUB_EASE_MS,
+    easing: (t) => 1 - (1 - t) ** 3,
+  });
+}
+
+/**
+ * The graph and the line are one scrub.
+ *
+ * Called with the samples from a map tap, or with just the index from the
+ * graph — the graph already knows which route is open and must not be told
+ * back, or the two would call each other.
+ */
+function scrubRoute(route, samples, index) {
+  if (typeof samples === 'number') {
+    index = samples;
+    samples = metricSamples.length ? metricSamples : routeSamples(route.geom, route.trace);
+  }
+  if (!samples?.length || index < 0 || !samples[index]) return;
+  metricSamples = samples;
+  routeInfo?.setScrub(index);
+  placeMetricMarker();
+  revealSample(samples[index]);
 }
 
 /**
@@ -5293,11 +5816,15 @@ function routesAt(point) {
 const routeAt = (point) => routesAt(point)[0] ?? null;
 
 // A tap on a route wins over the cell underneath it: you aimed at the line.
-function showRouteInfo(route) {
+// Isolated while the card is open. Closing the card puts the others back; the
+// chip above the map is the control that does it without closing.
+function showRouteInfo(route, keepMetric) {
   closeCellInfo();
   closePhotoInfo();
+  clearMarker();
   setSelectedRoute(route.id);
-  routeInfo?.show(route);
+  setSoloRoute(route.id, { keepStack: !!routeStackPopup });
+  routeInfo?.show(route, keepMetric);
 }
 
 // --- When the line you tapped is twenty lines ----------------------------------
@@ -5311,15 +5838,14 @@ function showRouteInfo(route) {
 //
 // So a tap that lands on more than one asks instead of answering. A menu at the
 // cursor, one row per activity with what it was called, when it was and how far,
-// and the card opens on whichever you pick. **Hovering a row lights its line on
-// the map**, which is what makes the list usable when six rows are the same
-// word: it is the same feature state the pointer already writes, so the
-// highlight costs nothing of ours (see setHoveredRoute).
+// and the card opens on whichever you pick. **Hovering a row lifts its line out
+// of the pile**, white on black and on top of the rest, which is what makes the
+// list usable when six rows are the same word (see setStackPeek).
 //
 // Shaped like the trails card next door — a list of named things the map is
-// offering is one idea and should not look like two — and left open after a
-// pick, because a stack is something you go through rather than choose from
-// once.
+// offering is one idea and should not look like two. It closes on a pick: it
+// was once left open, as something you go through, and then it sat over the
+// very line and card it had just opened.
 //
 // ## Three things beyond the list itself
 //
@@ -5339,6 +5865,19 @@ function showRouteInfo(route) {
 // three activities are three lists side by side rather than one list you scroll
 // through to find out there was a bike ride in it. On a phone, where the card is
 // most of the screen's width, it stays a single column.
+//
+// ## On a phone it is a card at the bottom, not a popup
+//
+// A popup opens where you tapped, and on a phone where you tapped is the middle
+// of the screen: the card covered the very braid it was listing, and dragging it
+// aside by its heading was a second gesture to undo the first. So there it docks
+// where the cell, route and photo cards do — same glass, same place, nothing to
+// move — and the map above it is left to show the lines.
+//
+// **And a row takes two taps.** The first lifts its line out of the pile in
+// white, the second opens it. On a desktop the hover is the first of those and
+// the click the second; a finger has no hover, so without this a phone could
+// only ever open an activity to find out which line it was.
 let routeStackPopup = null;
 
 const routeStackDay = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
@@ -5357,6 +5896,53 @@ const stackGoesWide = () => !coarsePointer.matches && window.innerWidth >= 720;
 function closeRouteStack() {
   routeStackPopup?.remove();
   routeStackPopup = null;
+}
+
+/**
+ * The pile as a card docked at the bottom of a phone — see above.
+ *
+ * Answers to the two calls the rest of this code makes of a popup, `remove()`
+ * and `on('close')`, so everything that already closes the stack closes this
+ * too. Unlike a popup it does not go away by itself on the next tap of the map;
+ * it does not need to, because the map's click handler closes the stack first
+ * thing anyway.
+ */
+function routeStackSheet(card) {
+  const el = document.getElementById('route-stack-sheet');
+  const closers = [];
+  let open = true;
+  const sheet = {
+    on(type, fn) {
+      if (type === 'close') closers.push(fn);
+      return sheet;
+    },
+    remove() {
+      // Once. The close handlers give the map back, and a second run would be
+      // doing that to whatever card has opened since.
+      if (!open) return sheet;
+      open = false;
+      el.hidden = true;
+      el.replaceChildren();
+      for (const fn of closers) fn();
+      return sheet;
+    },
+  };
+  // The heading and a close button in the row the other docked cards use. A
+  // popup brings its own ✕; this has to say it.
+  const h = card.querySelector('h4');
+  const head = document.createElement('div');
+  head.className = 'cell-info-head';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'cell-info-close';
+  close.setAttribute('aria-label', t('cell-info-close.close'));
+  close.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>';
+  close.addEventListener('click', () => closeRouteStack());
+  h.replaceWith(head);
+  head.append(h, close);
+  el.replaceChildren(card);
+  el.hidden = false;
+  return sheet;
 }
 
 /**
@@ -5398,6 +5984,31 @@ function clearStackColors() {
  */
 function setStackOnly(ids) {
   stackOnly = ids ? new Set(ids) : null;
+  repaintRouteColors();
+}
+
+/**
+ * Lift one route out of the pile, or (with null) put it back.
+ *
+ * The hover glow says "this one" well enough on a single line and not at all
+ * in a braid: the lit route stays wherever the source happens to draw it, so
+ * half of it is under its neighbours, and a brighter haze of its own colour is
+ * one more colour among eleven. So the row's route is drawn again in a source
+ * of its own, above every other route layer, white on a black casing — the one
+ * pairing no activity and no palette entry is ever given — and its glow is
+ * taken away, so the haze it would have spread does not tint the lines it is
+ * being told apart from.
+ *
+ * A source of its own rather than a sort key on the shared one: `line-sort-key`
+ * orders features inside a tile's bucket and nothing across them, and the
+ * geometry it would sort is several megabytes that a hover should not rebuild.
+ */
+function setStackPeek(route) {
+  const id = route?.id ?? null;
+  if (stackPeek === id) return;
+  stackPeek = id;
+  const src = map?.getSource?.('route-peek');
+  if (src) src.setData(route ? routesToFC([route]) : EMPTY);
   repaintRouteColors();
 }
 
@@ -5462,6 +6073,11 @@ function showRouteStack(e, found) {
   // closing it after the new set was assigned wiped the new set, and the second
   // tap of a session was the last one that recoloured anything.
   closeRouteStack();
+  // The activity card isolates. A pile cannot be a pile while one line is the
+  // only thing in the source, so the previous card goes and the rest come back.
+  closeRouteInfo();
+  setSoloRoute(null, { keepStack: true });
+  stackSoloBefore = undefined;
 
   const groups = routeStackGroups(found);
   // The colours are handed out down the card as it will be read — group by
@@ -5479,7 +6095,16 @@ function showRouteStack(e, found) {
   // And nothing else on the map while it is open — see setStackOnly.
   setStackOnly(found.map((r) => r.id));
 
-  const wide = stackGoesWide() && groups.length > 1;
+  // Decided once, at opening. A phone turned on its side mid-card keeps the
+  // card it had rather than swapping shape under the finger.
+  const sheet = phoneMq.matches;
+  // Both of those are taking the bottom of the screen, and a card cannot be
+  // docked on top of another one.
+  if (sheet) {
+    closeCellInfo();
+    closePhotoInfo();
+  }
+  const wide = !sheet && stackGoesWide() && groups.length > 1;
   // What the columns want, and what there is room for. They are usually the
   // same number — three activities is 648 pixels of card — and where they are
   // not, the extra columns are reached by scrolling sideways rather than by a
@@ -5506,7 +6131,7 @@ function showRouteStack(e, found) {
     const box = document.createElement('div');
     box.className = 'route-stack-group';
     if (wide) box.style.width = `${ROUTE_STACK_COLUMN_PX}px`;
-    // The activity, in the small capitals the railway card's "3 routes" uses.
+    // The activity, in the small capitals a group heading uses.
     // One group means the heading would be saying what the only column is, and
     // a heading over everything is not a grouping.
     if (groups.length > 1) {
@@ -5516,30 +6141,91 @@ function showRouteStack(e, found) {
     }
     for (const route of group.list) {
       const row = routeStackRow(route);
-      row.addEventListener('mouseenter', () => setHoveredRoute(route.id));
-      row.addEventListener('focus', () => setHoveredRoute(route.id));
+      // Before a pick, the pile stays a pile. The menu focuses its first
+      // button as it opens, and a phone also sends mouseenter for whatever
+      // the finger was still on. Treating either as "show only this one" put
+      // the pill up and hid the other lines before anyone had chosen.
+      //
+      // After a pick the source really does hold one line, so the row under
+      // the pointer has to be drawn on its own or there is nothing to light
+      // up. Remembered once, so moving between rows does not forget what to
+      // put back.
+      const borrow = () => {
+        setHoveredRoute(route.id);
+        setStackPeek(route);
+        if (stackSoloBefore === undefined && soloRoute == null) return;
+        if (stackSoloBefore === undefined) stackSoloBefore = soloRoute;
+        setSoloRoute(route.id, { keepStack: true });
+      };
+      // Not on the phone card. There a tap is the only way to point, and iOS
+      // fires `mouseenter` for it just before the click — which would make every
+      // first tap look like a second one.
+      if (!sheet) {
+        row.addEventListener('mouseenter', borrow);
+        row.addEventListener('focus', borrow);
+      }
       row.addEventListener('click', () => {
-        // Which one you are looking at, kept on the row as well as on the map:
-        // the line is highlighted under a menu that may be covering it.
-        for (const other of items.querySelectorAll('.route-stack-row')) {
-          other.classList.toggle('picked', other === row);
+        // On the phone card the first tap is the hover a finger does not have:
+        // the line goes white and the row stays lit, and only a second tap on
+        // the same row opens it. Another row's tap moves the light there.
+        if (sheet && stackPeek !== route.id) {
+          for (const lit of items.querySelectorAll('.route-stack-row.peeked')) lit.classList.remove('peeked');
+          row.classList.add('peeked');
+          borrow();
+          return;
         }
+        // The pick is the answer, so the menu goes. Left open, it covered the
+        // line it had just isolated and the card describing it. The next one
+        // in the pile is a tap on the same spot away, or a swipe of the pill.
+        //
+        // Closed before the card opens, not after: its `close` hands the map
+        // back to everything, and the card's isolation has to land on top of
+        // that rather than under it. Nothing to put back either — the pick is
+        // the new isolation, not the hover's borrowed one.
+        //
+        // Then framed, as a swipe of the pill frames the one it lands on. The
+        // pile was a few metres of shared street; the activity you picked out
+        // of it usually runs well off the screen in both directions.
+        stackSoloBefore = undefined;
+        closeRouteStack();
         showRouteInfo(route);
+        zoomToRoute(route);
       });
       box.append(row);
     }
     items.append(box);
   }
+  const endStackHover = () => {
+    // Only when the hover is still what the map is drawing. Show all, or a
+    // pick, has already chosen and must not be put back by the pointer leaving.
+    const was = hoveredRoute;
+    setHoveredRoute(null);
+    setStackPeek(null);
+    if (stackSoloBefore === undefined) return;
+    const back = stackSoloBefore;
+    stackSoloBefore = undefined;
+    if (soloRoute === was) setSoloRoute(back, { keepStack: true });
+  };
   // One listener for leaving the list rather than one per row. Moving from a row
   // to the row below it *leaves* the first one, and clearing the highlight there
   // would blink the map between every pair of rows.
-  items.addEventListener('mouseleave', () => setHoveredRoute(null));
-  items.addEventListener('focusout', (ev) => {
-    if (!items.contains(ev.relatedTarget)) setHoveredRoute(null);
-  });
+  //
+  // Not on the phone card, where the light is a tap and stays until the next
+  // one: a finger lifting is not a pointer leaving.
+  if (!sheet) {
+    items.addEventListener('mouseleave', endStackHover);
+    items.addEventListener('focusout', (ev) => {
+      if (!items.contains(ev.relatedTarget)) endStackHover();
+    });
+  }
 
-  const popup = new gl.Popup({
+  const popup = sheet ? routeStackSheet(card) : new gl.Popup({
     closeButton: true,
+    // MapLibre focuses the first button when the card opens, which is the
+    // first activity. That focus is not a choice. `borrow` ignores it too;
+    // this stops the row lighting up before anyone has pointed at it.
+    // Mapbox does not read the option.
+    focusAfterOpen: false,
     // Stated in pixels because the library writes it onto the popup as an inline
     // style, so a class cannot win against it. The columns are counted rather
     // than guessed: enough for what is actually there, capped so the card never
@@ -5560,11 +6246,24 @@ function showRouteStack(e, found) {
   // it.
   popup.on('close', () => {
     if (routeStackPopup && routeStackPopup !== popup) return;
+    const was = hoveredRoute;
     setHoveredRoute(null);
+    setStackPeek(null);
     clearStackColors();
     setStackOnly(null);
+    // The pointer may still have been on a row. Put back what was showing
+    // before that row borrowed the map — and only then. Anything that already
+    // changed which route is isolated (a pick, Show all) wins.
+    if (stackSoloBefore !== undefined && was != null && soloRoute === was) {
+      const back = stackSoloBefore;
+      stackSoloBefore = undefined;
+      setSoloRoute(back, { keepStack: true });
+    }
+    stackSoloBefore = undefined;
   });
   routeStackPopup = popup;
+  // The phone card is already on screen and stays where it is docked.
+  if (sheet) return true;
   popup.addTo(map);
   // Eleven activities is most of the window, and every one of the eleven runs
   // under it — so this is the card the handle was added for. See src/popup-drag.js.
@@ -5594,20 +6293,6 @@ function releaseCameraLock() {
   // air is what we wanted anyway.
   map.stop();
   map.fire('movestart');
-}
-
-// The box around a set of points, for framing a day. A trip carries its own,
-// worked out when it was derived; a day is assembled on demand and doesn't.
-function bboxOfPoints(points) {
-  const b = [Infinity, Infinity, -Infinity, -Infinity];
-  for (const p of points ?? []) {
-    if (!Number.isFinite(p?.lng) || !Number.isFinite(p?.lat)) continue;
-    b[0] = Math.min(b[0], p.lng);
-    b[1] = Math.min(b[1], p.lat);
-    b[2] = Math.max(b[2], p.lng);
-    b[3] = Math.max(b[3], p.lat);
-  }
-  return b.every(Number.isFinite) ? b : null;
 }
 
 // The furthest north or south a Web Mercator map can show at all.
@@ -5658,52 +6343,6 @@ function fitBboxOnMap(b) {
 // highlight vanished while the chip went on claiming to be showing it.
 let shownTrack = null; // { kind, id, label, points }
 
-/** Longer a silence than this and the thread is cut rather than drawn across. */
-const TRACK_LINK_GAP_SEC = 36 * 3600;
-
-/**
- * Points in time order → dots, plus the thread between them.
- *
- * One source, two geometry types: a circle layer ignores the lines and a line
- * layer ignores the points, so this stays a single setData.
- */
-function trackFC(points) {
-  const features = [];
-  let run = [];
-  let prev = 0;
-  const cut = () => {
-    if (run.length > 1) {
-      features.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: run } });
-    }
-    run = [];
-  };
-  for (const p of points ?? []) {
-    if (!Number.isFinite(p?.lng) || !Number.isFinite(p?.lat)) continue;
-    features.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } });
-    // Nothing to thread them with, and the dots stand on their own. Three
-    // reasons a point doesn't join the one before it:
-    //
-    //   no time at all      — it can't be placed in the order
-    //   the *same* time     — neither can it. A whole afternoon's worth of
-    //                         ground imported from one photo album carries one
-    //                         timestamp on every cell of it, and joining those
-    //                         in the order they happen to come out of storage
-    //                         draws a zigzag and calls it a route
-    //   a long gap          — a day out and the next day out are two threads,
-    //                         not one line drawn across the night between them
-    if (!p.at || (prev && p.at <= prev)) {
-      cut();
-      if (p.at) run.push([p.lng, p.lat]);
-      prev = p.at || 0;
-      continue;
-    }
-    if (prev && p.at - prev > TRACK_LINK_GAP_SEC) cut();
-    run.push([p.lng, p.lat]);
-    prev = p.at;
-  }
-  cut();
-  return { type: 'FeatureCollection', features };
-}
 
 /**
  * Put a track on the map and name it in the chip.
@@ -5777,7 +6416,7 @@ const showTripOnMap = (trip) =>
     kind: 'trip',
     id: trip.id,
     label: trip.name,
-    points: trip.spots ?? [],
+    points: trip.points ?? trip.spots ?? [],
     first: trip.start ? dayKey(trip.start) : null,
     // Whole days at both ends, not the first and last thing recorded. A trip's
     // ends are evidence timestamps — the last fix of the last evening — and the
@@ -5877,6 +6516,28 @@ function showFirstDayOfTrip() {
 }
 
 /**
+ * The workout before or after the one on the chip, in time.
+ *
+ * The card stays open — a swipe is turning the page, not closing it — and on
+ * the same Speed or Elevation pill when the next one has that reading. The
+ * map frames the line, because the one after a ride in May is not usually on
+ * the screen the ride in May filled. A pile under a tap is about the lines
+ * there, and a step is about the workout either side; those are different
+ * sets, so the pile goes.
+ */
+function showAdjacentWorkout(step) {
+  const route = workoutBeside(listedRoutes(), soloRoute, step);
+  if (!route) return;
+  if (routeStackPopup) {
+    stackSoloBefore = undefined;
+    closeRouteStack();
+  }
+  const keep = routeInfo?.visible?.() ? routeInfo.metric() : null;
+  showRouteInfo(route, keep);
+  zoomToRoute(route);
+}
+
+/**
  * One of the day's activities, by index.
  *
  * The chip below the day says how many there are; this is what makes that a
@@ -5914,7 +6575,6 @@ function hideDayRoutes() {
   chipRouteWas = null;
   dayRouteAt = -1;
   setSoloRoute(null);
-  routeInfo?.setSolo(false);
   if (was && !was.on) setRoutesOn(false);
   updateTrackChip();
 }
@@ -6282,7 +6942,7 @@ function zoomToRoute(route) {
       [b[0], b[1]],
       [b[2], b[3]],
     ],
-    { padding: 70, maxZoom: 15.5, duration: 700 },
+    { padding: routeFramePadding(), maxZoom: 15.5, duration: 700 },
   );
 }
 
@@ -6783,12 +7443,11 @@ function brushIds(lngLat, size) {
   return ids;
 }
 
-// Stored rows under a brush cell. Copied, because clearing mutates the array
-// litSets is holding. A lit key with no rows falls back to the id itself —
-// edit mode paints at the stored level, so the two are the same cell.
+// Stored rows under a brush cell. A lit key with no rows falls back to the id
+// itself — edit mode paints at the stored level, so the two are the same cell.
 function idsUnder(id) {
   const [L, col, row] = parseCellId(id);
-  const under = litSets[L]?.has(`${col}/${row}`) ? [...storedUnder(L, col, row)] : [];
+  const under = storedUnder(L, col, row);
   if (under.length) return under;
   return visited.has(id) ? [id] : [];
 }
@@ -6955,7 +7614,7 @@ function nearCanvas(px, slop) {
 }
 
 function gestureWanted(e) {
-  if (mode !== 'edit' || !e) return null;
+  if (mode !== 'edit' || !e || routeOn || regionArmed) return null;
   if (e.altKey) return 'erase';
   if (e.ctrlKey || e.metaKey) return 'paint';
   return null;
@@ -7488,9 +8147,9 @@ function editCursorEl() {
 function placeEditCursor() {
   const canvas = editCursorEl();
   if (!canvas) return;
-  // Shift is a region, not a disk. Leaving the circle up would say the next
-  // click erases a handful of cells.
-  const show = mode === 'edit' && !regionShift && pointerOnMap && cursorPx && currentLevel != null && map?.getZoom;
+  // A region outline is a shape, not a disk. Leaving the circle up would say
+  // the next click erases a handful of cells.
+  const show = mode === 'edit' && !regionShift && !regionArmed && !routeOn && pointerOnMap && cursorPx && currentLevel != null && map?.getZoom;
   canvas.hidden = !show;
   if (!show) return;
   const parent = canvas.parentElement;
@@ -7532,10 +8191,11 @@ function placeEditCursor() {
 }
 
 function markLiveBrush(kind) {
+  const regionLive = mode === 'edit' && !routeOn && (regionShift || !!regionArmed);
   for (const k of ['paint', 'erase']) {
-    document.getElementById(`hud-${k}-row`)?.classList.toggle('is-live', !regionShift && k === kind);
+    document.getElementById(`hud-${k}-row`)?.classList.toggle('is-live', !regionLive && k === kind);
   }
-  document.getElementById('hud-region-row')?.classList.toggle('is-live', regionShift && mode === 'edit');
+  document.getElementById('hud-region-row')?.classList.toggle('is-live', regionLive);
 }
 
 function updateBrush() {
@@ -7716,8 +8376,8 @@ const setHexData = (fc) => setVecData(vecLive, fc);
 // populated at the continent level, and only exists at all on a basemap whose
 // style names a glyph server — see installGrid.
 const VEC_LAYERS = ['hex-fill', 'hex-bound-glow', 'hex-bound-line', 'hex-label'];
-// The first layer that must stay *above* the visited wash. See
-// raiseVectorLayers().
+// Continent labels stay beneath the trip track when the vector sources swap.
+// Fill and borders retain the separate wash anchor; see raiseVectorLayers().
 const VEC_ANCHOR = 'trip-glow';
 
 // Put one source's layers above the other's. crossPrev() derives the outgoing
@@ -7727,20 +8387,20 @@ const VEC_ANCHOR = 'trip-glow';
 // exact flash crossPrev exists to remove. moveLayer only reorders, it never
 // re-tiles.
 function raiseVectorLayers(sfx) {
-  // Anchored to the trip track rather than to the wash anchor. Everything added
-  // at `washBefore` after the two vector trios — the trip track, and the
-  // selection ring above it — has to stay above the visited wash; moving the
-  // wash to `washBefore` would lift it over both, and the trip you just clicked
-  // would disappear under the countries.
-  // The fallback is only reachable before `trip-glow` exists, and on Mapbox it
-  // would be a slot name rather than a layer id — which `moveLayer` would throw
-  // on, because a slot is a place to insert *into* and not a layer to sit
-  // before. Nothing to reorder at that point anyway.
-  const fallback = isSlot(vecInsertBefore) ? null : vecInsertBefore;
-  const anchor = map.getLayer(VEC_ANCHOR) ? VEC_ANCHOR : fallback;
-  if (!anchor) return;
+  // Fill and borders stay at the wash anchor: raising them to the trip track
+  // crosses the saved routes, which sit below that track, and tints their ink.
+  // With Mapbox the wash anchor is a slot sentinel, not a layer id. Moving to
+  // the end keeps the layer in its existing bottom slot and raises it above the
+  // outgoing wash without crossing into the routes' slots.
+  const washBefore = isSlot(vecInsertBefore) ? undefined : vecInsertBefore;
   for (const id of VEC_LAYERS) {
-    if (map.getLayer(`${id}${sfx}`)) map.moveLayer(`${id}${sfx}`, anchor);
+    const layer = `${id}${sfx}`;
+    if (!map.getLayer(layer)) continue;
+    // Continent labels belong over the basemap's labels, so keep their separate
+    // position beneath the trip track rather than moving them with the fill.
+    const anchor = id === 'hex-label' && map.getLayer(VEC_ANCHOR)
+      ? VEC_ANCHOR : washBefore;
+    map.moveLayer(layer, anchor);
   }
 }
 
@@ -7773,11 +8433,23 @@ const VECTOR_COOL_ZOOM = levelBoundary(FIRST_VECTOR_LEVEL - 2) + 1;
 // sharpened as you went: the level that most obviously *is* a single outline was
 // the one that never got a good one.
 //
-// Either level is only reachable this far in with Detail pinned; on Auto the map
-// has moved on to hexagons long before, where the overview geometry is the right
-// thing to draw anyway.
+// On Auto the region level lives entirely above this zoom, which is the point:
+// the picture of a canton is the detailed one. Below it the country and
+// continent levels are on screen, and the overview geometry is smaller than
+// a pixel.
+// When the last look was taken, so a gesture asks a few times a second rather
+// than on every frame. The question builds a set of every lit region and walks
+// all 4,553 records, and the answer only changes when the view has moved a
+// long way; a pan that crosses into a new country still gets its fetch within
+// FINE_LOOK_MS, and the first call after the camera stops is never skipped.
+const FINE_LOOK_MS = 300;
+let fineLookedAt = 0;
+
 function considerFineRegions(level) {
   if (map.getZoom() < REGION_FINE_ZOOM || !regionsLoaded()) return;
+  const now = performance.now();
+  if (map.isMoving() && now - fineLookedAt < FINE_LOOK_MS) return;
+  fineLookedAt = now;
   const lit = level === REGION_LEVEL ? litRegionIds : level === COUNTRY_LEVEL ? litCountryIds : null;
   if (!lit) return;
   const view = lngLatBox(viewMerc());
@@ -7797,6 +8469,34 @@ function considerFineRegions(level) {
  * @param {string} iso ISO3 country code
  * @param {string} label what to call it while it is on its way
  */
+// Detailed boundaries arrive a country at a time, a few hundred milliseconds
+// apart, and each used to rebuild and re-send the whole region layer on its own:
+// seven countries in view was seven stalls in a row, each a dissolve and a
+// hand-over of the geometry to the map's worker. They are gathered instead —
+// one rebuild once they stop arriving for FINE_QUIET_MS, and never later than
+// FINE_MAX_WAIT_MS after the first, so a long run of them still sharpens as it
+// goes.
+const FINE_QUIET_MS = 300;
+const FINE_MAX_WAIT_MS = 1200;
+let sharpenTimer = 0;
+let sharpenFirst = 0;
+
+function sharpenSoon() {
+  const now = performance.now();
+  if (!sharpenTimer) sharpenFirst = now;
+  clearTimeout(sharpenTimer);
+  const wait = Math.max(0, Math.min(FINE_QUIET_MS, sharpenFirst + FINE_MAX_WAIT_MS - now));
+  sharpenTimer = setTimeout(() => {
+    sharpenTimer = 0;
+    // Both, because both are drawn from these: the regions themselves, and
+    // the country outline that is those regions dissolved.
+    areaFC.regionFine = EMPTY;
+    areaFC.countryFine = EMPTY;
+    updateGrid(true);
+    updateSelection(); // and the outlined shape, if one is being looked at
+  }, wait);
+}
+
 function fetchFineRegions(iso, label) {
   if (!iso || fineCountryKnown(iso)) return;
   // The ring at the top of the map, so a zoom that is about to sharpen doesn't
@@ -7807,12 +8507,8 @@ function fetchFineRegions(iso, label) {
       // Anything at all: a country whose regions all seam can still have come
       // back with a sharp outline of its own, and the country level draws it.
       if (!news) return;
-      // Both, because both are drawn from these: the regions themselves, and
-      // the country outline that is those regions dissolved.
-      areaFC.regionFine = EMPTY;
-      areaFC.countryFine = EMPTY;
-      updateGrid(true);
-      updateSelection(); // and the outlined shape, if one is being looked at
+      span(`fine boundaries landed: ${iso}`, () => {});
+      sharpenSoon();
     })
     .finally(done);
 }
@@ -7936,6 +8632,37 @@ const levelName = (L) => (isVectorLevel(L) ? vectorKindOf(L) : `L${L}`);
 // in a `finally`, so a preferences fetch that throws still ends with a map.
 let paintHeldForPrefs = false;
 
+// Whether the grid has been put away because the cells are hidden. See the
+// `cellsOn` test in updateGrid.
+let gridBlank = false;
+
+/**
+ * Take everything the cells draw off the map, once, and keep only the level.
+ * Leaves the crossfade bookkeeping where a first paint expects it, since that is
+ * what showing them again is.
+ */
+function blankGrid(level) {
+  updateHud(level);
+  setBasemapContinents(level !== CONTINENT_LEVEL);
+  currentLevel = level;
+  if (gridBlank) return;
+  gridBlank = true;
+  stopBlobFade();
+  stopVectorFade();
+  blobCur.clear();
+  for (const sfx of ['', '-prev']) setVecData(sfx, EMPTY);
+  vecRole[''] = 'in';
+  vecRole['-prev'] = 'idle';
+  vecLive = '';
+  raiseVectorLayers('');
+  blobRole = 'none';
+  coverage = null;
+  currentAsBlob = false;
+  paintedZoom = 0;
+  blobCoarse = false;
+  fedFine = false;
+}
+
 function updateGrid(force = false, changed = null) {
   // The hex sources briefly don't exist while a new basemap style loads.
   if (!map.getSource('hex')) return;
@@ -7950,6 +8677,25 @@ function updateGrid(force = false, changed = null) {
   else {
     level = levelForZoom(map.getZoom(), skipHysteresis ? null : currentLevel);
     skipHysteresis = false;
+  }
+
+  // Hidden means not drawn — not drawn and then shown at zero opacity, which is
+  // what hiding used to be: every zoom still rolled a sheet of cells through the
+  // blur and every level change still dissolved the regions, for a layer nobody
+  // could see. On a phone, zoomed out over half a million cells with the finest
+  // level pinned, that was ten seconds of a frozen map to draw nothing. The level
+  // is still worked out, because the scale bar, a tap and the brush all ask it.
+  if (!cellsOn) {
+    blankGrid(level);
+    return;
+  }
+  if (gridBlank) {
+    // Back from hidden: nothing is on either surface, so this is a first paint
+    // in every respect that matters — the same state a replaced map starts in.
+    gridBlank = false;
+    currentLevel = null;
+    coverage = null;
+    force = true;
   }
 
   // The country level draws from a lazily-fetched 1.4 MB boundary file. Handing
@@ -8023,19 +8769,20 @@ function updateGrid(force = false, changed = null) {
   )
     return;
 
-  const fc = asBlob ? EMPTY : buildGrid(bb, level);
+  const fc = asBlob ? EMPTY : span(`build ${levelName(level)}`, () => buildGrid(bb, level));
 
-  const paintBlob = () => {
+  const paintBlob = () => span(`blob paint L${level}`, () => {
     blobCoarse = blobCur.paint({
       bb,
       level,
       cells: litSets[level],
+      index: litIndexOf(level),
       colorOf: blobColorOf(level),
       heat: isHeatMode(),
       moving: map.isMoving(),
       changed,
     });
-  };
+  });
 
   if (DEBUG_LEVELS && levelChanged && currentLevel !== null) {
     const how = asBlob && currentAsBlob ? 'canvas dissolve' : 'layer crossfade';
@@ -8202,7 +8949,10 @@ function setMode(next) {
     stopGesture();
     railPaintQueue.length = 0;
     clearSpanHighlight();
+    regionArmed = false;
     setRegionShift(false);
+    paintRegionUi();
+    closeRouteTool();
   }
   setHover(null);
   // Edit mode never asks which route is under the pointer, so one lit on the way
@@ -8218,10 +8968,11 @@ function setMode(next) {
   if (mode === 'edit') {
     warmRegionData();
     updateTiles();
+    paintRegionUi();
     if (pointerOnMap) noteRegionAim(pointerLngLat());
   } else updateBrush();
-  // Shift-drag is the box zoom everywhere else. In edit mode Shift is the
-  // region clear, and the box zoom swallows the click — a press and release
+  // Shift-drag is the box zoom everywhere else. In edit mode Shift highlights
+  // a region, and the box zoom swallows the click — a press and release
   // with no drag never arrives as one — so it is off for as long as editing is.
   syncBoxZoom();
 
@@ -8291,18 +9042,25 @@ function updateModeUi() {
   map.getCanvas().style.cursor = editing ? 'crosshair' : '';
 }
 
+// This runs on every frame of a gesture, and writing a text node — even the
+// text it already holds — invalidates layout around it. Comparing first costs a
+// string compare.
+function setText(el, text) {
+  if (el && el.textContent !== text) el.textContent = text;
+}
+
 function updateHud(level) {
   if (level == null) return;
   if (level === COUNTRY_LEVEL || level === CONTINENT_LEVEL) {
-    hudSize.textContent = level === CONTINENT_LEVEL ? 'Continents' : 'Countries';
-    hudRes.textContent = '—';
+    setText(hudSize, level === CONTINENT_LEVEL ? 'Continents' : 'Countries');
+    setText(hudRes, '—');
   } else {
-    hudSize.textContent = cellSizeKm(level);
-    hudRes.textContent = String(level);
+    setText(hudSize, cellSizeKm(level));
+    setText(hudRes, String(level));
   }
   // What is on the map, which is not the same as what you have the moment a
   // source is switched off in the Type legend. See hiddenSources.
-  hudVisited.textContent = String(visibleCells.size);
+  setText(hudVisited, String(visibleCells.size));
   updateDetailNow(level);
 }
 
@@ -8350,14 +9108,14 @@ const detailNow = document.getElementById('detail-now');
 
 function updateDetailNow(level = currentLevel) {
   if (level == null) return;
-  detailNow.textContent =
+  setText(detailNow,
     level === CONTINENT_LEVEL
       ? 'Showing whole continents'
       : level === COUNTRY_LEVEL
         ? 'Showing whole countries'
         : level === REGION_LEVEL
           ? 'Showing whole regions'
-          : `Showing ${cellSizeKm(level)} cells`;
+          : `Showing ${cellSizeKm(level)} cells`);
   // The same fact, on the map rather than inside a panel you have to open.
   scaleBar.update();
 }
@@ -8597,9 +9355,7 @@ async function switchEngine(key) {
     // Popups hold the map that made them, and their elements are inside the
     // container about to be emptied.
     airportPopup?.remove();
-    railPopup?.remove();
     airportPopup = null;
-    railPopup = null;
     closeRouteStack();
     // The blob layer leaves an `idle` handler and a 2.5-second timer
     // outstanding, both of which reach back for their source. A style swap
@@ -8688,29 +9444,12 @@ function setRailTechnicalOn(on) {
   if (styleReady && railOn) setRailTechnical(map, on);
 }
 
-/** Whether a tap on a railway opens a card, and the cursor says it would. */
-function setRailInteractive(on) {
-  railInteractive = on;
-  try {
-    localStorage.setItem(RAIL_INTERACTIVE_KEY, on ? 'on' : 'off');
-  } catch {
-    /* fine */
-  }
-  if (on) return;
-  // Everything interaction put on screen goes with it, or an overlay that no
-  // longer answers a tap is left holding the last card it opened.
-  railPopup?.remove();
-  clearRailHover();
-}
-
 function syncRailLayer() {
   // A click during initial load or a basemap switch is intentionally deferred;
   // installGrid() calls this again for the newly loaded style.
   if (!styleReady) return;
   if (!railOn) {
     removeRail(map);
-    railPopup?.remove();
-    clearRailHover();
     stopRailDetailPolling();
     showRailTrouble(null);
     return;
@@ -9171,168 +9910,19 @@ function closePhotoInfo() {
   photoInfo?.hide();
 }
 
-// --- What a railway says about itself ------------------------------------------
-// The reason the overlay is vector rather than pixels. Everything shown here is
-// already in the tile that drew the line: OpenRailwayMap's own app answers this
-// with a request to a feature API and a formatting catalogue per click, which is
-// a lot to ask of a server this map is otherwise trying to ask less of.
-let railPopup = null;
-
-/**
- * The way back to the original.
- *
- * Built with textContent and an href, never innerHTML: these are OSM tag values,
- * which is to say strings anyone on the internet can edit.
- */
-function addOsmLink(card, osm) {
-  const a = document.createElement('a');
-  a.href = osm.url;
-  a.target = '_blank';
-  a.rel = 'noopener noreferrer';
-  a.textContent = `View this ${osm.type} on OpenStreetMap`;
-  card.append(a);
-}
-
-/**
- * The topmost thing the overlay drew under a point, or nothing.
- *
- * Scoped to our own layer ids: the basemap draws railways too, and reporting
- * CARTO's idea of a line when the overlay is showing OpenRailwayMap's is the
- * same mistake the layer ordering was fixed for.
- */
-function railFeatureAt(point) {
-  const ids = railLayerIds().filter((id) => map.getLayer(id));
-  if (!ids.length) return null;
-  return map.queryRenderedFeatures(point, { layers: ids })[0] ?? null;
-}
-
-/** Open a card about whatever railway was clicked, and say whether there was one. */
-function showRailInfo(e) {
-  const hit = railFeatureAt(e.point);
-  const info = hit && describeRailFeature(hit);
-  if (!info) return false;
-
-  const card = document.createElement('div');
-  card.className = 'feature-popup';
-  const h = document.createElement('h4');
-  h.textContent = info.title;
-  card.append(h);
-  if (info.subtitle) {
-    const sub = document.createElement('p');
-    sub.className = 'feature-popup-kind';
-    sub.textContent = info.subtitle;
-    card.append(sub);
-  }
-  // One `dl` for both halves. What the tile knew is written now; what their
-  // feature API adds — who runs the station, the code in the timetable, what is
-  // on the platform — is appended to the same list when it arrives, so the card
-  // grows rather than sprouting a second table under the first.
-  const dl = document.createElement('dl');
-  const addRows = (rows) => {
-    for (const [label, value] of rows) {
-      const dt = document.createElement('dt');
-      dt.textContent = label;
-      const dd = document.createElement('dd');
-      dd.textContent = value;
-      dl.append(dt, dd);
-    }
-    dl.hidden = !dl.childElementCount;
-  };
-  addRows(info.rows);
-  card.append(dl);
-
-  // The services that run over it. Not in the tile, so the card opens without
-  // them and fills the list in when the answer arrives — a click should not wait
-  // on a network round trip to show what it already knows. Guarded by the popup
-  // it was opened for, so a fast second click cannot land its routes in the
-  // first one's card.
-  //
-  // A line's tile carries `route_count` and so knows to leave the room; a
-  // station's and a platform's do not, so those ask on spec and the section is
-  // built only if the answer has something in it.
-  if (info.routeCount || info.mayHaveRoutes) {
-    const routes = document.createElement('div');
-    routes.className = 'popup-list';
-    const heading = document.createElement('h5');
-    const plural = (n) => (n === 1 ? '1 route' : `${n} routes`);
-    // The tile's own count until the names arrive, then the count of what is
-    // actually listed — the two differ because a there-and-back pair is two
-    // relations and one line.
-    heading.textContent = info.routeCount ? plural(info.routeCount) : 'Routes';
-    routes.append(heading);
-    // A station in a city centre is on twenty services and the list is taller
-    // than the map. Its own scroller, so the card stays the size of a card and
-    // everything above it — the name, the operator, the code — stays on screen.
-    const list = document.createElement('div');
-    list.className = 'popup-list-items';
-    routes.append(list);
-    routes.hidden = !info.routeCount;
-    card.append(routes);
-    const mine = card;
-    railFeature(info).then(({ rows, routes: found, osm }) => {
-      if (railPopup?.getElement()?.contains(mine) !== true) return;
-      addRows(rows);
-      if (osm && !info.osm) addOsmLink(card, osm);
-      routes.hidden = !found.length;
-      if (found.length) heading.textContent = plural(found.length);
-      for (const route of found) {
-        const line = document.createElement('div');
-        line.className = 'popup-list-row';
-        // The dot is always there, coloured or not. Plenty of OSM route
-        // relations carry no `colour` tag — their API hands those back as an
-        // empty string — and only drawing it for the ones that do left the
-        // labels on a ragged edge, which reads as a rendering fault rather than
-        // as missing data. A hollow dot says "no colour recorded" and keeps the
-        // column straight.
-        const dot = document.createElement('span');
-        dot.className = 'popup-list-dot';
-        if (route.color) dot.style.background = route.color;
-        else dot.classList.add('unknown');
-        line.append(dot);
-        // Two spans so the break lands after the service name rather than
-        // wherever the edge of the card happens to fall — see splitRouteLabel.
-        // textContent throughout: these are OSM relation names, which is to say
-        // strings anyone on the internet can edit.
-        const { name, ends } = splitRouteLabel(route.label);
-        const text = document.createElement('span');
-        text.className = 'popup-list-text';
-        if (name) text.append(`${name} `);
-        const label = document.createElement('span');
-        label.className = 'popup-list-tail';
-        label.textContent = ends;
-        text.append(label);
-        line.append(text);
-        list.append(line);
-      }
-    });
-  }
-  if (info.osm) addOsmLink(card, info.osm);
-
-  railPopup?.remove();
-  railPopup = new gl.Popup({ closeButton: true, maxWidth: '280px' })
-    .setLngLat(hit.geometry?.type === 'Point' ? hit.geometry.coordinates.slice() : e.lngLat)
-    .setDOMContent(card)
-    .addTo(map);
-  draggableCard(map, railPopup, card, t('popup-grip.drag-to-move'));
-  return true;
-}
-
 // --- What runs past here ---------------------------------------------------------
 //
 // The trails card, and the one place where being a raster overlay is visible to
 // somebody using the app rather than only to somebody reading the code.
 //
-// The railway card above opens on a *feature*: the tile that drew the line
-// carries the line, so the tap knows what it hit before it asks anyone. There is
-// no equivalent here. A PNG under the finger proves that some route passes
-// through the neighbourhood and cannot say which, so this asks their API what
-// runs near the point and lists the answers — and the heading says "near here",
-// because that is the question that was actually answered.
+// A PNG under the finger proves that some route passes through the neighbourhood
+// and cannot say which, so this asks their API what runs near the point and
+// lists the answers — and the heading says "near here", because that is the
+// question that was actually answered.
 //
-// It therefore opens *before* the answer arrives and fills in, which the railway
-// card only does for its secondary rows. A card that waited would be a tap with
-// half a second of nothing after it, on the one overlay that cannot show you
-// something instantly.
+// It therefore opens before the answer arrives and fills in. A card that waited
+// would be a tap with half a second of nothing after it, on the one overlay that
+// cannot show you something instantly.
 let trailPopup = null;
 
 // The answer the open card was built from, and the parts of it that get
@@ -9566,74 +10156,26 @@ function trailRow(route, theme) {
   return row;
 }
 
-// --- Which railway the cursor is on --------------------------------------------
-//
-// This used not to exist, and the reason it did not is still the reason it is
-// shaped the way it is: a `queryRenderedFeatures` across 288 layers on every
-// mousemove is a real cost to pay for an affordance. What changed is that the
-// cost is now opted into. Interaction is off by default, so a session that is
-// reading the tracks over its own map never runs a single one of these; a
-// session that has asked for the railways to answer questions gets an answer to
-// "which of these twenty parallel lines am I about to click".
-//
-// Throttled to one query per frame, and skipped mid-gesture, where the answer
-// would be both wasted and wrong by the time it was drawn.
-//
-// **The highlight itself costs nothing of ours.** 171 of the 288 layers already
-// paint a hovered feature differently — that styling came with them and had
-// never been switched on — so what this does is write one feature state and let
-// their style answer it. See setRailHover.
-let railHoverPending = false;
-let railHoverPoint = null;
-
-// Two things can make the cursor a pointer and they do not know about each
-// other: a saved route answers synchronously on the mousemove, a railway a frame
-// later. One place decides, so the later answer cannot clear the earlier one's.
+// What can make the cursor a pointer, and they do not know about each other: a
+// saved route, an airport, a photograph. One place decides, so a later answer
+// cannot clear an earlier one's.
 let pointerOnRoute = false;
-let pointerOnRail = false;
-// And an airport, which answers on the mousemove like a route rather than a
-// frame later like a railway: this is one query over six layers of a point
-// source, not 288 layers of somebody else's style, so there is nothing here to
-// throttle away.
+// An airport is one query over six layers of a point source, so it is answered
+// on the mousemove with the route rather than throttled off.
 let pointerOnAirport = false;
 // And a photograph, on the same terms — three layers over one point source. It
 // only ever matters on a laptop pointed at a phone's server, which is to say
 // almost never, and costing nothing is what makes that fine.
 let pointerOnPhoto = false;
 const syncPointer = () => {
-  // Edit mode owns the cursor for the whole time it is on. This runs a frame
-  // after a railway hover that was already in flight, and clearing the canvas
-  // here handed the pointer back to the map's open hand.
+  // Edit mode owns the cursor for the whole time it is on.
   if (mode === 'edit') {
     map.getCanvas().style.cursor = 'crosshair';
     return;
   }
   map.getCanvas().style.cursor =
-    pointerOnRoute || pointerOnRail || pointerOnAirport || pointerOnPhoto ? 'pointer' : '';
+    pointerOnRoute || pointerOnAirport || pointerOnPhoto ? 'pointer' : '';
 };
-
-function railHoverAt(point) {
-  if (!railInteractive || !railOn || !styleReady || map.isMoving()) return;
-  railHoverPoint = point;
-  if (railHoverPending) return;
-  railHoverPending = true;
-  requestAnimationFrame(() => {
-    railHoverPending = false;
-    if (!railInteractive || !railOn || !styleReady) return;
-    const hit = railFeatureAt(railHoverPoint);
-    setRailHover(map, hit);
-    pointerOnRail = !!hit;
-    syncPointer();
-  });
-}
-
-/** Whatever is lit, unlit — and without asking a map that may no longer hold it. */
-function clearRailHover() {
-  if (styleReady && railOn) setRailHover(map, null);
-  else forgetRailHover();
-  pointerOnRail = false;
-  syncPointer();
-}
 
 const dateShort = new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric' });
 const legendEndLabel = (sec) => (sec ? dateShort.format(new Date(sec * 1000)) : '');
@@ -9919,6 +10461,7 @@ function updateLayersUi() {
   // The picker only means anything in single-color mode, and nothing at all
   // while the cells are hidden — the note takes that slot instead.
   const heat = HEAT_MODES[heatMode];
+  syncMapOpacityUi();
   const colorRow = document.getElementById('color-row');
   colorRow.hidden = isHeatMode() || !cellsOn;
   // The swatch changes when you change basemap, and without a word for it that
@@ -10056,23 +10599,101 @@ menuScroll?.addEventListener('scroll', refreshMenuOverflow, { passive: true });
 // or removes a row.
 if (menuScroll) new ResizeObserver(refreshMenuOverflow).observe(menuScroll);
 
-function setMenuOpen(open) {
-  layersMenu.hidden = !open;
+// What the button last asked for. `hidden` lags it on the way out: the panel
+// stays up for the fade, and reading the attribute in that window would treat
+// a menu that is leaving as one that is still open.
+let menuWantsOpen = false;
+let menuFrame = 0;
+let menuCloseTimer = 0;
+let menuOnDone = null;
+
+/** How long the panel takes to move, or 0 when motion is switched off. */
+function menuMotionMs() {
+  const first = (getComputedStyle(layersMenu).transitionDuration || '0s').split(',')[0].trim();
+  const n = parseFloat(first);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return first.endsWith('ms') ? n : n * 1000;
+}
+
+function detachMenuClose() {
+  cancelAnimationFrame(menuFrame);
+  clearTimeout(menuCloseTimer);
+  if (!menuOnDone) return;
+  layersMenu.removeEventListener('transitionend', menuOnDone);
+  menuOnDone = null;
+}
+
+function settleMenuClosed() {
+  detachMenuClose();
+  layersMenu.classList.remove('is-shown', 'is-closing');
+  layersMenu.hidden = true;
+  document.body.classList.remove('menu-open');
   refreshChrome();
-  if (!open) for (const close of menuClosers) close();
-  // On phones the menu becomes a bottom sheet and the buttons underneath it
-  // get out of the way.
-  document.body.classList.toggle('menu-open', open);
-  if (open) {
-    updateLayersUi();
-    refreshMenuOverflow();
+}
+
+function setMenuOpen(open) {
+  if (open === menuWantsOpen) {
+    // Already there, or the opening frame has been asked for and not painted.
+    if (!open) return;
+    if (layersMenu.classList.contains('is-shown') || !layersMenu.hidden) return;
   }
+  menuWantsOpen = open;
+  detachMenuClose();
+  if (open) {
+    layersMenu.classList.remove('is-closing');
+    layersMenu.hidden = false;
+    // On a phone this is what docks the sheet to the bottom edge. Before the
+    // reveal, so the thing that moves is already the sheet and not the small
+    // panel that then jumps out to full width.
+    document.body.classList.add('menu-open');
+    refreshChrome();
+    updateLayersUi();
+    const reveal = () => {
+      if (!menuWantsOpen) return;
+      layersMenu.classList.add('is-shown');
+      refreshMenuOverflow();
+    };
+    // Same turn when there is nothing to interpolate. Otherwise the closed
+    // pose has to be measured and then painted, and WebKit still drops the
+    // transition if the class lands in the same frame the element came out
+    // of `hidden` — one frame is not always a paint there, so it waits two.
+    if (menuMotionMs() === 0) reveal();
+    else {
+      void layersMenu.offsetWidth;
+      menuFrame = requestAnimationFrame(() => {
+        menuFrame = requestAnimationFrame(reveal);
+      });
+    }
+    return;
+  }
+  for (const close of menuClosers) close();
+  const wasShown = layersMenu.classList.contains('is-shown');
+  layersMenu.classList.remove('is-shown');
+  const ms = wasShown ? menuMotionMs() : 0;
+  if (ms === 0) {
+    settleMenuClosed();
+    return;
+  }
+  // Still the sheet, still in the way of the map, until it has left. A phone
+  // moves `transform` and leaves opacity alone, so either property finishing
+  // is the end of the motion.
+  layersMenu.classList.add('is-closing');
+  menuOnDone = (e) => {
+    if (e.target !== layersMenu) return;
+    if (e.propertyName !== 'opacity' && e.propertyName !== 'transform') return;
+    if (menuWantsOpen) return;
+    settleMenuClosed();
+  };
+  layersMenu.addEventListener('transitionend', menuOnDone);
+  menuCloseTimer = window.setTimeout(() => {
+    if (!menuWantsOpen) settleMenuClosed();
+  }, ms + 50);
 }
 
 function wireLayersControl() {
   layersBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    setMenuOpen(layersMenu.hidden);
+    setMenuOpen(!menuWantsOpen);
   });
   // Click-away closes the menu — but "away" has to be decided when the press
   // lands, not when the click resolves. A control inside the menu that redraws
@@ -10105,7 +10726,7 @@ function wireLayersControl() {
     true,
   );
   document.addEventListener('click', (e) => {
-    if (layersMenu.hidden || pressedInsideMenu) return;
+    if (!menuWantsOpen || pressedInsideMenu) return;
     if (layersMenu.contains(e.target) || layersBtn.contains(e.target)) return;
     setMenuOpen(false);
   });
@@ -10177,7 +10798,6 @@ function wireLayersControl() {
       return;
     }
     setSoloRoute(null);
-    routeInfo?.setSolo(false);
   });
   document.getElementById('trip-chip-clear').addEventListener('click', () => showTrack(null));
   // Sideways on the chip is the day either side of it; downwards on a trip is
@@ -10193,13 +10813,24 @@ function wireLayersControl() {
       (axis === 'x' ? !!dayStep[step] : step < 0 && shownTrack?.kind === 'trip' && !!shownTrack.first),
     onStep: (step, axis) => (axis === 'x' ? showAdjacentDay(step) : showFirstDayOfTrip()),
   });
-  // The chip below, once *Show* has been pressed: sideways is the next
-  // activity. The ends resist, the same as the days. Collapsed it does not
-  // answer — a swipe that showed the first activity would skip the press
-  // that says you meant to.
+  // Sideways on this chip is the next one in its series. While a day's
+  // activity is isolated, that series is the day's. Otherwise — *Showing
+  // only*, *Show all* — it is every workout, earlier on the left and later
+  // on the right, the same direction the day chip takes along the days. The
+  // ends resist. Collapsed ("2 activities · Show") it does not answer: a
+  // swipe that showed the first activity would skip the press that says you
+  // meant to.
   const routeSwipe = mountSwipe(document.getElementById('route-solo'), {
-    can: (step, axis) => axis === 'x' && dayRouteAt >= 0 && !!dayRoutes[dayRouteAt + step],
-    onStep: (step) => { void showDayRoute(dayRouteAt + step); },
+    can: (step, axis) => {
+      if (axis !== 'x' || !step) return false;
+      if (dayRouteAt >= 0) return !!dayRoutes[dayRouteAt + step];
+      if (stackSoloBefore !== undefined) return false;
+      return !!workoutBeside(listedRoutes(), soloRoute, step);
+    },
+    onStep: (step) => {
+      if (dayRouteAt >= 0) { void showDayRoute(dayRouteAt + step); return; }
+      showAdjacentWorkout(step);
+    },
   });
   // The arrows are the same three steps for a hand that has neither a
   // touchscreen nor a trackpad, and they go through the gesture's own path so a
@@ -10218,11 +10849,14 @@ function wireLayersControl() {
   // so by the time a listener on the document heard the key, the map had
   // already panned and `preventDefault` was a sentence too late.
   //
-  // Only while the chip is up, and never over anything that has its own idea
-  // about arrows: a field being typed into, the palette (where they move the
-  // highlighted row), or the photograph card (where they are the next picture).
+  // Only while a chip that steps is up, and never over anything that has its
+  // own idea about arrows: a field being typed into, the palette (where the
+  // arrows move the highlighted row), or the photograph card (where they are
+  // the next picture). The day chip wins when both can move — ↓ is only ever
+  // a trip — except while the route card is open, which is the workout you
+  // are reading, and the arrows then turn its page.
   window.addEventListener('keydown', (e) => {
-    if (!shownTrack || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
     if (!/^Arrow(Left|Right|Down)$/.test(e.key)) return;
     if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable]')) {
       return;
@@ -10230,13 +10864,16 @@ function wireLayersControl() {
     if (!document.getElementById('search-overlay')?.hidden) return;
     if (document.getElementById('photo-info') && !document.getElementById('photo-info').hidden) return;
     const [step, axis] = e.key === 'ArrowLeft' ? [-1, 'x'] : e.key === 'ArrowRight' ? [1, 'x'] : [-1, 'y'];
-    if (!chipSwipe.can(step, axis)) return;
+    const onWorkout = axis === 'x' && routeInfo?.visible?.() && routeSwipe.can(step, axis);
+    const swipe = onWorkout ? routeSwipe : chipSwipe.can(step, axis) ? chipSwipe
+      : (axis === 'x' && routeSwipe.can(step, axis) ? routeSwipe : null);
+    if (!swipe) return;
     // Stopped rather than merely defaulted, so nothing below is asked at all —
-    // a day that steps *and* pans the map underneath it is two answers to one
+    // a chip that steps *and* pans the map underneath it is two answers to one
     // key.
     e.preventDefault();
     e.stopPropagation();
-    chipSwipe.step(step, axis);
+    swipe.step(step, axis);
   }, true);
   document.getElementById('routes-toggle').addEventListener('change', (e) => setRoutesOn(e.target.checked));
   document.getElementById('routes-options-toggle').addEventListener('click', () => {
@@ -10864,8 +11501,12 @@ function installGrid() {
   const beforeRoutes = engine === MAPBOX ? ROUTE_SLOT_ID : beforeLabels;
   // `tolerance` rather than the 0.375 px default, and it is the one thing
   // standing between the glow and a row of spikes — see ROUTE_SIMPLIFY_PX.
+  // `maxzoom` is the finest grid `routesToFC` watches for a return. A finer
+  // tile would be a new edge one piece can leave and come back to, which
+  // Mapbox then draws as a stroke along that edge.
   map.addSource('routes', {
     type: 'geojson', data: EMPTY, promoteId: 'id', tolerance: ROUTE_SIMPLIFY_PX,
+    maxzoom: ROUTE_TILE_ZOOM,
   });
   // Under both of the real ones, and only where there are buildings to hide
   // behind — see ROUTE_GHOST_OPACITY.
@@ -10908,6 +11549,49 @@ function installGrid() {
       'line-opacity': routeLineOpacity(),
       'line-width': routeWidth(1),
     },
+  }, beforeRoutes);
+  // The open route, again, one span at a time, in the colour of the selected
+  // pill. Above the activity-coloured line — both inserted in front of the
+  // same anchor, casing first — and not a tap target. A click is still about
+  // the route underneath, which is what keeps a pile of them a pile.
+  map.addSource('route-metric', { type: 'geojson', data: EMPTY, tolerance: 0 });
+  map.addLayer({
+    id: 'route-metric-casing', type: 'line', source: 'route-metric',
+    layout: { ...lineLayout, ...groundLine },
+    paint: {
+      'line-color': 'rgba(20, 16, 12, 0.85)',
+      'line-width': metricWidth(1.45),
+      'line-opacity': 1,
+    },
+  }, beforeRoutes);
+  map.addLayer({
+    id: 'route-metric-line', type: 'line', source: 'route-metric',
+    layout: { ...lineLayout, ...groundLine },
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': metricWidth(1),
+      'line-opacity': 1,
+    },
+  }, beforeRoutes);
+  // The route a stack row is pointing at, over all of the above — the ramp
+  // included, because the row under the pointer is the question being asked
+  // and the open card's line is the previous answer. See setStackPeek. Simplified
+  // and tiled exactly as the shared source is, so it lies on its own line
+  // rather than beside it.
+  const peeked = stackPeek == null ? null : routeList.find((r) => r.id === stackPeek);
+  map.addSource('route-peek', {
+    type: 'geojson', data: peeked ? routesToFC([peeked]) : EMPTY,
+    tolerance: ROUTE_SIMPLIFY_PX, maxzoom: ROUTE_TILE_ZOOM,
+  });
+  map.addLayer({
+    id: 'route-peek-casing', type: 'line', source: 'route-peek',
+    layout: { ...lineLayout, ...groundLine },
+    paint: { 'line-color': '#000', 'line-width': metricWidth(1.6), 'line-opacity': 1 },
+  }, beforeRoutes);
+  map.addLayer({
+    id: 'route-peek-line', type: 'line', source: 'route-peek',
+    layout: { ...lineLayout, ...groundLine },
+    paint: { 'line-color': '#fff', 'line-width': metricWidth(1), 'line-opacity': 1 },
   }, beforeRoutes);
 
   // Where the trips are measured from. Off by default, and on top of the whole
@@ -11056,6 +11740,33 @@ function installGrid() {
     paint: { 'line-color': SEL_COLOR, 'line-width': 3, 'line-opacity': 0.95 },
   });
 
+  // The drive or the train that has not been confirmed yet. Ends stay up
+  // before the line does, so a second tap has something to aim past.
+  map.addSource('route-draft', { type: 'geojson', data: EMPTY, tolerance: 0 });
+  map.addLayer({
+    id: 'route-draft-halo', type: 'line', source: 'route-draft',
+    filter: ['==', ['geometry-type'], 'LineString'],
+    layout: lineLayout,
+    paint: { 'line-color': SEL_CASING, 'line-width': 7, 'line-opacity': 0.9 },
+  });
+  map.addLayer({
+    id: 'route-draft-line', type: 'line', source: 'route-draft',
+    filter: ['==', ['geometry-type'], 'LineString'],
+    layout: lineLayout,
+    paint: { 'line-color': SEL_COLOR, 'line-width': 3, 'line-opacity': 0.95 },
+  });
+  map.addLayer({
+    id: 'route-draft-ends', type: 'circle', source: 'route-draft',
+    filter: ['==', ['geometry-type'], 'Point'],
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 5, 14, 8],
+      'circle-color': ['match', ['get', 'role'], 'end', TRACK_COLOR, '#ffffff'],
+      'circle-stroke-color': SEL_CASING,
+      'circle-stroke-width': 2,
+    },
+  });
+  syncRouteDraft();
+
   // Repopulate geometry for the new style and restore the current opacities.
   applyColors();
   applyTileVis();
@@ -11063,6 +11774,10 @@ function installGrid() {
   updateTiles();
   updateSelection();
   syncRoutes();
+  // A style rebuild drops HTML markers with the map they were added to. The
+  // scrub survives in the card, so the dot is put back where it was.
+  clearMarker();
+  if ((routeInfo?.scrubIndex() ?? -1) >= 0) placeMetricMarker();
   if (firstInstall) {
     firstInstall = false;
     animateFade(0, 1, 0, 0, 800); // gentle first reveal
@@ -11160,29 +11875,33 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         // under it; otherwise view mode inspects the cell. More than one under
         // the same tap is a question rather than an answer — see showRouteStack.
         const stack = photo ? [] : routesAt(e.point);
-        if (photo) { /* the card is the whole of the tap */ }
+        // The card is already open on this one line. A tap on it moves the
+        // scrub; it does not rebuild the card, and it does not answer a pile.
+        const scrubbing = !photo && routeInfo?.visible() && stack.length === 1
+          && stack[0].id === routeInfo.current()?.id;
+        let scrubbed = false;
+        if (scrubbing) {
+          const samples = routeSamples(stack[0].geom, stack[0].trace);
+          const idx = nearestSample(samples, e.lngLat.lng, e.lngLat.lat);
+          if (idx >= 0) {
+            scrubRoute(stack[0], samples, idx);
+            scrubbed = true;
+          }
+        }
+        if (photo || scrubbed) { /* the card is the whole of the tap */ }
         else if (stack.length > 1) showRouteStack(e, stack);
         else if (stack.length) showRouteInfo(stack[0]);
-        // Then the train tracks, in the same order they are drawn in: a line you
-        // travelled beats reference geometry about where a line exists, and both
-        // beat the ground underneath. Only when the overlay is on *and* has been
-        // asked to answer — a hit test across 288 layers is not worth running
-        // otherwise, and an overlay switched on to look at should not be quietly
-        // taking taps away from the ground it is drawn over.
-        else if (railOn && railInteractive && showRailInfo(e)) { /* the card is the whole of the tap */ }
-        // Then an airport, in the order these are drawn. No switch guarding it,
-        // unlike the railway above: that one is off by default because a hit test
-        // across 288 layers on every tap is a real cost, and this is one query
-        // over six layers of a point source. An icon you can see and cannot tap
-        // is the worse answer when tapping it is nearly free.
+        // Then an airport. One query over six layers of a point source. An icon
+        // you can see and cannot tap is the worse answer when tapping it is
+        // nearly free. The tracks overlay does not take this tap: it is there to
+        // be looked at, and edit mode is what paints along a line.
         else if (airportsOn && showAirportInfo(e)) { /* the card is the whole of the tap */ }
-        // Then the trails, last of the three and for a reason that is not about
-        // drawing order: this one cannot be asked whether it was hit. The other
-        // two answer "nothing there" and stand aside; a raster overlay has no
-        // features to query, so `showTrailInfo` always claims the tap and always
-        // returns true. That is why it is behind a switch that is off by
-        // default — see `trailsInteractive` — and why it sits below everything
-        // that *can* say no.
+        // Then the trails, and for a reason that is not about drawing order: this
+        // one cannot be asked whether it was hit. An airport answers "nothing
+        // there" and stands aside; a raster overlay has no features to query, so
+        // `showTrailInfo` always claims the tap and always returns true. That is
+        // why it is behind a switch that is off by default — see
+        // `trailsInteractive` — and why it sits below everything that *can* say no.
         else if (trailsOn && trailsInteractive && showTrailInfo(e)) { /* the card is the whole of the tap */ }
         // At the three vector levels there are no hexes on screen, so a tap is
         // about the shape it landed on — whether or not you have been to it — and
@@ -11199,10 +11918,26 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       // for the region row to follow. Done before the brush, so a tap that
       // also toggles a cell still names the region it landed in.
       noteRegionAim(e.lngLat);
-      // Shift clears the region. It is not a brush stroke and not a track:
-      // both of those are a run of cells, and this is the shape.
+      // Add is asking for a start or a destination. That tap is the pin, and
+      // the brush, the track, and the region clear all wait until it is done.
+      if (routeOn) {
+        // Once both ends are set, a tap is not a new destination. Moving one
+        // means choosing that row again — Confirm has to survive looking
+        // around the line.
+        if (routeAim) placeRoutePoint(e.lngLat);
+        return;
+      }
+      // The tap while Clear is armed clears the region under the pointer,
+      // whichever one the hover stopped on. Shift does the same once the
+      // mode is up. Neither is a brush stroke.
+      if (regionArmed && !swallowClick && !e.originalEvent?.altKey && !isCtrl(e.originalEvent)) {
+        void confirmArmedRegion(e.lngLat);
+        return;
+      }
+      // Shift, before the mode is up, only arms it. The erase is the tap
+      // after the outline is following the pointer.
       if (e.originalEvent?.shiftKey && !e.originalEvent.altKey && !isCtrl(e.originalEvent)) {
-        void clearRegionAt(e.lngLat);
+        void armClearMode();
         return;
       }
       // Ctrl/Cmd paints and Option erases; the click would toggle the same
@@ -11362,11 +12097,8 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
             setHoveredRoute(under?.id ?? null);
             syncPointer();
           }
-          // And the railway under it, if the overlay has been asked to answer. A
-          // frame behind, and its own half of the cursor — see railHoverAt.
-          railHoverAt(e.point);
           // And an airport, answered here and now: six layers over a point source is
-          // the same order of work as the route test above it, not the railway's.
+          // the same order of work as the route test above it.
           if (airportsOn && styleReady) {
             pointerOnAirport = !!airportFeatureAt(e.point);
             syncPointer();
@@ -11399,7 +12131,6 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       pointerTracked = false;
       takeLeap();
       setHover(null);
-      clearRailHover();
       setHoveredRoute(null);
       updateBrush();
     });
@@ -11475,8 +12206,44 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     document.getElementById(`hud-${kind}-inc`).addEventListener('click', () => stepBrush(kind, 1));
   }
   document.getElementById('hud-region-clear').addEventListener('click', () => {
-    void clearRegion(aimedRegion);
+    if (regionClearing) return;
+    // The button is the mode. On, the outline follows the pointer and a tap
+    // clears that region. On again, the mode goes away.
+    if (regionArmed) {
+      disarmRegion();
+      return;
+    }
+    void armClearMode();
   });
+  paintRegionUi();
+  document.getElementById('hud-route-add').addEventListener('click', () => {
+    if (mode === 'edit') openRouteTool();
+  });
+  document.getElementById('hud-route-cancel').addEventListener('click', closeRouteTool);
+  document.getElementById('hud-route-confirm').addEventListener('click', confirmRoute);
+  for (const which of ['start', 'end']) {
+    const input = routeField(which);
+    input.addEventListener('focus', () => {
+      if (!routeOn) return;
+      routeAim = which;
+      renderRouteTool();
+    });
+    input.addEventListener('input', () => { void onRouteQuery(which); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        clearRouteHits(which);
+        return;
+      }
+      if (e.key !== 'Enter') return;
+      const hit = routeHitList[which][0];
+      if (!hit) return;
+      e.preventDefault();
+      chooseRouteCity(which, hit);
+    });
+    input.addEventListener('blur', () => clearRouteHits(which));
+  }
+  document.getElementById('hud-route-car').addEventListener('click', () => setRouteMode('car'));
+  document.getElementById('hud-route-train').addEventListener('click', () => setRouteMode('train'));
   paintBrushUi();
   // The accent picker. Repainting on every drag frame is the point — you pick
   // the color against the map itself, not against a swatch.
@@ -11484,8 +12251,10 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     button: colorInput,
     panel: document.getElementById('color-panel'),
     value: accent,
+    opacity: false,
     place: () => placeBesideMenu(colorInput, document.getElementById('color-panel')),
     onInput: (hex) => {
+      mapOpacities[heatMode] = mapOpacityNow();
       accent = hex;
       // Against the basemap it was picked on, and only that one. The other
       // stays where its own owner put it.
@@ -11497,33 +12266,38 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       // phone on the old one for good.
       touchPrefs();
       applyColors();
-      // The opacity half of the colour lands on the layers rather than in
-      // them, so the fades have to be re-pinned or dragging the alpha strip
-      // changes nothing until the map next moves.
+      // A color change preserves the independently chosen layer opacity.
       applyFade(fade.cur);
       applyPrevFade(fade.prev);
       repaintAccent();
     },
   });
 
+  document.getElementById('map-opacity').addEventListener('input', (event) => {
+    mapOpacities[heatMode] = Number(event.target.value) / 100;
+    syncMapOpacityUi();
+    touchPrefs();
+    applyFade(fade.cur);
+    applyPrevFade(fade.prev);
+  });
+  document.getElementById('map-opacity').addEventListener('change', () => pushPrefs());
   wireLayersControl();
 
-  cellInfo = mountCellInfo({ onClose: () => closeCellInfo() });
+  cellInfo = mountCellInfo({ onClose: () => closeCellInfo(), loadDates: info => auth.getVisitDates(info, hiddenSources) });
   routeInfo = mountRouteInfo({
     onClose: () => closeRouteInfo(),
     onZoom: zoomToRoute,
+    onMetric: () => paintMetricLayer(),
+    onScrub: (index) => {
+      const route = routeInfo?.current();
+      if (route) scrubRoute(route, index);
+    },
     // Everything that changes a route lives in one place now; the card hands
     // over to it rather than being a second editor.
     onMore: (route) => {
       closeRouteInfo();
       stats.openRoute(routeList.find((r) => r.id === route.id) ?? route);
     },
-    // Toggle: a second press on an already-isolated route puts the rest back.
-    onOnly: (route) => {
-      setSoloRoute(soloRoute === route.id ? null : route.id);
-      routeInfo?.setSolo(soloRoute === route.id);
-    },
-    isSolo: (route) => soloRoute === route.id,
   });
   // Mounted whether or not this is the app: the markup is in the page either
   // way, and a card nothing can open costs one query per element. Making it
@@ -11667,8 +12441,6 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     onGroup: (key, on) => setRailGroupOn(key, on),
     technical: () => railTechnicalOn,
     onTechnical: (on) => setRailTechnicalOn(on),
-    interactive: () => railInteractive,
-    onInteractive: (on) => setRailInteractive(on),
   });
   const airportsUi = mountAirports({
     groups: () => airportGroupsChosen,
@@ -11727,10 +12499,12 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     },
     snowPossible: () => engine === MAPBOX,
     whatsNew: () => bannerMode(),
-    onWhatsNew: (mode) => {
+    onWhatsNew: async (mode) => {
       setBannerMode(mode);
       touchPrefs();
-      pushPrefs();
+      whatsNewUi?.hide();
+      await pushPrefs();
+      await whatsNewUi?.show({ quiet: true });
     },
     locales: () => LOCALES,
     locale: () => locale(),
@@ -11862,9 +12636,11 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     onRoute: async (route) => {
       if (!routesOn) setRoutesOn(true);
       if (!routeGeom) await loadRoutes(true);
-      setSoloRoute(route.id);
-      zoomToRoute(route);
-      showRouteInfo(routeList.find((r) => r.id === route.id) ?? route);
+      // The card first, so the flight can measure it. A hidden card has no
+      // height, and the line would be framed into the space the card then covers.
+      const found = routeList.find((r) => r.id === route.id) ?? route;
+      showRouteInfo(found);
+      zoomToRoute(found);
     },
     // However it was opened — the button or Cmd-K — the trips fill in behind
     // the field rather than in front of it. Deriving them is a sweep of the map
@@ -12086,12 +12862,12 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       stats.close();
       if (!routesOn) setRoutesOn(true);
       if (!routeGeom) await loadRoutes(true);
-      // Isolated by default: coming from the list you picked one route out of
-      // eighty-two, and dropping it into all eighty-two is not showing it to
-      // you. The chip on the map puts the others back.
-      setSoloRoute(route.id);
-      zoomToRoute(route);
-      showRouteInfo(routeList.find((r) => r.id === route.id) ?? route);
+      // The card first, for the same reason Search does: the flight has to see
+      // the menu it is keeping the line out from under. Isolation comes with
+      // the card.
+      const found = routeList.find((r) => r.id === route.id) ?? route;
+      showRouteInfo(found);
+      zoomToRoute(found);
     },
     // A trip is ground, not a line: there is nothing to select, so showing one
     // means drawing its track and framing it. The chip names it, because the
@@ -12135,32 +12911,21 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
     stats.open();
   });
 
-  // "Your map has grown" — and the one press it offers goes to the panel that
-  // says by how much, which is the only thing anybody would want next.
+  // News is computed and consumed by the server; the action opens the activity
+  // it names, or the statistics when there is more than one thing to show.
   whatsNewUi = mountWhatsNew({
-    stats: () => derived.stats(),
-    routes: () => routeList,
-    // "Show me" means show me the thing the sentence was about. When that is a
-    // single workout there is somewhere specific to go, and stopping at the list
-    // to make you pick the only entry in it is a step that answers nothing. Any
-    // more than one and the list *is* the answer, so it opens as it always did.
-    //
-    // routeList is newest first, which is what makes finding the one worth
-    // opening a search rather than a comparison: a workout that has just arrived
-    // is the latest one the phone recorded.
-    onOpenStats: (newWorkouts) => {
+    load: (quiet) => auth.whatsNew(quiet),
+    ready: () => authed && announcementsReady && bannerMode() !== 'never',
+    onOpenStats: async (newActivities, ids) => {
       setMenuOpen(false);
-      const only = newWorkouts === 1 ? routeList.find((r) => r?.source === HEALTH_SOURCE) : null;
-      if (only) stats.openRoute(only);
-      else stats.open();
-    },
-    // Straight up rather than on the debounce. The point of a shared baseline is
-    // that the device you pick up *next* stays quiet, and next can be a minute
-    // away — a push still sitting in a timer when the phone comes out of a
-    // pocket is the duplicate this exists to stop.
-    onSeen: () => {
-      touchPrefs();
-      pushPrefs();
+      if (newActivities === 1) {
+        try {
+          const routes = await auth.getRoutes(false);
+          const only = routes.find(route => String(route.id) === String(ids[0]));
+          if (only) { stats.openRoute(only); return; }
+        } catch { /* The activities panel can still open from cached data. */ }
+      }
+      stats.open();
     },
   });
 
@@ -12187,10 +12952,13 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
         }
       });
     }));
-  onMapBuilt(() => map.on('moveend', () => {
+  onMapBuilt(() => map.on('moveend', () => span('moveend', () => {
       updateGrid();
       updateTiles();
-    }));
+    })));
+  // ?perf only: how the frames of each gesture were spaced. See src/perf.js.
+  onMapBuilt(() => map.on('movestart', gestureStart));
+  onMapBuilt(() => map.on('moveend', gestureEnd));
   onMapBuilt(() => map.on('resize', () => {
       updateGrid();
       updateTiles();
@@ -12318,6 +13086,9 @@ const authState = mountAuth({
     // `paintHeldForPrefs`. The cells still load, the routes still load; it is
     // only the paint that waits, so this costs a fetch rather than a render.
     paintHeldForPrefs = true;
+    // Up for the whole of it, not just the fetch: on a large map the roll-up
+    // after the rows arrive is the longer half.
+    const loading = busy('Loading your map…');
     try {
       await hydrateVisited();
       await loadRoutes(routesOn);
@@ -12326,15 +13097,21 @@ const authState = mountAuth({
       await syncPrefs();
     } finally {
       paintHeldForPrefs = false;
-      // The first paint, now in the right colour. The same tail
-      // `hydrateVisited` runs, because its own call was the one held —
-      // `recomputeLit` included, since adopting preferences can change the
-      // colour *mode* and the ranges are computed per mode.
-      recomputeLit();
-      updateGrid(true);
-      updateTiles();
-      updateHud(currentLevel);
+      // The first paint, now in the right colour — and the only roll-up of the
+      // sign-in: `hydrateVisited` leaves it to this one while the paint is
+      // held, since adopting preferences can change the colour *mode* and the
+      // ranges are computed per mode. Sliced, so the fly-in keeps its frames.
+      try {
+        await recomputeLitSliced();
+        updateGrid(true);
+        updateTiles();
+        updateHud(currentLevel);
+      } finally {
+        loading();
+      }
     }
+    // Now the map is up, and not before: see warmAreaMemos.
+    warmAreaMemos();
     // Only for the menu's status line — the sync itself runs on the server
     // whether or not this page is open.
     homeAssistant?.refresh();
@@ -12344,29 +13121,10 @@ const authState = mountAuth({
     // Coming back from Strava's OAuth redirect reopens the dialog on the result.
     if (!(await stravaUi?.handleReturn())) stravaUi?.refresh();
 
-    // What changed since this last said anything.
-    //
-    // Last, and deliberately not awaited by anything above it: the coverage
-    // sweep is the one reading here that can take a moment on a large map, and
-    // the banner is the least urgent thing on the screen. Nothing waits for it,
-    // and a map that has finished drawing before the line appears is the right
-    // order — the map is what you came for.
-    //
-    // The failure is silence. `loadStats` throws where the other readings
-    // swallow (see src/derived.js), because the Statistics panel has somewhere
-    // to put the reason and this does not: a banner that cannot be computed
-    // simply does not appear, and the baseline stays where it was so the next
-    // open can still report whatever happened in between.
-    try {
-      await derived.loadStats();
-      // Quiet on a first run: the introduction is on screen, and a line saying
-      // how much the map has grown is a strange thing to tell somebody who has
-      // not yet been told what the map is. The baseline still moves — see the
-      // note on `show` — so tomorrow reports today rather than everything.
-      whatsNewUi?.show({ quiet: introShowing });
-    } catch {
-      /* no coverage answer, no banner, and no baseline moved */
-    }
+    // Optional news does not wait for a client-side coverage request. A failed
+    // check stays quiet and is retried while the map is visible.
+    announcementsReady = true;
+    whatsNewUi?.show({ quiet: introShowing });
     // Whatever was on the stack was somebody else's map, or this one before it
     // was re-read from the server. Either way there is nothing here to take
     // back any more.
@@ -12393,6 +13151,7 @@ const authState = mountAuth({
     // describes their map and would otherwise make the next account's first
     // open report the difference between two strangers' maps.
     forgetSnapshot();
+    announcementsReady = false;
     whatsNewUi?.hide();
     // …and the copies the service worker keeps of the same answers, which are
     // filed under URLs that say nothing about whose account they describe.
@@ -12414,6 +13173,8 @@ const authState = mountAuth({
     accents.light = DEFAULT_ACCENT;
     accents.dark = DEFAULT_ACCENT;
     accent = DEFAULT_ACCENT;
+    mapOpacities = {};
+    syncMapOpacityUi();
     colorPicker?.set(accent);
     applyColors();
     try {
@@ -12423,6 +13184,7 @@ const authState = mountAuth({
       localStorage.removeItem(CLOCK_KEY);
       localStorage.removeItem(COLOR_KEY);
       localStorage.removeItem(COLORS_KEY);
+      localStorage.removeItem(MAP_OPACITIES_KEY);
     } catch {
       /* fine */
     }

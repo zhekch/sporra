@@ -31,6 +31,7 @@
 // queued simply never happens.
 
 import { formatTime } from './clock.js';
+import { nativePixelRatio } from './phone.js';
 import { STRIP_CHUNK, photoImage, playVideo, viewPhoto } from './photos.js';
 
 const dayFmt = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
@@ -337,7 +338,7 @@ export function mountPhotoInfo({ onClose } = {}) {
     // The card's own width, in real pixels. Asked for at the moment of use
     // rather than once at mount: a phone rotates, and the card is a percentage
     // of the viewport.
-    const px = Math.round(figure.clientWidth * (globalThis.devicePixelRatio || 1)) || 640;
+    const px = Math.round(figure.clientWidth * nativePixelRatio()) || 640;
     const reply = await photoImage(item.i, px);
     if (mine !== picking) return;
     figure.classList.remove('loading');
@@ -387,7 +388,7 @@ export function mountPhotoInfo({ onClose } = {}) {
   async function fillThumb(button, at, mine) {
     if (button.dataset.filled) return;
     button.dataset.filled = '1';
-    const px = Math.round(THUMB_PX * (globalThis.devicePixelRatio || 1));
+    const px = Math.round(THUMB_PX * nativePixelRatio());
     const reply = await photoImage(items[at].i, px);
     if (mine !== showing) return;
     if (!reply.ok) {

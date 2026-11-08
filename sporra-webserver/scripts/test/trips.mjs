@@ -13,7 +13,7 @@
 
 import {
   buildTrips, nameTrips, findHome, activeDays, dayDetail, dayCells, tripDays, dayKey, distanceKm,
-  longestStreak, nextRecordedDay,
+  longestStreak, nextRecordedDay, workoutBeside,
 } from '../../src/trips.js';
 import { cellCenter, project } from '../../src/hexgrid.js';
 
@@ -665,6 +665,30 @@ console.log('\nthe day either side of a day');
   check(nextRecordedDay(recorded, '2026-07-07', 1) === '2026-07-13', 'and one after it');
   check(nextRecordedDay([], '2026-07-06', 1) === null, 'an empty history is not a crash');
   check(nextRecordedDay(recorded, '', 1) === null, 'and neither is stepping from nowhere');
+}
+
+console.log('\nthe workout either side of a workout');
+{
+  // What the *Showing only* chip steps through. Undated rides take the clock
+  // they were added on, and two that share a start are ordered by id.
+  const rides = [
+    { id: 3, firstAt: 200, addedAt: 3, name: 'c' },
+    { id: 1, firstAt: 100, addedAt: 1, name: 'a' },
+    { id: 5, firstAt: 200, addedAt: 9, name: 'e' },
+    { id: 2, firstAt: 0, addedAt: 150, name: 'b' },
+    { id: 4, firstAt: 200, addedAt: 4, name: 'd' },
+  ];
+  const order = rides.map((r) => r.id).join(',');
+  const name = (id, step) => workoutBeside(rides, id, step)?.name ?? null;
+  check(name(2, -1) === 'a', 'earlier is the one that happened before', name(2, -1));
+  check(name(2, 1) === 'c', 'later is the one that happened after', name(2, 1));
+  check(name(1, -1) === null, 'the oldest has nothing before it');
+  check(name(5, 1) === null, 'the newest has nothing after it');
+  check(name(3, 1) === 'd' && name(4, 1) === 'e', 'a shared start is broken by id');
+  check(name(2, 0) === null, 'standing still is not a step');
+  check(workoutBeside(rides, 99, 1) === null, 'a route that is not in the list has no neighbour');
+  check(workoutBeside([], 1, 1) === null, 'an empty list is not a crash');
+  check(rides.map((r) => r.id).join(',') === order, 'asking does not reorder the list it was handed');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

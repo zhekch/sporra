@@ -659,8 +659,7 @@ export function describeTrail(route, theme) {
     // The way back to the original. Their own site is the better page to land on
     // — it has the elevation profile and the map — but it is a single-page app
     // whose deep links are its own business and not something to hard-code from
-    // out here. The relation on OpenStreetMap is the durable address, and it is
-    // the same link the railway card offers for the same reason.
+    // out here. The relation on OpenStreetMap is the durable address.
     osm: `https://www.openstreetmap.org/relation/${route.id}`,
   };
 }

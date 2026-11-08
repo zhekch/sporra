@@ -1,5 +1,4 @@
-// The Train tracks section of the Map layers page: what the overlay draws, and
-// whether it answers a tap.
+// The Train tracks section of the Map layers page: what the overlay draws.
 //
 // These used to be a disclosure inside the layers menu, folded under the switch
 // that turns the overlay on. That was the right place for two checkboxes and the
@@ -14,7 +13,7 @@
 //
 // **It used to be a dialog of its own** and is now a section of one — see
 // src/map-layers-ui.js for why the page of doors went away. Nothing about what
-// is wired changed: the same three ids, the same three callbacks. What went is
+// is wired changed: the same two ids, the same two callbacks. What went is
 // the overlay, its Back and Done, and the Escape handler, all of which now
 // belong to the page this draws into.
 
@@ -42,16 +41,13 @@ const GROUP_NOTES = {
  * @param {(key: string, on: boolean) => void} opts.onGroup
  * @param {() => boolean} opts.technical
  * @param {(on: boolean) => void} opts.onTechnical
- * @param {() => boolean} opts.interactive
- * @param {(on: boolean) => void} opts.onInteractive
  */
 export function mountRail({
-  groups, onGroup, technical, onTechnical, interactive, onInteractive,
+  groups, onGroup, technical, onTechnical,
 }) {
   const $ = (id) => document.getElementById(id);
   const list = $('rail-groups');
   const technicalBox = $('rail-technical');
-  const interactiveBox = $('rail-interactive');
 
   /**
    * The group checkboxes, once there is a style loaded to name the groups.
@@ -94,16 +90,14 @@ export function mountRail({
    */
   function draw() {
     technicalBox.checked = !!technical?.();
-    interactiveBox.checked = !!interactive?.();
     drawGroups();
-    // Never fatal, and never awaited: the two switches here are settings of ours
-    // and work whether or not their style ever arrives. If it does, the list
-    // fills in underneath.
+    // Never fatal, and never awaited: the switch here is a setting of ours and
+    // works whether or not the style ever arrives. If it does, the list fills in
+    // underneath.
     loadRailStyle().then(drawGroups).catch(() => {});
   }
 
   technicalBox.addEventListener('change', () => onTechnical?.(technicalBox.checked));
-  interactiveBox.addEventListener('change', () => onInteractive?.(interactiveBox.checked));
 
   return { draw };
 }

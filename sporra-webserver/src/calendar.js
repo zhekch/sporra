@@ -13,8 +13,7 @@
 
 import { dayKey, tripDays } from './trips.js';
 
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+import { MONTHS, WEEKDAYS } from './calendar-data.js';
 
 export { MONTHS };
 

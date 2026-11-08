@@ -1,3 +1,4 @@
+import { cellFixtures } from './cell-fixtures.mjs';
 // Closing an account, through the real HTTP API.
 //
 // Two things are being checked, and the second is the one that will still be
@@ -69,7 +70,7 @@ async function api(method, url, body, who = 'a') {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
       ...(jar.has(who) ? { Cookie: jar.get(who) } : {}),
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: body ? JSON.stringify(cellFixtures(body)) : undefined,
   });
   const setCookie = res.headers.get('set-cookie');
   if (setCookie) jar.set(who, setCookie.split(';')[0]);
@@ -160,6 +161,9 @@ try {
     .run(doomedId, '["8/4/9"]', new Date().toISOString());
   db.prepare('INSERT INTO cell_sets(user_id, data, updated_at) VALUES(?, ?, ?)')
     .run(bystanderId, '["8/9/4"]', new Date().toISOString());
+
+  await api('POST', '/api/whats-new', {quiet:true});
+  db.prepare('INSERT INTO user_announcements(user_id,snapshot) VALUES(?,?)').run(bystanderId, '{}');
 
   const before = rowsFor(doomedId);
   const emptyBefore = Object.entries(before).filter(([, n]) => !n).map(([t]) => t);

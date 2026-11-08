@@ -35,7 +35,7 @@ import Photos
 ///
 /// ## Uploading is not the same decision as looking
 ///
-/// The map's photo overlay reads the same library through ``PhotoBridge``, and
+/// The map's photo overlay reads the same library through the native map, and
 /// it does not consult the switch below. Wanting to see where your photographs
 /// were taken and wanting the places they were taken to become part of your map
 /// are two different questions, and only one of them is asked here.

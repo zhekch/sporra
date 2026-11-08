@@ -136,5 +136,55 @@ console.log('\nterrainStyle() end to end');
   }
 }
 
+// A zoom crossing swaps the two washes without covering activity colours.
+console.log('\nregion and country restacking');
+{
+  const main = readFileSync(new URL('../../src/main.js', import.meta.url), 'utf8');
+  const body = main.match(/function raiseVectorLayers\(sfx\) \{([\s\S]*?)\n\}/)?.[1];
+  const vecIds = ['hex-fill', 'hex-bound-glow', 'hex-bound-line', 'hex-label'];
+  for (const slotted of [false, true]) {
+    const washBefore = slotted ? '@sporra-wash' : 'road';
+    let layers = [
+      ...['-prev', ''].flatMap((suffix) => vecIds.slice(0, 3).map((id) => ({
+        id: `${id}${suffix}`, slot: slotted ? 'bottom' : undefined,
+      }))),
+      { id: 'road' }, { id: 'route-glow-1' }, { id: 'route-line' },
+      { id: 'hex-label-prev' }, { id: 'hex-label' },
+      { id: 'trip-glow' }, { id: 'home-icon' },
+    ];
+    const map = {
+      getLayer: (id) => layers.find((layer) => layer.id === id),
+      moveLayer(id, before) {
+        const layer = this.getLayer(id);
+        layers = layers.filter((item) => item.id !== id);
+        let at = before ? layers.findIndex((item) => item.id === before) : layers.length;
+        if (slotted && layer.slot) {
+          // Slot contents render together, preserving order within the slot.
+          at = layers.findLastIndex((item) => item.slot === layer.slot) + 1;
+        }
+        layers.splice(at, 0, layer);
+      },
+    };
+    const raise = new Function('map', 'VEC_LAYERS', 'VEC_ANCHOR', 'vecInsertBefore',
+      'isSlot', `return function(sfx) {${body}}`)(
+      map, vecIds, 'trip-glow', washBefore, (id) => id === '@sporra-wash');
+    const index = (id) => layers.findIndex((layer) => layer.id === id);
+    for (const suffix of ['-prev', '', '-prev']) {
+      raise(suffix);
+      const other = suffix === '' ? '-prev' : '';
+      const label = `${slotted ? 'Mapbox' : 'MapLibre'} ${suffix || 'current'}`;
+      check(index(`hex-fill${suffix}`) > index(`hex-bound-line${other}`),
+        `${label}: incoming wash composites above outgoing wash`);
+      check(['', '-prev'].every((sfx) => vecIds.slice(0, 3).every((id) =>
+        index(`${id}${sfx}`) < index('route-glow-1') &&
+        index(`${id}${sfx}`) < index('route-line'))),
+        `${label}: both washes stay below activity routes`);
+      check(index(`hex-label${suffix}`) > index('road') &&
+        index(`hex-label${suffix}`) < index('trip-glow'),
+        `${label}: continent labels stay above the basemap and below the trip`);
+    }
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

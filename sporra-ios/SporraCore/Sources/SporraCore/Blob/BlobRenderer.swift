@@ -221,6 +221,9 @@ public final class BlobRenderer {
         // Keep ARC from reaping the pair mid-flight on a debug build.
         front = nil
         back = nil
+        // iOS can reject GPU work as the app enters the background. Failed
+        // commands do not contain a valid image and must remain retryable.
+        guard commands.status == .completed else { return nil }
         return output
     }
 
@@ -241,9 +244,10 @@ public final class BlobRenderer {
         guard !discs.isEmpty else { return }
 
         encoder.setRenderPipelineState(discPipeline)
-        encoder.setVertexBytes(
-            discs, length: MemoryLayout<BlobDisc>.stride * discs.count, index: 0
-        )
+        // setVertexBytes is limited to 4 KB; real viewports contain thousands of cells.
+        let byteCount = MemoryLayout<BlobDisc>.stride * discs.count
+        guard let buffer = device.makeBuffer(bytes: discs, length: byteCount, options: .storageModeShared) else { return }
+        encoder.setVertexBuffer(buffer, offset: 0, index: 0)
         var sheetSize = SIMD2<Float>(Float(size.width), Float(size.height))
         encoder.setVertexBytes(&sheetSize, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
         encoder.drawPrimitives(

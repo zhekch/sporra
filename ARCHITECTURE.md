@@ -10,6 +10,115 @@ An interactive world map covered by a hexagonal grid tied to real geographic
 coordinates, rendered with MapLibre GL on a dark basemap with a visionOS-style
 glass look. Click hexagons to mark places you've visited.
 
+## Native Swift iOS interface
+
+The iOS application now enters `NativeStore` and `NativeMapScreen` from
+`ContentView`. The previous web-host descriptions below document the browser
+and the retained compatibility adapters; `WebPanel` is no longer in the iOS
+view hierarchy. Flutter and Pigeon are not linked by the Swift app target.
+The Flutter source remains in place as the migration reference.
+
+`Sporra/Native/` holds SwiftUI forms, navigation, sheets, colour pickers,
+UICalendarView, annual Charts, and native import/share/authentication flows.
+`NativeMapController` uses MapLibre 6.28.0 for free basemaps and Mapbox 11.32.0
+for Standard/Standard Satellite with a public account token. SDK versions are
+pinned in Package.resolved. Device/Health/photo services and the background
+launch delegate are retained. The macOS web host has not migrated.
+
+The server remains the authority for cells and colours, regional fills, trips,
+recorded days, coverage, activity samples, graphs, palettes, and import parsing.
+The Swift client consumes the existing render API; there is no second Swift
+implementation of the visit or trip heuristics and no new backend protocol.
+Strava continues to request `native: true` and uses the existing
+`sporra-flutter` OAuth callback scheme for server compatibility.
+
+`ServerAPI` is an actor: JSON decoding and requests stay outside the main actor.
+It uses the same persistent HTTPCookieStorage as background SyncClient. Request
+generations cancel obsolete server/account work, and the uploader rejects
+acknowledgements from a forgotten session. URLCache is bounded to 32 MB memory
+and 256 MB disk per server/account, alongside the offline store in Application Support. Offline startup restores a server-scoped account snapshot before checking
+`/api/me` in the background. External public resources use a
+separate session without account cookies; authenticated URLs must match the
+configured server's origin. Same-origin rail sprites use the authenticated API.
+Preference writes are serialised and colour/switch changes coalesce for 250 ms.
+Signing out clears the current account cache, cookies, queued fixes, and Health
+anchor. Camera/basemap preferences are local and scoped by server/account.
+
+`SporraCore` is linked again. `NativeBlobPainter` turns server cell centres into
+georeferenced image sources through its Metal blur/cut/feather pipeline. Map
+reads are viewport-bounded, padded 15% on each side, and debounced 100 ms. Image
+sides are bounded to 1,600 pixels. Request generations discard obsolete paint
+results. Vertex data uses a Metal buffer instead of setVertexBytes: the latter
+accepts at most 4 KB and cannot represent a real map's cell population. Rail
+match/case colours and dash arrays are split into native-compatible layers.
+
+Verification from the repository root:
+
+```sh
+xcodebuild -project sporra-ios/Sporra.xcodeproj -scheme Sporra \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath /tmp/sporra-native-build CODE_SIGNING_ALLOWED=NO build
+node sporra-ios/Tools/test-native.mjs
+sporra-ios/Tools/test-core.sh
+```
+
+The native API check compiles the actual Swift networking and rail adapter
+sources, starts the real Node server with a disposable database, and exercises
+registration, persistent cookies, preferences, paint/undo, reviewed imports,
+server graphs, account cache separation, origin checks, and logout. It never
+opens the personal database. The core tests include a 600-cell regression for
+the Metal vertex-buffer limit. Run `npm test` in `sporra-webserver/` as well.
+A successful generic simulator build does not exercise the UI or device-only
+permissions. This migration was compiled for arm64/x86_64 simulator, with API
+and macOS Metal checks; visual/device QA still requires an installed simulator
+runtime or iPhone. The current machine has no installed iOS simulator runtime.
+
+### Persistent offline access (iOS 0.20.0)
+
+URLCache is only an HTTP optimisation; it is no longer the offline contract.
+`ServerAPI` persists successful allowlisted JSON reads and basemap style/sprite
+resources as atomic files plus an index under Application Support/SporraNative,
+scoped by a SHA-256 of the canonical origin and username. Responses are bounded
+to 256 MB/1,024 entries per account, independent of HTTP freshness headers. Query
+keys are ordered canonically. A world cell/region snapshot can satisfy a later
+viewport query; cell projection culls that snapshot to the padded viewport before
+sending discs to Metal. Successful writes invalidate HTTP validators without
+discarding the last offline readings. Explicit cache clearing removes responses.
+
+A separate atomic snapshot stores the last successful account, preferences, and
+pending preference patch for each server. Startup restores that snapshot and
+opens the map before networking. Five-second JSON requests fall back on saved
+responses for connection failures and server 5xx responses. Cached-only reads
+are immediate after a failure. A server 401 remains a distinct authentication
+failure; the store preserves local browsing and requests reauthentication instead
+of throwing away the saved account. Explicit sign-out cancels obsolete work,
+removes the snapshot and private response files, and clears the upload session.
+
+Foreground entry, a one-minute timer, and Retry probe `/api/me` without a cache.
+Only a verified matching account re-enables online access, merges pending
+preferences with fresh server preferences, and refreshes the screen. Background
+preparation saves map geometry for all nine levels at the current appearance,
+plus activity geometry, calendar/trip/statistics/source summaries. Automatic preparation
+is limited to once per 15 minutes within a session; manual refresh and successful
+sync can force it. Detailed reads
+are saved as they are opened. Missing offline content reports that it has not
+been saved; mutations are never reported as successful without the server.
+
+MapLibre opens a persisted style file, allowing its ambient tile cache to supply
+previously viewed basemaps. Offline Mapbox falls back to the native 2D renderer;
+a neutral local style keeps cached overlays available even if no basemap style
+was saved. Tile regions are not proactively downloaded: offline availability of
+street/satellite context is limited to the map SDK's cached tiles. New geographic
+areas and uncached detail still need a connection. The existing device-fix queue
+continues working independently of the foreground's offline state.
+
+`Tools/test-native.mjs` now also seeds a disposable account, stops the Node
+server, and starts a fresh Swift process against the saved cache. It verifies
+persistent identity, offline reads, changed viewport keys, pending preferences,
+missing-content errors, mutation refusal, account separation, and explicit purge.
+It separately checks that an expired session returns a real 401 while retaining
+the local snapshot.
+
 ## How it works
 
 - **Startup view**: the viewer's approximate **IP-based location** (fetched
@@ -39,17 +148,33 @@ glass look. Click hexagons to mark places you've visited.
   step through `BRUSH_STEPS` (1, 3, 8, 15, …, each remembered on this
   browser). A tap uses whichever the cell under the pointer calls for, and
   Ctrl paints and Option erases at their own sizes for the whole sweep. Shift
-  clears every visited cell in the **region** under the pointer — the canton,
-  the county, the province — and the panel names that region and offers the
-  same clear. The outline of the region is what Shift puts on the map: the
-  brush circle is a disk of cells, and this edit is a shape, so the circle
-  steps aside while Shift is down. Shift-drag is the box zoom on the rest of
-  the map; while editing it is off, because that gesture swallows a Shift-click
-  before it can become one. It is one undo, the same as a stroke. A
-  country the dataset never subdivided is its own region, which is the same
-  stand-in the region level already draws. A tap
+  highlights the **region** under the pointer — the canton, the county, the
+  province — and the panel names that region. **Clear**, or a Shift-click,
+  arms a pick: the highlight follows the pointer onto any region, and the tap
+  clears the one it lands on. Pressing Clear again puts the pick away. The
+  outline is the shape about to be cleared: the brush circle is a disk of
+  cells, so the circle steps aside while the highlight is up. Shift-drag is the box zoom
+  on the rest of the map; while editing it is off, because that gesture
+  swallows a Shift-click before it can become one. The erase is one undo,
+  the same as a stroke. A country the dataset never subdivided is its own
+  region, which is the same stand-in the region level already draws. A tap
   on a **track**, when that overlay is on, paints the cells the line touches
-  from the previous station or junction to the next. A halt or a stop position
+  from the previous station or junction to the next. **Add** asks for a start
+  and a destination — a city typed from the gazetteer already in the app, or
+  a tap on the map — and whether the trip is by car or by train.
+  The line is drawn first; Confirm paints the cells it crosses, one undo, the
+  same as a track. Car routes come from the FOSSGIS OSRM server
+  (`routing.openstreetmap.de`, full geometry, one request at a time, with the
+  OpenStreetMap credit the map already carries and a link on the panel). Train
+  routes come from Transitous (`api.transitous.org`), rail only — long-distance,
+  regional, suburban and metro. A station within four kilometres of the point
+  counts, so a city centre still finds its station, and the line that is drawn
+  is the train between those stations. The panel links to their sources. A coach is not a train: asking for
+  every public mode returned the bus that arrives soonest, drawn along the
+  street, so a bus or coach leg is refused. A direct walk is not asked for:
+  that server would otherwise drop a train that loses to it.
+  Both are fetched by this server, with a User-Agent that names Sporra, rather
+  than by the page. A halt or a stop position
   is not an end, and neither is the OSM way boundary in the middle of a
   straight line, nor a second track running alongside — the switch that joins
   the two rails of a double line is not a choice of route. In
@@ -134,10 +259,11 @@ glass look. Click hexagons to mark places you've visited.
 - **Antimeridian**: the column count is integer and even at every level, so
   the grid wraps seamlessly at ±180°; cell ids are canonicalized so the same
   cell matches across world copies.
-- **Performance**: colored regions are built by iterating only the marked
-  cells (not the viewport), so region rendering stays proportional to what
-  you've marked at any zoom. The edit cursor is a circle in the page, so a
-  pointer move never rebuilds region geometry either.
+- **Performance**: the blob paint asks `src/cell-index.js` which marked cells
+  are near the sheet, rather than walking all of them, so a repaint costs what
+  is on screen and not what is stored — see [On a phone, less of
+  everything](#on-a-phone-less-of-everything). The edit cursor is a circle in
+  the page, so a pointer move never rebuilds region geometry either.
 - **Visited cells**: clicks resolve to a cell mathematically (hex
   point-location), so toggling works at any zoom, on boundaries and gaps.
   Marks **propagate upward** — a coarse cell lights up if it contains any
@@ -238,6 +364,15 @@ glass look. Click hexagons to mark places you've visited.
   each pass. A window with a single cluster in it went from ~150 ms a paint to
   ~15 ms; a window lit corner to corner is unchanged, which is the right shape
   for the trade. A sheet with nothing lit at all returns before the first blur.
+  **The cells are found by place, not by walking all of them.** Finding the
+  discs used to mean parsing every key of the level's Map and discarding the
+  ones off the sheet — 22 ms of the paint on a half-million-cell account at
+  level 0, whatever the window held. `litIndex[L]` (`src/cell-index.js`) files
+  the same keys into `CELL_BUCKET`-square buckets of the lattice, built the
+  first time a level is painted and kept in step by the brush's incremental
+  paths, and `paintBlobSheet` visits only the buckets the sheet overlaps,
+  world copy by world copy. The export does not pass one and scans as before;
+  `scripts/test/cell-index.mjs` holds the two to the same list of discs.
   **The float planes are kept between calls** rather than allocated per blur —
   at the cap that is two 4.8 MB arrays three times a paint, ~29 MB of garbage
   per repaint, and removing it is what took the occasional 107 ms paint back
@@ -357,7 +492,7 @@ glass look. Click hexagons to mark places you've visited.
   level all four apply per country. Single-color mode's swatch opens the app's
   **own color picker**
   (`src/color-picker.js`) rather than the OS one, and the map repaints as you
-  drag. Every colour it produces can carry an **opacity** — see
+  drag. A separate slider below the color or legend controls **map opacity** — see
   [Colours with an opacity](#colours-with-an-opacity).
   **There are two of them, one per basemap theme** (`accents.light` /
   `accents.dark`, with `accent` pointing at whichever the basemap on screen
@@ -663,8 +798,9 @@ which is what makes a browser-side fetch possible at all.
 Two calls: the tour (name, date, sport, distance) and its coordinates, which
 come back as `{lat, lng, alt, t}` with `t` in milliseconds from the start — so
 the tour's own date turns the list into real timestamps, and the usual cell
-folding and visit counting apply unchanged. **No GPX download is involved**;
-this is the same data one step earlier. Private tours need the share link (the
+folding and visit counting apply unchanged. When that clock is one gap rather
+than a ride, `time_in_motion` — the duration the tour page shows — replaces
+it. **No GPX download is involved**; this is the same data one step earlier. Private tours need the share link (the
 one carrying `share_token`); without it Komoot answers 403.
 
 Being undocumented, that API can change without notice — everything fails with
@@ -859,9 +995,13 @@ browser importer uses.
   old workout as readily as a new one, and the app's query anchor is lost on
   reinstall. `device_workouts` holds the `HKWorkout.uuid`s instead, which is what
   makes a first sync of eight years of rides safe to give up halfway through.
-- **The barometer's ascent is kept.** `HKMetadataKeyElevationAscended` is a
-  better number than anything derivable from GPS altitude. When Health does not
-  offer one, `buildRoute` works it out from the line like every other source.
+- **Each fix keeps its clock, and its height when the watch has one.** The
+  wire is longitude, latitude, epoch seconds, and — only when
+  `verticalAccuracy` is not negative — the altitude in metres. A missing
+  height is left missing; 0 m is a shoreline, not a stand-in. The speed on
+  the card is that distance over that time. `HKMetadataKeyElevationAscended`
+  is still the climb total, which is a better number than summing the fixes,
+  and when Health does not offer one `buildRoute` works it out from the line.
 - **The activity name is sent as a lower-case synonym**, not a finished label, so
   `canonicalSport` in `src/routes.js` stays the single place that decides how an
   activity is spelled — the same door a Komoot "racebike" and a Strava "Ride" go
@@ -955,10 +1095,13 @@ an afternoon one.
 
 `POST /api/device/health/reset` is the one destructive call in the connector, and
 the guards above are what make it necessary. Workout ids are remembered so a
-re-send cannot double-count — which also means a workout stored from a bad
-reading can never be corrected, because the phone offers it and the server
-answers "known". And cells are merged rather than replaced, so re-taking the same
-workouts on top of the old ones would count every visit twice.
+re-send cannot double-count. Cells are merged rather than replaced, so re-taking
+the same workouts on top of the old ones would count every visit twice. The
+trace is the exception: a workout stored before its times or its heights were
+kept can gain them when the phone offers it again, and that write does not add
+a cell. It does not replace a trace that already has both, and it does not move
+the line. A wrong line still needs the reset, because the cells and the
+geometry are what the id is guarding.
 
 It drops the `apple-health` cell rows, the `apple-health` routes and the
 remembered ids. Nothing else: a cell another source also vouches for keeps that
@@ -2030,6 +2173,75 @@ to the full entry in the routes dialog. The card used to carry Edit and Remove
 too, which made it a second place that knew how to change a route; everything
 that changes one now lives in exactly one place.
 
+The line under the name is what it was and when: "Cycling · 12 Sep 2024, 14:32".
+A ride that finished the day it started keeps the clock on that date; one that
+ran past midnight names both ends. The card does not repeat either fact as a
+row. There is no separate count of points. The shape is the line.
+
+Opening the card draws that one route and leaves the rest off — the same thing
+Search and the routes list already did. Closing the card puts the others back.
+The chip on the map is the control that does it while the card stays open. A
+tap that lands on several still asks, via the stack menu below; picking a row
+isolates that one and leaves the menu up.
+
+Above the card, two chips, **Speed** and **Elevation**, recolour the open route.
+They are the card's own glass — the same veil and the same blur — so the route
+does not read through the word and the chips are not a second material sitting
+on the card. The glass of that card is the inner sheet, not the box the chips
+are anchored to: a blur on the shared parent would be a backdrop root, and the
+chips would blur nothing. On a phone the location button is lifted into that
+strip, so the chips stop short of it; on a wide screen they take the width of
+the card, where the location button is in the opposite corner.
+Speed runs red where it was slow and green where it was fast; elevation runs
+green where it was low and red where it was high. The scale is this activity's
+own. Speed drops the slowest and fastest twentieth (`metricDomain` in
+`src/route-metric.js`), so a stop or one bad fix does not paint the whole line
+one colour, and a climb of only a few metres (`ELEV_FLAT_M`, 8) or a speed range
+under `SPEED_FLAT_MS` (0.4 m/s) stays a single yellow rather than inventing a
+ramp out of noise. It is not a `line-gradient`. That expression is one ramp for
+the whole layer and it restarts on every feature, and a pause has already split
+the route into several. The open route is drawn again as one short line per span
+on the `route-metric` source, casing under it, and the activity-coloured line,
+its glow and the 3D ghost are taken out from under it with a `met` feature
+state — the same opacity case the stack uses. Feature state does not survive
+`setData`, so `met` is put back wherever the highlight is. Other routes, when
+Show all is on, keep their activity colours. Only the open one is ramped, and
+the ramp leaves with the card.
+
+Under Duration, the same series is a graph, in the same colours as the line on
+the map — one span at a time, from the same `metricDomain`, because a single
+gradient would restart the ramp across the whole activity. The number at the
+top is the highest value on it and the number under the line is the lowest —
+kilometres an hour, or metres. A stop is not a reading: 0 km/h, and the
+0.1 km/h a crawl rounds to, are left off, and so is a time of zero. Under the
+line those two share one row: the low reading on the left, where zero used to
+be, and the hour marks along the rest of it. The total is the Duration row
+already, and the graph does not repeat it. A short activity draws a faded line
+every quarter hour (`graphTimeStep`); past two hours the line is the hour. The
+words follow when they fit on the line, including the last hour. They stay
+clear of the low reading and of each other, and that is the only reason a
+line would be left unlabelled. The
+line is drawn against that clock when the activity has one, and against
+distance when it does not, because a pause has to land where the time says it
+did. A press on it, or on the line, drops a dot in both places and a small
+label: speed, time since the start, and elevation, whichever this activity has
+and whichever is not zero. Opening the card does not drop the dot; the first
+press does. Switching pills keeps the place. A point that has left the map
+still in view — off the edge, or down behind the card — is eased back into the
+middle of what is left (`SCRUB_EASE_MS`). Each step of a drag starts that glide
+again from where the camera already is, so it follows rather than cutting, and
+the zoom is left alone. The metric line is not a
+layer a tap asks, so a pile is still a pile: more than one route under the
+cursor opens the menu rather than scrubbing.
+
+Zoom frames the line in the map that is still visible above the card. The bottom
+inset is the top of the pills down to the bottom of the window, plus a small
+gap, measured after the card is showing — Search and the list open the card
+before they fly, because a hidden card has no height. Activities saved before
+per-point heights were kept have neither pill. The card says to import the file
+again. Re-importing fills the gap and does not duplicate, and it does not
+replace a trace that is already there.
+
 **Where the tap lands on twenty lines it asks instead.** A winter of skiing is
 forty runs down the same piste and a commute is the same street four hundred
 times; on the map those are one thick line, and a tap used to open whichever of
@@ -2039,11 +2251,51 @@ the tracks really are on top of one another and zooming separates nothing. So
 more than one under the same tap opens a menu at the cursor instead: the count
 as its heading (*11 activities here*), a row each for what the activity was
 called, when it was and how far it went, and the card opens on whichever you
-pick. It stays open after a pick, because a stack is something you go through
-rather than choose from once. **Hovering a row lights its line on the map**,
-which is what makes the list usable when six rows are the same word — and it
-costs nothing of ours, being the `hov` feature state the pointer already writes,
-answered by paint expressions the glow layers already carry.
+pick. The pick closes it and frames the activity, as a swipe of the workout
+pill does: the pile was a few metres of shared street, and the one picked out
+of it usually runs well off the screen. It used to stay open, on the idea that
+a stack is something you go through, and in practice it sat over the line it
+had just isolated and the card describing it; the next one in the pile is a
+tap on the same spot away, or a swipe of the pill. Until that pick, every line
+in the pile stays on the map: the menu is the question, and answering it by isolating the first
+row is how a tap on nineteen runs became one green line and a *Showing only*
+pill. MapLibre focuses the first button as the card opens (`focusAfterOpen`
+is turned off), and a phone sends `mouseenter` for whatever the finger was
+still covering; neither is a choice, so neither calls `setSoloRoute`.
+**Hovering a row lifts its line out of the pile**, which is what makes the
+list usable when six rows are the same word. It started as the `hov` feature
+state the pointer already writes, and that was enough for one line and not for
+a braid: a feature state cannot change drawing order, so the lit route stayed
+half under its neighbours, and a brighter haze in its own colour was one more
+colour among eleven. The row's route is now drawn a second time from a
+`route-peek` source of its own, above every other route layer and the ramp,
+white on a black casing — a pairing no activity colour and no palette entry is
+ever given — and its glow is zeroed for as long as it is lifted, so its haze
+does not tint the lines it is being told apart from. A separate source rather
+than `line-sort-key`, because a sort key orders features within one tile's
+bucket and nothing across tiles, and changing it would rebuild the whole
+routes source on every hover. Once a row has been picked, that
+route is the only line in the source, so a hover draws the row under the
+pointer on its own and puts back whatever was showing when the pointer
+leaves. The ramp is emptied for that moment: it belongs to the open route, and
+leaving it up would paint the wrong line.
+
+**On a phone the menu is not a popup.** A popup opens where you tapped, and on a
+phone that is the middle of the screen — the card sat over the braid it was
+listing, and dragging it off by its heading was a second gesture to undo the
+first. Below the 560 px the other cards dock at, it goes into
+`#route-stack-sheet`, a `.cell-info` like the cell, route and photo cards: same
+glass, same place at the bottom, nothing to move, and listed in
+`src/card-lift.js` so the controls step over it. `routeStackSheet` answers the
+two calls the code makes of a popup, `remove()` and `on('close')`, so every path
+that closes the stack closes it too; it does not close itself on the next map
+tap the way a popup does, and needs not to, because the click handler closes the
+stack first thing. **A row there takes two taps**: the first lifts its line in
+white (the same `route-peek` as a hover) and lights the row, the second opens
+it. A finger has no hover, so without this a phone could only find out which
+line a row was by opening it. The `mouseenter` and `focus` listeners are left
+off that card for the same reason — iOS fires `mouseenter` just before the
+click, which would make every first tap look like the second.
 
 What counts as under the tap is `ROUTE_TAP_PAD_PX`: an 8-pixel box around the
 point rather than the point itself, because a hairline is hard to hit with a
@@ -2208,8 +2460,9 @@ Komoot's.
 
 Tap a route in *Routes and statistics → Routes* and it **opens the activity**
 rather than jumping the map to it: name, where it went, activity, distance,
-climb, date, start time, duration, average speed, which app it came from and
-how many points it kept. **Edit** renames it, files it under a different app or
+climb, date, the start and the end on one line, duration, average speed, and
+which app it came from. The point count is not repeated here — the shape is
+the line, same as on the card. **Edit** renames it, files it under a different app or
 sets the activity; **Delete** asks twice; **Show on map** is the one that closes
 the panel, switches the routes layer on and flies there. Tapping the line on the
 map still opens the same card it always did.
@@ -2378,8 +2631,15 @@ because then it is a fact. Routes saved before any of this existed are filled in
 once at startup from the length and clock already in the row — on the author's
 own map that took 1 of 21 routes with an activity to 19. Only blanks are
 touched: the one route Komoot had labelled kept its own label even where the
-guess disagreed. Elevation cannot be backfilled the same way — the stored
-geometry is flat, so a climb figure needs the file re-importing.
+guess disagreed. A climb total cannot be backfilled from the row either — it
+needs the file. The line used to be flat in the same way: only coordinates were
+stored, so speed and height along it could not be drawn afterwards. They are
+kept now as `routes.trace`, one `[elevation, time]` pair per stored point, lined
+up with `geom` and left empty when the file had neither. The route's key does
+not include them, so the same file is still the same route, and a re-import
+fills an empty trace without touching one that already landed. Speed is not
+stored. It is the distance over the time of that one span, and the break
+between two segments is a pause, not a velocity.
 
 `npm test` covers both, including the ski-day case and the place names
 ("Brunnen") that must not be read as a sport.
@@ -2442,11 +2702,15 @@ loaded, and the result is sent back once.
 
 - **Thinned on import** (`src/routes.js`): Douglas–Peucker at `ROUTE_EPSILON_M`
   (6 m) turns an hour of 1 Hz recording into a couple of hundred points — about
-  4 KB — without losing a corner it actually turned. The tolerance doubles until
-  a route fits under `ROUTE_MAX_POINTS`, and lines shorter than
-  `ROUTE_MIN_LENGTH_M` aren't routes at all.
+  4 KB — without losing a corner it actually turned. The points that survive
+  keep the elevation and the time they arrived with; those live in `trace`,
+  beside the coordinates, because the key is a hash of the coordinates. The
+  tolerance doubles until a route fits under `ROUTE_MAX_POINTS`, and lines
+  shorter than `ROUTE_MIN_LENGTH_M` aren't routes at all.
 - **Re-import safe**: a route's key is a hash of its own (simplified) geometry
-  and dates, so importing the same file twice stores it once.
+  and dates, so importing the same file twice stores it once. A file that now
+  carries heights fills an empty `trace` and leaves a trace that is already
+  there alone.
 - **Lazy**: the map fetches route *metadata* on load and the geometry only once
   the layer is switched on.
 - **Drawn above the basemap's own lines**, unlike the visited wash which reads
@@ -2794,19 +3058,26 @@ the name, and clearing gives back the derived one.
 
 Picking a trip draws it as **the track it was**, not as a wash over the ground
 it covered: a dot at the centre of every cell it touched, threaded in the order
-those cells were first seen (`showTrack`/`trackFC` in `src/main.js`,
+of recorded visits (`showTrack` in `src/main.js`, `trackFC` in `src/track-data.js`,
 `TRACK_COLOR` and the two width ramps beside it).
 
-- **The order is free.** Each spot already carries `at`, the first moment that
-  place was reached, so the shape of the days comes back without storing
-  anything. A translucent tint over the same hexagons said *somewhere in here*;
-  a line through them says where you went and which way round.
-- **The thread is cut where there is nothing to thread with.** No timestamp, the
-  *same* timestamp as the point before it, or a gap over `TRACK_LINK_GAP_SEC`
-  (36 h). The middle one is the case that matters: an afternoon imported from
-  one photo album carries a single timestamp on every cell of it, and joining
-  those in whatever order they came out of storage draws a zigzag and calls it a
-  route. Dots with no line is the honest answer, and it is what that data gets.
+- **Visits and places are separate.** `spots` summarizes unique places for
+  naming; `points` retains both recorded timestamp endpoints of each cell row,
+  sorted by time and deduplicated by cell and timestamp across sources. Using
+  only a place's first visit loses the return leg of a there-and-back journey.
+  Activity bounding-box centres are summaries rather than fixes and contribute
+  no track points. Intermediate visits absent from the stored rows remain
+  unknown. Day tracks use the same endpoints while their cell counts stay unique.
+- **The thread is cut where there is nothing to thread with.** Missing or
+  backwards timestamps and gaps over `TRACK_LINK_GAP_SEC` (36 h) break it.
+  Simultaneous cells within `TRACK_SAME_TIME_RADIUS_KM` (0.5 km) of their mean
+  describe one approximate location, including a coarse fix expanded into fine
+  cells by migration. Wider simultaneous groups retain their dots and break
+  both incoming and outgoing links: neither their first nor last storage row
+  identifies a known arrival or departure. Longitude averaging wraps at 180°.
+  The distance is measured from these same lines. Regression coverage in
+  `scripts/test/track-data.mjs` checks a journey across the Limmat valley once
+  each way and rejects arbitrary links through unordered groups.
 - **Solid dots with a dark rim**, because the highlight has to read on four
   basemaps including a photograph. The old 16% fill was legible on the dark one
   and nearly invisible on Satellite.
@@ -2865,6 +3136,19 @@ gesture the day chip takes along the days (`mountSwipe` on `#route-solo`) —
 and the arrows on it are the same hint, and the way through for a mouse. The
 ends stop rather than wrapping: an arrow that is not there is the honest
 answer, the same as the first day of a history.
+
+**A workout picked out of the map is a series too.** The same chip, when it
+says *Showing only* and *Show all*, steps through every listed workout in
+time (`workoutBeside`). A pull to the left is the one that happened later,
+the same direction the day chip takes along the days; the newest has no
+arrow onwards and the oldest has none back. The card stays open on whichever
+you land on, still on Speed or Elevation when that workout has the reading,
+and the map frames the line. The day's own series still wins while *Hide* is
+the button. A row the pointer is only borrowing, under an open stack, does
+not answer — letting go of it puts the previous line back, and a step would
+be answering a question the pointer had not finished asking. Arrow keys turn
+the same page while the route card is open; otherwise they still belong to
+the day chip.
 
 *Hide* undoes what *Show* did to the overlay and does not restore a previous
 isolation: the chip below the day is the day's.
@@ -3338,92 +3622,46 @@ the whole map as news. See the section below for why that distinction matters.
 
 ## What changed while you were not looking
 
-`src/whats-new.js` is the arithmetic; `src/whats-new-ui.js` is the banner.
+`server/announcements.js` decides what is worth announcing; `derive.announcementSnapshot`
+computes named places and folded activity identities. `POST /api/whats-new`
+returns the title, detail, named countries/cities/regions and activity IDs.
+Flutter and `src/whats-new-ui.js` display that answer rather than comparing
+coverage counters independently. They check on opening or returning to the app,
+after native sync, and once per minute while visible.
 
-The map is filled in by things that are not you — a phone in your pocket, a
-watch that saved a ride, Home Assistant noticing you came home, a Strava sync at
-four in the morning. So opening it is the interesting moment: the ground has
-moved and nothing on screen says so, because **a map that has grown looks exactly
-like a map that has not**.
+The baseline is persisted in `user_announcements`, separate from user preferences
+so a delayed preference upload cannot roll it back. It holds country, city,
+region and activity identities plus the greatest announced coverage. The
+endpoint reads the baseline only after the asynchronous derivation and updates
+it synchronously before answering: simultaneous devices consume a change once.
+Deletion removes this table's rows with the rest of the account.
 
-### Since when, and why it is not "since last time you opened it"
+The first check records a baseline silently. A quiet check and the `never`
+setting also advance it silently, so enabling announcements later does not
+announce the whole past year. Otherwise it advances when something is reported.
+Identity sets only grow, so removing a source cannot announce an old place again.
 
-Since the last time a banner was *shown*. That distinction is the whole of why
-the middle setting works. If the baseline moved on every open, four days of one
-cell each would each be too small to mention and the fifth would report one cell
-— and a week would pass without a word. Holding the baseline until something is
-actually said lets small changes accumulate until they are worth saying.
+Every new country, city or region is named, with at most three names followed by
+how many more. Cities come from the existing gazetteer at cell centres, memoized
+at about a kilometre. A nearest town thirty kilometres away can name a route but
+is not evidence of visiting that town: the announcement lookup accepts towns
+within 1.5–8 km depending on population. New activities from **every source**
+are announced, and duplicate groups count once even if a preferred recording
+changes. The action opens the exact activity ID returned by the server.
 
-Two consequences, both deliberate:
+Bare cell counts are never announced. Small additions within an already visited
+place stay quiet. Unnamed new ground accumulates until 400 km² in `substantial`
+mode, or 1 km² in `always` mode. Those thresholds live at the top of
+`server/announcements.js`. `never` suppresses **both activities and ground**.
+The preference remains `whatsNew` on the account; Flutter presents it as an
+on/off switch in Personal settings and the web retains its frequency selector.
+Legacy counter snapshots are retained only for compatibility with old clients.
 
-- **The first open ever shows nothing.** There is no baseline, so there is no
-  change. A banner announcing that you have 12,000 places is not news, it is the
-  map. The baseline is recorded and the next visit is the first that can report
-  anything.
-- **`never` moves the baseline anyway.** Otherwise switching it on after a year
-  would open on "+38,000 places", which is a number nobody can feel and not what
-  anybody meant by turning the setting on.
-
-**Only growth is reported**, and that is not laziness. Cells go *down* when you
-take a source off the map or undo an import — both things you just did on
-purpose — and being told about them on the next open is the app reading your own
-action back to you. There is no honest "you lost 300 km²" that is also welcome.
-
-### Both the frequency and the baseline follow the account
-
-The setting rides in the account's preferences beside the clock: how much you
-want to be told is a fact about you. So does the **snapshot** it is measured
-against, and that is a reversal.
-
-It used to stay in this browser's localStorage, on the argument that it answers
-*since you last saw this banner* and the laptop and the phone have seen
-different banners at different times. What that produced in practice was one
-ride announced twice — on the phone when it was picked up, and again on the
-laptop an hour later — and news you have already had is not news. The banner is
-about what changed, not about which machine you are reading it on.
-
-Both copies are still written. The local one is what makes the banner work with
-no server and what survives a push that never landed; the account's is what the
-other device reads. They are **merged rather than reconciled**, field by field,
-taking the larger of the two (`mergeSnapshots`). A snapshot is a set of counters
-that only ever grow, so the higher number is the one that has already been
-reported — which makes the merge the safe direction: it can suppress a line and
-it cannot cause one to be shown twice. A timestamp comparison could not promise
-that. A phone that showed the banner while the laptop was asleep would still
-lose to the laptop's older, lower baseline the moment the laptop pushed a colour
-change, and the news would come round again.
-
-The merge happens in `syncPrefs`, off the account's own copy rather than off the
-adopted state — the same place and the same reason as `offerIntro`, because the
-"push" branch never fills the adopted state in. It runs *before* the banner is
-decided, since `onAuthed` awaits the sync and shows the banner after it. And
-when the merge comes out ahead of what the account holds, the account is the
-copy that is behind, so it is pushed back: that is a browser whose own banner
-never got sent, and leaving the lower number on the account would let the other
-device announce the same thing again.
-
-The baseline moving is now a *write*, so it is pushed straight out rather than
-on the 600 ms debounce (`onSeen`). The whole point is that the device you pick
-up next stays quiet, and next can be a minute away.
-
-### Workouts are the exception, at every setting
-
-A new workout out of Apple Health is the one change here that came from something
-you *did*: you went for a ride, and a watch and two syncs later it is on the map.
-That is worth saying whatever the frequency says, so it is counted separately —
-routes whose source is `apple-health` — and reported unconditionally. On `never`
-you get the workout and none of the coverage, which is what `never` means.
-
-The thresholds for "substantial" are constants at the top of `src/whats-new.js`
-and they are two different kinds of thing. A country or a region is
-*categorical* — there is no such thing as a slightly new country — so one of
-either is always a line. Ground is continuous and needs a number: 20 cells or
-400 km², which is more than a walk to the shops and less than a day out. A record
-streak counts at any length, being the one figure that can only be beaten rather
-than accumulated.
-
-`scripts/test/whats-new.mjs` pins all four of the decisions above, because every
-one of them is the sort of thing a later reader would "fix" back.
+`scripts/test/announcements.mjs` exercises the real endpoint with isolated data:
+named cities and countries, equal counts with different identities, small-change
+suppression, concurrent devices, new non-Health activities, reimports, disabling,
+quiet checks and account isolation. `scripts/test/account-delete.mjs` checks
+that baseline rows are removed with their owner.
 
 ### Days, and what a streak is not
 
@@ -3624,14 +3862,16 @@ points; the national survey gives 6,951. A first attempt shipped an 8 MB "fine"
 build of the same data and it still looked wrong, which is the useful part of the
 story — the tolerance was never the problem.
 
-So when the region level is live and the zoom is past `REGION_FINE_ZOOM` (6),
+So when the region level is on screen — its whole band, from
+`REGION_FINE_ZOOM`, which is that level's own lower boundary near z4.1 —
 `considerFineRegions()` asks geoBoundaries for the ADM1 boundaries of **the
 countries whose lit regions are actually on screen**, one at a time, once each,
 and rebuilds as they land. Switzerland is 0.42 MB and takes Solothurn to 520
 points; the drawn union of two cantons goes from 255 points to 2,985. Zooming
-back out returns to the overview geometry rather than tiling detail smaller than
-a pixel. On Auto this is unreachable — that level never survives past ~z5 — so an
-ordinary session fetches nothing.
+back out past `REGION_COARSE_ZOOM` returns to the overview geometry rather than
+tiling detail smaller than a pixel. The threshold used to be z6, which is
+already the next hex level, so on Auto the region level spent its whole life
+on the overview set.
 
 **It happens on the server** (`server/regions-fine.js`), which was not the first
 attempt and is the right one for three reasons, each learned by getting it wrong:
@@ -3816,10 +4056,11 @@ nothing to ask about. Without the second call, switching Detail to Region while
 already zoomed in did nothing until the camera was nudged.
 
 **Resolution is sticky between two thresholds.** The detailed geometry comes in
-at `REGION_FINE_ZOOM` (6) and is dropped again below `REGION_COARSE_ZOOM` (5.4),
-rather than both happening at one number. Swapping resolution re-tiles the
-source, so a zoom that hovers on a single threshold would re-tile on every
-wobble; the gap is the same trick as `LEVEL_HYSTERESIS`, for the same reason.
+at `REGION_FINE_ZOOM` (the bottom of the region level, near z4.1) and is dropped
+again below `REGION_COARSE_ZOOM` (0.28 under that), rather than both happening
+at one number. Swapping resolution re-tiles the source, so a zoom that hovers
+on a single threshold would re-tile on every wobble; the gap is the same trick
+as `LEVEL_HYSTERESIS`, for the same reason.
 Dropping back matters most on an older device — the point of returning to a few
 hundred points when zoomed out is that the map stays smooth.
 
@@ -4830,6 +5071,35 @@ set `tolerance: 0` for the opposite reason — a hexagon, a house and a trip's d
 are exact, and the `trip` source feeds a circle layer as well, where dropping a
 vertex would delete a day.
 
+**A track that leaves a tile and comes back is drawn as a polygon, on this
+basemap only.** The coordinates are the zigzag. What gets added is a straight
+stroke in the route's own colour along a Web Mercator tile edge, closing the
+loop wherever the line crosses that edge twice — a bend of a few hundred metres
+becomes a bite taken out of the map. It is not the drape seam above, and not
+the glow's join wedges: it is there with the terrain switched off, with
+`line-elevation-reference` left at `none`, with the opacity written as a
+constant, and in Mapbox GL JS 3.31 as well as 3.28. The flat maps never draw
+it. The tiled coordinates do not contain it either. The line tessellator joins
+the two crossings of *one feature* with the edge it clipped that feature to.
+
+`splitLineAtTileBounds` cuts a segment only where it **comes back** into a
+tile it has already left, at any zoom up to `ROUTE_TILE_ZOOM` (18, the
+source's `maxzoom` — the map stops at 17.5 and still asks for these tiles).
+`routesToFC` emits each visit as its own LineString. The pieces share the
+point where the line left, so the stroke stays continuous, and they share the
+route's id, so `promoteId` and feature state still light the whole line:
+selection, hover and the metric ramp are stored by that id. A vertex inserted
+into the *same* feature does not do this, and neither does a MultiLineString,
+which Mapbox still tiles as one feature.
+
+Cutting at every crossing does stop the bite, and it is the wrong cut. A ride
+then becomes a feature per tile — hundreds of them, most shorter than a pixel
+once the whole ride is on screen. The source's own simplification drops those
+pieces, so the route draws as a dashed line, and handing the map tens of
+thousands of features stalls it. A tile crossed once never closes, so it stays
+part of the same feature. A road that does not loop back is one feature, as
+it was.
+
 **And the glow is the hover state.** `setHoveredRoute` writes one feature state,
 `hov`, and both of the glow's paint expressions already branch on it —
 `routeGlowOpacity` three-quarters of the way from its resting alpha to the
@@ -5409,11 +5679,7 @@ does not, and neither is missing.
 Nothing is lost by it. Their own style puts `name` on a second line wherever the
 two differ, so the sign at the station is still on the map; where a place has no
 name in the language asked for, `localized_name` is what `name` was and the
-label is one line as before. The feature card follows the same rule — the
-heading is the name the map drew, with the local spelling kept as a row — and
-their feature API, which is where the card's list of services comes from,
-ignores the parameter entirely: an OSM route relation is named once, in the
-language it is named in.
+label is one line as before.
 
 ### Technical infrastructure is a filter, not a group
 
@@ -5665,149 +5931,21 @@ from the rewritten image references — and the full-colour one, 1.5 MB at 2x, i
 read by a single expression in "Signals & crossings", so turning that group off
 saves two thirds of it.
 
-### A tap on a siding
+### A tap does not open a card
 
-The reason for all of it. `describeRailFeature` builds a card from the properties
-**already in the tile that drew the line**, and says them the way a person reads
-them rather than the way a database stores them: `15000` becomes 15 kV, a float32
-`16.700000762939453` becomes 16.7 Hz, `0` frequency becomes DC rather than 0 Hz,
-speeds and gauges carry their units, and `{BLS}` — a PostgreSQL array literal,
-which is what put braces on screen — becomes BLS. Their feature API returns the
-same fields as real JSON arrays, so `asList` answers both doors.
+The overlay is there to be looked at. A tap in view mode falls through it: a
+saved route, then an airport, then the trails, then the ground. There is no
+hover and no card. The request that used to ask OpenRailwayMap what services run
+over a clicked line is gone with that card.
 
-**The track number is what says which line was clicked.** A station is twenty
-parallel lines and, without `track_ref`, twenty cards that describe themselves
-identically — same operator, same voltage, same gauge. It is distinct from `ref`,
-which is the number of the *line* the track belongs to and stays out.
-
-**Their tiles carry no `osm_id` at all.** That pair of keys is their feature
-API's; reading it off a tile was a link that could never appear, and the cost of
-that was much higher than a missing link. `describeRailFeature` opens no card for
-a feature with nothing to say, and a platform whose relation carries no `name`
-and no `ref` — which is most of them, since the number is usually on the platform
-*edge* — had nothing else. Thun's platform relations happen to be named "Thun"
-and opened a card; Spiez's are named nothing, so the tap fell through to the
-ground underneath. That read exactly as "platforms are clickable in Thun and not
-in Spiez", and no amount of looking at the platform code would have found it.
-
-What a tile does carry is the feature's own `id`, which is the same fact spelled
-two ways: `relation-9068328` and `node-3080728389-train-train-station` where the
-element type is not implied, and a bare `988282659-0` on the track layers, where
-the suffix is the segment a long way was cut into and the element is always a way.
-`osmRef()` reads the prefixed form anywhere and the bare form **only on the track
-layers**, because a kilometre post's id has precisely the same shape and is a
-node — guessing from the shape alone would link a third of them to somebody
-else's way.
-
-And a feature with a `feature` value now has a heading: "Platform" rather than
-"Railway" over a subtitle reading "platform", which spent the heading on the one
-word that is true of everything in the overlay.
-
-**The routes are the one exception to "already in the tile".** Which services run
-over something is a relation, and a vector tile carries `route_count` but not the
-relations, so that is a request — one per click, on something somebody just asked
-about, which is a very different thing from one per tile. It is answered by their
-`api` container rather than their tile server, which is why it kept working right
-through the outage that took the tiles down. The card opens without it and fills
-the list in when it arrives.
-
-**Their answer keys the routes by what was clicked** — `line_routes`,
-`station_routes`, `platform_routes` — and reading only the first is why a station
-used to list nothing. A station has no `route_count` in its tile either, so
-unlike a line it cannot know to leave the room: it asks on spec, and the section
-is built only if the answer has something in it. The same request brings back
-what else their API knows — the operator, the network and what stops there for a
-station; the platform numbers, the surface and what is on it for a platform —
-appended to the same `dl` the tile's rows are in, so the card grows rather than
-sprouting a second table under the first.
-
-Their `references` block is deliberately not read. The UIC number and the
-operating code — "8507483" and "SP" for Spiez — are both real and neither is
-anything anyone does with a station: one is a booking system's primary key and
-the other is on an operating diagram, and between them they filled two of the
-card's five rows with numbers nobody looks up.
-
-Every enum in their schema is lower case, because that is how an enum is spelled.
-A card that reads "State present" over "Serves train" is printing the column
-rather than the answer, so values go through `humanValue` — the same
-underscore-stripping `featureLabel` the headings use, plus a capital. The label
-beside it is already a capitalised phrase and a row where only one half is
-formatted reads as a bug.
-
-**A junction station is on twenty services**, which is a list taller than the
-phone it is on — and it pushed the name, the operator and the platform number off
-the top of the screen to make room for something you then had to scroll the *map*
-to read. The list has its own scroller at about eight lines, so the card stays the
-size of a card.
-
-OSM models each direction as its own relation, so six of them are three services;
-`mergeRouteDirections` folds a route and its return working into one line, keyed
-on the service name plus the stop list taken whichever way round sorts first. Two
-different services between the same towns keep their own lines. The label is
-split on **every** separator rather than the first, because relations name their
-via-points: "Grandson => Lausanne => Bex" is a journey, and treating it as a pair
-would both read wrong and stop it matching its return working, whose stops are
-the same list backwards. It is set with real arrows — `→` one way, `↔` when both
-directions were found — since `=>` is how the tag is written, not how it should
-be read.
-
-**`=>` is nothing like universal.** "TGV 511: Paris -- Toulon -- Hyères" and "TER
-Morez - Saint-Claude - (Lyon)" are both real relation names, and a separator the
-parser did not know about printed as one undivided run of text with no arrows in
-it at all. `STOP_SEPARATOR` takes `=>`, `<=>`, `->`, `<->` and the dashes — and
-**every dash form requires whitespace on both sides**, which is the whole of what
-keeps Saint-Claude, Aix-en-Provence and Baden-Baden in one piece. The test names
-those three, because the failure is a place cut in half and it would look like a
-data problem.
-
-Plenty of relations carry no `colour` tag — their API returns an empty string —
-so the dot is drawn hollow rather than omitted, because a missing dot puts the
-labels on a ragged edge and reads as a rendering fault instead of as missing
-data. And a label wider than the card is broken after the service name rather
-than wherever the edge happens to fall: the journey is an `inline-block`, so it
-moves down whole instead of stranding "Zweisimmen" on a line of its own.
-
-**Platform numbers need z15 and are not always reachable.** `ref` means the route
-number on a line and the platform number on a platform, so it is shown only for
-the latter, keyed off what was clicked. Their platform geometry only exists from
-z15, which during the outage was the one range with nothing in the CDN at all —
-so the row is correct and simply has no data to show until their origin is back.
-
-The hit test is scoped to our own layer ids: the basemap draws railways too, and
-reporting CARTO's idea of a line while the overlay is showing OpenRailwayMap's
-would be the same mistake the layer ordering was fixed for. In the click handler
-a railway comes after a saved route and before the ground — the same order the
-three are drawn in, and for the same reason.
-
-### Whether a tap on a railway does anything at all
-
-It used to always. That is the wrong default for an overlay whose first job is to
-show *where* the railways are: every tap on the map then went through a hit test
-across 288 layers before it could be about the ground, and the overlay quietly
-took taps away from the map it was drawn over. **Interaction is a switch now, and
-it is off** — someone reading the tracks over their own map never pays for it,
-and someone reading the railway says so once.
-
-That switch is also what paid for the hover, which this file used to argue
-against: "there is deliberately no hover cursor: a `queryRenderedFeatures` across
-288 layers on every mousemove is not worth an affordance". The cost was real and
-the conclusion followed from it being unconditional. Opted into, it is a
-different trade, and the hover is worth a great deal in a station where twenty
-lines are three pixels apart.
-
-**The highlight itself costs nothing of ours.** 171 of the 288 layers already
-paint a hovered feature differently — a red platform edge, a red outline round a
-station, a yellow track number — because their app is a map you point at, and
-that styling came across with the layers and had simply never been switched on.
-So `setRailHover` writes one `feature-state` and their own style answers it in
-the colour its designer chose; there is no highlight layer of ours. `promoteId`
-on every source, which was already there to make a clicked feature identifiable,
-is what makes a feature state possible at all.
-
-The query is throttled to one per animation frame and skipped while the map is
-moving. The cursor is the one thing two things compete for — a saved route
-answers synchronously on the mousemove, a railway a frame later — so one function
-owns it and reads both, or the later answer would clear the earlier one's.
+Edit mode is the exception, and it does not show data. A tap on a track paints
+every cell the line touches, from the previous station or junction to the next.
+`describeRailFeature` is what recognises a line — `kind === 'line'` and an OSM
+way — and `/api/rail/span` is the geometry. Stations and platforms are not a run.
+The same function still turns the tile's own properties into words (`15000`
+becomes 15 kV, `{BLS}` becomes BLS), because the tests hold that wording and the
+paint path reads the same object. `osmRef()` still reads a way id off the track
+layers only: a kilometre post's id has the same shape and is a node.
 
 ### Where the switches live
 
@@ -5903,7 +6041,7 @@ and gzip is much happier about `"L","L","L"` than the same letters scattered.
 
 ### Saying it the way a person reads it
 
-The same job the railway card does for voltages and gauges. Runway surfaces
+Runway surfaces
 arrive as **650 distinct spellings of about eight materials** — `ASP`, `ASPH`,
 `Asphalt`, `asp`, `ASPH-G`, `ASPH/ CONC` — typed by whoever filed the airport and
 never normalised, which is fine for a database and no good on a card claiming to
@@ -7302,11 +7440,18 @@ stationary. The floor sits ten times below the slowest genuine outing on the sam
 map (a 1.2 km/h walk with stops) and seven times above the worst glitch, so
 neither side is anywhere near it.
 
-At import, Komoot's own `duration` is now preferred over the last coordinate's
-offset. The duration is the tour's answer to the question; the last coordinate is
-a guess at it, and one stray fix — a phone waking up days later — ruins the
-guess. Nothing rewrites what is already stored, so the two bad rows keep their
-timestamps and are simply not counted.
+At import, a coordinate clock that fails the same speed test and has no pace
+of its own — the time outside its longest gap is shorter than a pause — is
+replaced by Komoot's `time_in_motion`. That is the number the tour page shows.
+`duration` is only the fallback, and only when it passes the test too: on the
+tours that prompted this it does not. One of them says 163 hours and 11.8 km,
+with every fix but the first sharing that timestamp, and 1 hour 49 minutes in
+motion. The points are spread across those 1 hour 49 minutes, because one
+timestamp has nothing to graph. A line whose coordinates already move at a
+believable pace is left on its own clock; a wall-clock `duration` that fails
+the test does not get to extend it. Nothing rewrites a route already stored.
+Pasting the tour again does, and the copy with a believable clock is the one
+that shows.
 
 ## The same ride, recorded twice
 
@@ -7373,7 +7518,9 @@ through rather than be guessed at.
 Below the source, deciding between two rows of the same app and between two
 unranked sources: a link, then a recorded activity over one this app guessed from
 the speed — which is what separates the two Strava rows that are the same run —
-then known ascent, then more points, then the older row. On a real map of 393
+then a clock that can be believed over one left running, then known ascent, then
+more points, then the older row. The clock is what makes pasting a corrected
+tour take the place of the copy whose recording was never stopped. On a real map of 393
 routes that chain folds 78 rows away: 46 Apple Health rows over Strava, 11 Komoot
 rows over Health.
 
@@ -8168,11 +8315,13 @@ fading out smoothly.
 derives the outgoing opacity on the assumption that the incoming layer
 composites *over* the outgoing one. Swap the sources without re-seating that and
 the composite sags in the middle of every crossing — the exact flash `crossPrev`
-exists to remove. It is anchored to `trip-fill`, not to the first symbol layer:
-everything inserted there after the two trios — the trip outline, the selection
-ring — has to stay above the visited wash, and anchoring to `firstSymbol` lifted
-the wash over both, so the trip you had just clicked disappeared under the
-countries. `moveLayer` only reorders; it never re-tiles.
+exists to remove. Fill and border layers are raised only to the wash anchor,
+beneath saved routes and the basemap's streets. On Mapbox they move to the end of their
+existing bottom slot. Raising them to the trip track crossed the saved routes
+and tinted activity colours whenever the region or country geometry was
+restacked. Continent labels keep their separate anchor at `trip-glow`, above
+the basemap's labels and below the trip track. `moveLayer` only reorders; it
+never re-tiles.
 
 **Warming generalised.** `warmVector` pre-tiles the first vector level on the
 live source while a blob level is showing (as before), and — new — pre-tiles the
@@ -8410,7 +8559,20 @@ reads as two ways of grouping rather than one you can turn off.
 
 ## Colours with an opacity
 
-Any colour the picker produces — the visited wash, and one per activity — can
+**Map opacity is independent of map color.** Appearance places a rounded gray
+opacity slider below the visited color or legend, in both Flutter and the web
+app. Each coloring mode keeps its own absolute value in account preferences
+under `mapOpacities` (`flat`, `visits`, `oldest`, `type`), from 0 to 1. The web
+app mirrors these in `visited-map:map-opacities:v1` and uses the existing
+preference timestamps and retry mechanism. Flutter saves on the end of a drag.
+Missing values retain the old defaults: 0.3 for Single and 0.5 for heat modes;
+the web app's basemap multipliers and legacy accent alpha remain part of that
+initial value. An explicit value bypasses those multipliers, so 100% is fully
+opaque on raster blobs and vector areas. Changing map color preserves opacity,
+and the map color picker no longer offers an alpha control. The descriptions
+below still apply to activity colors and to reading legacy map colors.
+
+An activity colour the picker produces can
 carry an opacity, written as a fourth pair of hex digits (`#60acffcc`). Full
 opacity is still written as six digits, so nothing already stored is rewritten
 and nothing that hasn't been taught about opacity ever sees any.
@@ -8427,9 +8589,8 @@ drawn by blurring discs and cutting the result at a fixed alpha — a translucen
 fill would move that contour and *shrink* the blobs instead of fading them (see
 [How it works](#how-it-works)). And a colour that is already translucent would
 then be composited again by the layer opacity it is drawn with, applying the
-same choice twice. So the accent's opacity multiplies `regionOpacity()` and the
-region outlines, an activity's multiplies that activity's line opacity, and both
-hand MapLibre an opaque colour.
+same choice twice. The independent map opacity drives `regionOpacity()`; an activity's alpha
+multiplies that activity's line opacity. Both hand MapLibre an opaque colour.
 
 **Only where the colour is used.** A heat map doesn't draw the accent at all, so
 it doesn't honour the accent's opacity either — the rule is that an opacity
@@ -8512,7 +8673,9 @@ mutable columns (name, place, sport, source, ascent, link) and hashes them. Read
 and hashed rather than summed, because every sum collides on the case that
 matters: two routes swapping names, or a rename to a title of the same length.
 It is one short row per route on a map that has dozens, next to a cells read
-that walks tens of thousands.
+that walks tens of thousands. The length of `trace` is in that hash too: a
+workout the server already knew can come back with the times or the heights it
+was stored without, and none of the aggregates move when it does.
 
 *Setting your home.* Home is an **input** to every trip and is not a row at all
 — it lives in the preferences blob. Moving it changes which days count as away
@@ -8626,6 +8789,192 @@ blob and gave it back without reading it. It now reads one key — `home` — be
 a derived home that ignored the answer you gave when the guess was wrong would be
 worse than no derivation, and the alternative (every client sending its own home
 up with each request) is precisely the disagreement this exists to remove.
+
+### Render data for the Flutter port
+
+`GET /api/render/cells` is the first additive render endpoint. It requires a
+session and accepts `level` (0–5), `mode` (`flat`, `visits`, `oldest`, `type`),
+`accent` (six or eight digit hex), repeated `hidden` source names, and `bbox`
+(west,south,east,north in degrees; west greater than east crosses the date line).
+The client supplies appearance values from `/api/prefs`; defaults are level 0,
+flat, blue, no hidden sources, and the Mercator world.
+
+JSON contains `level`, Mercator `radius`, column names, and rows
+`[key,x,y,color,sparse]`. Centres use the canonical lattice (x in `[0,WORLD)`);
+the renderer chooses the world copy. Clients must pad their viewport for discs
+and blur. Sparse flags read neighbours outside the viewport too.
+
+`server/render.js` imports the existing rollup and colouring modules.
+`finishRollUpSteps` lives in `src/rollup.js` so palette ordering and colour
+scales remain shared; `src/blob-shaping.js` supplies the sparse test to the
+canvas and API. Scales are computed before viewport filtering, so panning
+does not recolour cells. Eight accounts and four filter/type variants per
+account bound the rollup cache; viewport changes never reread rows. The private
+ETag hashes the cell signature and every validated query input. Account deletion
+also drops the render cache.
+
+The Flutter preview adds `/api/render/regions` (levels 6–8), `/api/render/at`,
+`/api/search`, `/api/render/reference` and `/api/render/style`. Region responses
+contain the lit areas as GeoJSON. Shared `area-render.js`, `cell-info-data.js`
+and `search-data.js` keep browser and server rules together. Native rail styles
+resolve global-state expressions before reaching MapLibre iOS.
+
+`POST /api/render/brush` and `/api/render/region-clear` apply bounded edits in
+one transaction and return removed provenance rows and added keys for undo.
+`POST /api/import/file` accepts text or base64 binary input; shared
+`import-data.js` expands archives and parses text/FIT, then saves cells and
+routes in one transaction. Native Strava authorization uses a one-shot server
+state and the `sporra-flutter` callback scheme.
+
+`sporra-flutter/` contains the Flutter preview and a Pigeon Swift bridge. Swift
+owns CoreLocation, HealthKit, local photo indexing and the shared cookie jar;
+background launches do not start Flutter. Dart fetches server-derived cells,
+paints a Mercator image through the cut shader and crossfades MapLibre image
+sources. Golden vectors generated from the browser pin the alpha curves.
+Native maps, menus, edits, import, photos and account flows are implemented;
+advanced exports and complete UI parity are still pending. See its README for
+simulator installation and verification.
+
+### Flutter visual and feature parity (0.3.0)
+
+The native appearance uses the web's neutral glass recipe: RGB 38 at 54%
+opacity, a 26 px backdrop blur, a fine white edge and 20 px corners. Sheets
+have a transparent background, so the backdrop filter can see the map.
+Appearance choices use compact segmented controls; toggles use Cupertino
+switches. Portrait and landscape controls occupy the bottom-right corner and lift above
+an open place pill. Controls are hidden while an activity card is open. Activity cards remain in the map's widget stack,
+allowing the exposed native map to receive taps while the graph is open.
+In portrait their maximum height is 430 logical pixels, capped at 64% of the
+viewport. In landscape cards occupy half the viewport width and may use the
+remaining height between 12-pixel top/bottom insets and the top safe area.
+Landscape readings use 12-pixel spacing so the summary and graph fit together.
+
+Area drawing supplies only polygon features to its fill source. The API's
+`k:2` boundary lines are distinct geometry, not candidate fill features.
+Layer-property updates use `LayerPatch`, which omits unspecified fields.
+MapLibre's default setter sends nulls for those fields and resets the fill
+colour, line width and other previously installed styling. The native QA
+checks both polygon hits and blue screenshot pixels across level changes.
+Region, country and continent can each be selected explicitly; Auto retains
+the existing camera ladder. Appearance changes preserve the camera rather
+than reopening over Switzerland. Ground taps include the hidden-source
+filter, so the card answers about the same visits that the map displays.
+
+`GET /api/render/routes` applies account `routeView` preferences to native
+GeoJSON: per-activity colour and alpha, hidden sports, and the exact
+`paletteFor` allocation used by the browser's Color each route option. Its
+ETag includes those preferences as well as the route signature. Saving an
+activity colour preserves the other preference fields and uses the web's
+blank-sport sentinel (`\u0000none`). A light-basemap accent is saved under
+`accents.light`, without overwriting the dark accent.
+
+`GET /api/render/activity?id=…` reads an account-owned route and returns its
+summary, aligned samples, speed/elevation graph readings, and both metric
+line collections. `src/route-graph.js` contains the DOM-free graph rules,
+consumed by the browser card and the API. Samples and metric colours still
+come from `routes.js` and `route-metric.js`: no independent Dart calculation
+of speed, elevation ranges or recording gaps. The Flutter graph is 72 logical
+pixels tall, retains per-span colours and gaps, uses elapsed time when
+recorded and distance otherwise, and omits missing metrics. Dragging the
+graph selects a recorded point on the map; tapping a metric span selects its
+graph sample. Closing the activity restores the ordinary activity layer.
+Previous/next navigation retains the metric when available.
+
+`GET /api/render/activity-stats` supplies activity totals and annual distance
+bars. `distanceByYear` in `routes.js` is also used by web statistics. Undated
+activities contribute to distance totals but not a dated bar; duration uses
+`recordedSeconds` so an unstopped clock does not inflate the total. Ground
+statistics already supply `years`, including gap years, and Flutter renders
+those as a second interactive yearly chart.
+
+The 0.3.0 interaction fixes follow the phone web implementation rather than
+native SDK defaults. Native feature taps must also invoke the map click handler:
+`featureTapsTriggersMapClick: true` prevents MapLibre iOS from consuming a route
+hit before the app can resolve it. The hit test uses an 8 logical pixel box and
+queries metric, photo, airport and ordinary route categories separately; native
+feature results do not contain the browser SDK's `feature.layer` field. Route
+IDs are deduplicated across geometry segments before the compact overlap picker
+is opened. Inspection highlights a route; only the explicit Solo action hides
+its neighbours. Metric sources use zero simplification, round caps and joins,
+and the same 1.45-width dark casing as web. Ordinary routes use four composited
+phone glow rings without blur, the browser zoom widths, 1.7 selection scale and
+per-theme core contrast.
+
+`/api/render/cells?info=1` adds an optional sixth row column from the shared
+visit summarizer; the original five-column contract is retained. Region reads
+with `info=1` carry per-area fact geometries separately from dissolved fill
+geometry. Flutter keeps those facts with their level, filters and viewport,
+so a ground tap displays its card immediately and enriches the place name with
+`/api/render/at`. Requests are invalidated on subsequent taps or dismissal.
+An unloaded viewport shows a loading card instead of asserting an unvisited
+place. `fine=1` sharpens visible lit countries once the region LOD threshold is
+crossed, reusing the existing fine-boundary loader. The cache includes the fine
+geometry generation; a repeated country load cannot continually bump it.
+
+`/api/render/track` selects exactly one account-owned trip or local day and
+uses `src/track-data.js`, also consumed by web. Missing timestamps, spatially
+ambiguous simultaneous groups and 36-hour gaps break the thread; nearby tied
+cells share one approximate location. Flutter draws the web yellow links,
+glow and dark-cased dots, provides recorded-day stepping and filters local
+photos to the full calendar window with an exclusive end. Cached photo indices
+are reused for pins, thumbnails and gallery selection. The recorded month grid
+shows new-ground versus activity dots, trip spans and selected/today indicators.
+Trip names and hidden IDs use the web preference keys; server search includes
+those preferences in its validator and resolves custom names before ranking.
+
+Sheets fit their contents inside 380 logical pixels of maximum width and a
+62%-height cap, further constrained by the keyboard and safe area. Continuous
+superellipse corners use a 43 px radius on rounded phones and a 12 px outer
+inset; the original view insets are read before the modal removes top padding.
+World is intentionally absent from the explicit detail choices at the user’s
+request; Auto still supports the continent rollup. Route pickers shrink to their
+rows and borrow the web palette in newest-activity-group order, drawing only
+the listed routes until dismissed. The shared route API accepts repeated
+`stack` IDs for that temporary view and validates both the cache key and input.
+Named trip/day and workout banners have deliberate typography and swipe
+dismissal. Days retain horizontal stepping and dismiss upwards; trip and workout
+banners dismiss horizontally. Map controls are hidden behind sheets; cards measure their own height before
+lifting the three primary Search/Menu/Location buttons. Cupertino transitions,
+segmented thumbs and confirmation dialogs replace default Material affordances.
+Top toasts use a root overlay, horizontal dismissal and replacement-safe timers;
+activity deletion restores the complete server-returned route via its Undo
+action. Source rename/delete and account deletion reuse the existing authenticated
+endpoints. Activity list ordering/grouping and expandable country region coverage
+are available; the full feature inventory below still records their differences.
+
+The detailed audit is [FLUTTER_WEB_PARITY.md](FLUTTER_WEB_PARITY.md). It inventories
+the actual web controls and modules, distinguishes source-level presence from
+simulator verification, and records the remaining work. Full parity is not
+claimed by this release.
+
+The audit below compares the web menus, cards and flows against the native
+preview. A partial row means the remaining behaviour still needs a port;
+this release does not claim complete web parity.
+
+| Area | Native status | Remaining web behaviour |
+|---|---|---|
+| Basemaps | Dark, Light, Terrain and Satellite using native styles | Mapbox Standard 3D, automatic sun and snow |
+| Visited ground | Blobs; explicit Region/Country/Continent; all colouring modes | Continent count labels and matching vector-level crossfades (web borders are intentionally off) |
+| Appearance | Neutral blurred glass, segmented choices, custom hex colour and opacity, separate dark/light accents | Exact responsive landscape columns and desktop popover placement |
+| Activity appearance | Per-type colours and opacity, visibility, shared per-route palette, reset | Randomize activity colours and stack-row peek |
+| Activity inspection | Speed/elevation graphs, shared ramps, graph/map scrub, totals, previous/next, solo route, metadata editing | Thumbnails, metadata-edit undo, external link and stack-peek presentation |
+| Activity statistics | Totals, annual distance chart, browse activities | Exact group ordering and duplicate-route management |
+| Ground statistics | Summary, country coverage, annual new-ground chart | Exact region preview expansion and geographic grouping |
+| Search | Places, regions, trips, activities and dates; activity opens graph | Web's integrated calendar presentation and ranked list layout |
+| Trips and days | Trip list, day picker and activity list | Full day-owned activity navigation and exact trip/calendar presentation |
+| Editing | Paint/erase strokes, sizes, undo, region clearing | Preview/highlight before region clear, track-span paint, car/train route construction |
+| Rail | Native line overlay | Group/technical controls, station cards, tile-health feedback |
+| Airports | Airline airports and information cards | Airfield/helipad/closed groups, category controls and label parity |
+| Trails | Hiking raster overlay | Nearby-route inspection and export |
+| Photos | Local pins, gallery, zoom, video playback | Clusters and map-following gallery navigation |
+| Native tracking | Swift location, HealthKit, photo indexing and sync settings | Physical-device background-wake validation remains separate from simulator QA |
+| Sync | Strava authorization and Home Assistant setup/manual sync | Komoot; full connector schedule, status and disconnect controls |
+| Sources/import | Provenance visibility and shared file parsers | Full import options/reporting |
+| Export | Native map snapshot saved to Photos | Captions, crops, layouts, quality/resolution and share composition |
+| Personal/settings | Home selection, clock, device name, sign-out | Home map marker/automatic home and consistent use of generated English strings |
+| Administration/backups | Account listing; server backup run/download | Account administration/impersonation and backup configuration/restore |
+| Introduction/updates | English strings generated from web catalogue | Intro deck, permission onboarding and What's new UI |
+| Offline/recovery | Conditional in-memory reads and error display | Persistent offline map state, retry banners and full session-recovery experience |
 
 ### And the web app consumes them
 
@@ -8835,6 +9184,154 @@ Three consequences shape how `sporra-ios/Sporra/AppBoundDomains.swift` uses it:
   `strava.com` belongs in the list beside your own host. A navigation that is
   refused now draws a sentence saying which address and why, rather than the
   blank the whole of this section is about.
+
+## On a phone, less of everything
+
+The map was borderline usable on an iPhone 16, in the app, on the 3D basemap.
+Three separate costs added up to that, and each got its own answer. What counts
+as a phone is `isPhone()` in `src/phone.js` — a coarse pointer on a screen
+whose short side is at most 560 px — decided once, so every trade below is made
+on the same answer and a narrow desktop window is not mistaken for one.
+
+**Every frame of a pan.**
+
+- **The map is drawn at 2×, not 3×** (`PHONE_MAX_DPR`). At 3× the 3D basemap
+  is ~3.3 million pixels of terrain, light and fog per frame; 2× is 44% fewer,
+  on a screen dense enough that the difference is at the edge of what an eye
+  resolves at a phone's distance. Mapbox GL JS v3 takes no `pixelRatio` option
+  and reads `window.devicePixelRatio` through a getter each time it sizes its
+  canvas, so `capDevicePixelRatio()` redefines that property in `boot.js`,
+  before either library is loaded. That is one mechanism for both libraries.
+  Everything else that reads the ratio sizes something drawn *on* the map and
+  is right to follow it; the photo viewer and its thumbnails ask
+  `nativePixelRatio()` instead, because a photograph is looked at, not panned
+  over. Measured in WebKit emulating a 393 px, 3× phone: the ratio reads 2 and
+  the map canvas is 786 px wide.
+- **The route glow is four rings, not eight** (`ROUTE_GLOW_RINGS`). Each ring is
+  every route on screen drawn again, translucent and up to twenty pixels wide.
+  The contour steps that made four the wrong answer on a laptop are finer than
+  a 460 ppi screen shows.
+- **The move handler stopped redoing things.** `considerFineRegions`, which
+  builds a set of every lit region and walks all 4,553 records, looks at most
+  every `FINE_LOOK_MS` while the camera moves (never skipped once it stops),
+  and the HUD writes text only when the text changed.
+
+**The moment of letting go.**
+
+- **The blob paint finds cells by place** — see the blob notes under [How it
+  works](#how-it-works). Measured in WebKit on a dense level-0 window of the
+  half-million-cell account: 74 ms a paint before, 50 ms after. The rest is the
+  JS blur, which is genuinely proportional to what is on screen.
+- **The chrome's contrast reading waits for `idle`.** `moveend` used to ask for
+  a `readPixels` in the very next frame *and* again at idle. A `readPixels`
+  stalls until the GPU finishes the frame, and the frame after a release is the
+  one the blob repaint, the tile requests and the glass coming back all land
+  in. Only the settled reading is taken now.
+
+**Signing in.**
+
+- **The roll-up is built level by level** (`src/rollup.js`). It used to walk
+  every stored cell up all seven levels, building a key and copying the cell's
+  id onto an array at each: three and a half million of both on the account
+  this was measured on. Each level is now built from the one below — every
+  entry visited once — and an entry keeps its `parent` and the keys of its
+  `kids` instead of every id beneath it. `storedUnder` walks those back down
+  when a tap asks, and `neighbourhoodOf` follows `parent` instead of
+  re-deriving keys. In WebKit, on 502,060 cells: 857 ms before, 317 ms after.
+  `scripts/test/rollup.mjs` keeps the old walk and holds the new one to it,
+  field by field, including the brush's incremental paths. A side effect: an
+  erase sweep no longer leaves stale ids under a cell until the gesture's
+  closing rebuild, because an entry only carries the ids stored at exactly its
+  own cell.
+- **And none of it stops the map.** Even at 317 ms, the roll-up was one task,
+  and it was not the only one: the 26 MB `/api/cells` answer was parsed on the
+  main thread, 595k rows were filed into `visited` and `cellMeta` in one loop,
+  and the roll-up then ran **twice** — once in `hydrateVisited`, while the paint
+  was being held for the preferences, and again when the hold was released.
+  Measured in WebKit on a 3× phone signing into that account: a 712 ms freeze and
+  then a 503 ms one, in the middle of the camera flying in. Now
+  (`src/cells-load.js`):
+  - the body is fetched as bytes (`getCellsBuffer`) and handed to a worker
+    (`src/cells-worker.js`), transferred rather than copied, which parses it
+    and hands back columns — one string of ids and a typed array per number,
+    transferred the same way. A browser that cannot start the worker parses the
+    same columns on the main thread (`parseCellsBuffer`): slower, never wrong.
+  - the rows are filed, and the roll-up and everything after it
+    (`finishRollUpSteps`) run, as generators driven by `runSliced`, which gives
+    the browser a frame every `SLICE_MS`. The new levels stay private until
+    they are complete, and `adoptRollUp` puts them in place in one step, so the
+    map shows the old picture until the new one is whole — never a half-rolled
+    one.
+  - the roll-up runs once: `hydrateVisited` stops after filing the rows while
+    `paintHeldForPrefs` is set.
+  - an edit made while this is running wins. Every synchronous `recomputeLit`
+    bumps `litGen`, a sliced rebuild that finds it moved gives up, and
+    `rollUpPainted` declines while one is in flight (`litPending`), so the
+    brush takes the full rebuild instead of folding a cell into levels about to
+    be replaced. Overlapping loads of the cells resolve the same way, through
+    `hydrateGen`.
+  - the ring at the top of the screen says *Loading your map…* from the first
+    byte to the first paint.
+
+  Same measurement after: the worst frame of the whole load is 60–78 ms, and
+  those frames are the basemap starting up, before any cell has arrived. The
+  cells land about a second after the answer does, over ordinary frames.
+  `scripts/test/cells-load.mjs` holds the columns to the loop they replaced.
+
+**Zooming out, with the cells hidden or not.** A zoom out over the Bernese
+Oberland froze the phone for about ten seconds. Measured in WebKit, it was three
+separate things, and none of them was the basemap. Mapbox and MapLibre both
+decode their tiles in workers; the blank map in the report was the symptom of our
+own code holding the main thread.
+
+- **Hidden cells were still drawn.** Pressing the active colour mode hides the
+  cells through `accentAlpha()`, which is an opacity. Every level change,
+  every repaint and every region dissolve still ran, into a layer drawn at
+  zero. Now `updateGrid` stops as soon as it has worked out the level when
+  `cellsOn` is false: `blankGrid` clears both surfaces once and puts the
+  crossfade bookkeeping back where a first paint expects it, and showing them
+  again (`setCellsOn`) is a first paint. The level is still worked out, because
+  the scale bar, a tap and the brush all ask it. Same zoom, with the finest
+  level pinned and the cells hidden: 8 seconds of stall before, none after.
+- **One canvas path of 50,000 discs.** With the finest level pinned and the
+  camera zoomed out, the paint put ~50,000 sub-pixel discs into a single
+  `Path2D` per colour. WebKit rasterises a path as one shape, at a cost that
+  grows far faster than the number of discs, and defers it until the pixels are
+  read — so it surfaced as a blur that had become 300 times slower. Filling
+  every `PATH_CHUNK` (16) discs instead takes that paint from 4.6 s to 0.14 s,
+  and makes ordinary views faster too (28 → 14 ms at level 0 on a phone
+  window). It is not byte-identical: separately filled discs composite their
+  antialiased rims twice where they overlap. Compared in WebKit against the
+  single path, on the real cells: at most 4/255 of alpha at every level Auto
+  draws, which is nothing, and up to 83/255 in the pinned, zoomed-out case,
+  where every disc is smaller than a pixel and the picture is already the
+  floored approximation `MIN_CELL_PX` describes.
+- **The region level asked every stored cell where it was.** `buildAreaFC`
+  resolves the region and country of each stored cell with a point-in-polygon
+  test, memoised by cell id; the note there measured 115 ms on 23k cells. On
+  502k it was 2.1 s for the regions and another 2 s for the countries being
+  warmed behind them, both mid-zoom. `warmAreaMemos` now fills both memos in
+  slices after the sign-in's first paint (7 s of wall time, no frame over
+  50 ms), so the first region build is a lookup: 2,097 ms before, 1 ms after.
+  The per-area tally is kept too (`areaTallies`, dropped when `areaGen` moves),
+  because it was being redone every time a country's detailed boundaries
+  arrived, which changes outlines and nothing about which areas are lit. And
+  those arrivals are gathered (`sharpenSoon`: `FINE_QUIET_MS`, at most
+  `FINE_MAX_WAIT_MS`) into one rebuild instead of one per country. A zoom out
+  to z5 on Auto: 6.9 s of stalls before, 0.75 s after, most of it the single
+  hand-over of seven countries' detailed outlines to the map's worker.
+
+**Measuring it.** Load with `?perf` and the console gets the roll-up, every
+blob paint, every `moveend`, and one line per gesture giving the frame count,
+p50, p95 and how many frames ran over 33 ms (`src/perf.js`). Read it through
+Safari's Web Inspector attached to the app. Without the flag every call there
+is a pass-through.
+
+**Not done, and worth measuring first.** Standard's own scene — shadows cast by
+its directional light, the 3D facades — is probably the largest cost left on
+the 3D basemap, and switching either off on a phone is a visible change rather
+than an engineering one. It wants a `?perf` gesture line on a real phone with
+each on and off before anyone decides.
 
 ## The scale bar
 
@@ -9464,3 +9961,742 @@ own string for the imagery.
 - Waymarked routes: [Waymarked Trails](https://waymarkedtrails.org/) raster tiles
   and `by_area` lookup (ODbL via OpenStreetMap, credited on the source so the
   line comes and goes with the overlay) — cached in `server/trail-tiles.js`
+
+Flutter 0.3.1 replaces the previous modal sheet when opening a submenu; a
+generation guard prevents the outgoing sheet from restoring map controls under
+the replacement. Calendar uses that same presenter. Sheets share safe-area and
+continuous phone corners, outside-tap dismissal, and downward dismissal from
+the header or overscrolling the list at its top. Settings separates categories
+with horizontal chips and edits the shared `mapboxToken` preference. Selection
+banners navigate horizontally and dismiss vertically; notifications and map
+cards dismiss vertically. Map errors are hidden under open menus. Rail vector
+source zoom limits explicitly convert JSON `num` to `double` for MapLibre.
+
+`rail_style.dart` expands feature-dependent web `line-dasharray` match expressions
+into separate native layers, retaining the original filter and an exclusive
+fallback. iOS rejects data expressions for this property with an uncaught native
+exception. Opening an activity isolates its route; Zoom to activity fits its
+bounds and Show all clears isolation while retaining the details and metric.
+
+Server 0.134.0 adds web-equivalent ground coverage to region viewport facts and
+at-point replies, including selected area geometry in the latter. Flutter renders
+cached facts before native hit testing, then reconciles the result with route,
+photo and airport priority. The selected region outline uses cached geometry;
+cells use the web's four-round 0.28 corner smoothing. The white selection line
+and dark casing share the web zoom-width stops. Place dates occupy one Seen row,
+visits are grouped, and ground area/percentage use the web precision rules.
+
+
+### Flutter latency and device caching (0.4.0)
+
+`SporraApi` now serves fresh reads locally: viewport cells, areas, point facts
+and search for 15 seconds; routes, activities, tracks, days, trips, preferences,
+sources and statistics for 60 seconds; styles and reference data for one day.
+These are maximum ages on the next read, not background polling intervals.
+Expired reads revalidate with ETags. `get(refresh: true)` forces revalidation.
+Authentication, administration and connector status always reach the server.
+Independent calendar, trip, connection and track datasets load concurrently;
+days, trips and route summaries warm after login without delaying the map.
+
+The response cache is bounded to 128 entries and 8 MiB of estimated string
+memory, with oldest entries evicted first and fresh reads moving an entry to
+the end. Eligible responses are saved in Application Support after a 500 ms
+quiet period, and flushed when the map becomes inactive or goes into the
+background. Restoration requires a successful `/api/me` check and an exact
+server/account match. A transport failure can reuse an existing response for
+up to one day; HTTP failures, including 401, never fall back to saved data.
+This does not provide offline login. Mutations invalidate before and after the
+write, native sync invalidates after completing, and sign-out clears device
+responses. A generation prevents earlier requests from repopulating the cache.
+Simultaneous GETs share one download but receive separate decoded objects, so
+filtering and decorating native GeoJSON cannot corrupt subsequent reads.
+JSON over 64 KiB and cache-file encoding run in a Dart isolate.
+
+Map refresh starts its viewport request alongside route preparation. Unchanged
+route geometry, trip tracks, overlays and selection outlines skip native
+source/layer updates; route data is reconsidered after 60 seconds. Graph
+scrubbing updates the cursor without resending the colored activity geometry.
+The existing padded visited sheet can survive small pans for 15 seconds when
+its level, filters, appearance, data generation, fine-boundary mode and output
+size match. Reuse requires the viewport to stay inside the sheet with a 10%
+inset for blur, and within 0.35 zoom steps of the painted camera. Larger moves,
+zoom-level changes and edits repaint. Reuse checks directed longitude intervals
+so crossing the date line remains correct. Blob discs reuse Paint objects and
+parsed colors within each render; the shaping pipeline and resolution stay the
+same.
+
+Brush coordinate conversion uses batches of 32 native calls rather than waiting
+for each point separately, retaining point order and the full stroke. Photo
+index reads and thumbnail requests share in-flight work. Encoded thumbnails
+use an LRU memory cache bounded to 64 entries and 24 MiB; sync and sign-out clear
+it, and late thumbnail replies cannot repopulate it. These bounds cover encoded
+bytes; Flutter's separate decoded image cache still owns displayed images.
+
+
+All Flutter menus and themed dialogs resolve their outer corner radius from the
+Flutter view's original safe inset: 43 logical pixels on phones with a top
+inset of at least 44, otherwise 24. Submenu contexts have already passed through
+SafeArea, which removes that inset from MediaQuery and previously shrank nested
+menus to 24. `menuCornerRadius` reads View padding instead, so the main menu and
+every submenu retain the same continuous corner shape. Flutter 0.5.0 removes radius overrides from `Glass` itself. Every floating
+surface, including activity/place cards, trip/activity banners, edit controls
+and map errors, resolves the same device radius for its clip and border. Trip
+action menus and app-owned text/confirmation dialogs use the same continuous
+shape rather than Cupertino's separate fixed corners; notifications match too.
+System permission prompts remain owned by iOS.
+
+
+The activity card has three equal footer buttons: Focus (with the zoom icon),
+Show all, and More info. The title and sport/date share a compact header; metric
+selection has no extra heading. A single pan recognizer on the name-only
+activity banner owns horizontal navigation and vertical dismissal, including
+diagonal swipes. The graph claims its own pan gesture so scrubbing cannot
+scroll or dismiss the surrounding card. The search/menu/location cluster is
+hidden while an activity is open and returns when it closes.
+
+Automatic activity focus waits for the card's first measured layout instead of
+using the preceding card's height. Focus and automatic fitting share padding:
+on narrow maps, the measured card height (including internal home-indicator clearance), 12 px placement
+and 24 px clearance; on wide maps, the actual card width plus its left inset and
+clearance. The top padding includes the safe inset plus 80 px for the activity
+banner and breathing room. The initial unpadded fit from the activities list is
+removed so the route is never first fitted behind the card.
+
+Flutter 0.5.1 places the activity card 12 px from the screen bottom, keeping
+home-indicator clearance inside the card. The title has 22 px top padding;
+44 px footer buttons use the outer menu radius minus their 14 px inset.
+The activity banner translates with the finger and animates back on release.
+Bounds fitting passes an explicit 450 ms duration: MapLibre iOS otherwise
+applies the calculated camera without its edge padding.
+Server 0.135.0 folds native activity maps and statistics with the browser's
+`duplicateRoutes`, including preferred-source selection and chained matches.
+Flutter requests `/api/routes?fold=1` for lists, map metadata and swipe navigation;
+the unqualified endpoint still returns every import for the web's duplicate toggle.
+Stack IDs are resolved to the preferred recording before rendering.
+
+Flutter 0.5.2 constrains the activity banner to horizontal movement. Activity
+cards only move down: a 28 px exponential resistance precedes the normal pull;
+110 px dismisses, or a downward fling of at least 900 px/s after a 50 px pull.
+Short pulls animate back. Native hit IDs are normalized and resolved through
+the server's duplicate map before deciding whether a chooser is needed. One
+canonical activity opens directly even if multiple imported IDs were hit.
+
+Settings shows the connected server version under the signed-in account. Each
+opening reads uncached `/api/health` so a newly deployed server is reflected
+without restarting the app; failed reads display unavailable.
+
+
+### Remaining Flutter parity items (0.6.0 / server 0.136.0)
+
+Native airport references accept an optional `group` (airline by default).
+`render-reference.js` loads that dataset once and calls the web's `loadAirports`,
+`airportGeoJson` and `airportLayers`; it returns the exact shared kind filters
+and minimum zooms alongside the collection. Flutter loads each enabled group
+independently and adds code/name labels, retaining airline placement priority.
+`kind=airport&group=...&index=...` returns `describeAirportFeature` for the exact
+hit. The location-notification `/api/airport` deliberately narrows its lookup to
+scheduled airline fields, so it cannot correctly describe helipads or a smaller
+field near a large airport. It remains unchanged for its original callers.
+
+`POST /api/render/activity-palette` accepts a bounded list of sport keys and
+returns the shared `randomPalette` allocation. Flutter saves these colours in
+`routeView.colors`, preserves hidden types, and turns off per-route rainbow,
+matching the web action. Colour-mode reselect toggles only ground opacity; the
+render cache key includes this visibility so reused sheets cannot leave it on.
+Metadata Undo sends the original field value through `/api/routes/update`.
+Activity links allow HTTP(S) and open through the system browser.
+
+`POST /api/import/file` accepts `preview: true` to run the exact expansion,
+parsing, source grouping and cell/route generation used for commit, then return
+counts without opening a database transaction. `includeRoutes: false` excludes
+route generation in both paths while preserving ground. The Flutter picker
+reviews and commits selected files sequentially, holding one encoded upload at
+a time; cancelling stops the remaining selection. It does not yet select
+individual archive entries. Each file commit remains atomic; the whole selected
+batch is not one transaction.
+
+Flutter connector settings use the existing Strava and Home Assistant endpoints
+for interval, enabled state, route saving, accuracy, status and disconnect.
+Updates send only changed fields, allowing the server to retain credentials.
+Cache clearing invalidates in-flight response/thumbnail generations, clears
+encoded and Flutter decoded images, flushes device responses and requests a new
+map render. It preserves authentication and imported data.
+
+
+Flutter 0.7.0 consolidates the main menu into compact map overlay toggles and
+collapsed appearance/overlay options. Statistics contains Ground and Routes
+tabs; route rows draw miniature outlines from the server-provided geometry.
+Photos open from map pins. Search opens on the trip list, preserving naming
+and hiding actions, with an inline calendar toggle. Server 0.137.0 returns
+search categories in trip, route, then place order, preserving each category's
+existing relevance order. Clearing a query also cancels its pending indicator.
+
+
+Flutter 0.8.0 puts the undecorated search input in the palette header and removes
+the hidden-trip count control. Trips and calendar have distinct loader keys:
+without them Flutter retained the previous AsyncList future across the toggle
+and supplied the calendar with the flattened trip response. The calendar scrolls
+within the palette and opening it dismisses the keyboard. Map overlays use a
+vertical switch list. Edit, import, sources, sync and administration live in
+Settings. Settings and Routes and statistics occupy the full viewport, overriding
+Material's default sheet width limit; Routes is selected on entry. These screens
+close with their header button rather than a sheet drag. Location rendering is
+enabled at map creation; the first fix centers the camera at zoom 13.6. Returning
+to the foreground arms that focus again for the next location update.
+
+
+Flutter 0.9.0 fixes fullscreen header placement using the original view's top
+inset, since modal routes remove it from MediaQuery. Large left-aligned titles,
+a circular close control and Cupertino segmented statistics/activity navigation
+replace the Material app bar and underlined tabs. The scaffold and web background
+are neutral #0b0b0b. Saved tracks are called Activities throughout both interfaces;
+API paths, preference keys and storage fields remain compatible. Waymarked routes
+retain their geographic vocabulary. Activity thumbnails render the same cached
+`thumb` polylines as the web SVG, with viewBox -6 -6 112 112 and separate segments.
+The metadata list does not contain `geom`, which caused the earlier icon fallback.
+Activity/app groups collapse independently and the ungrouped choice reads None.
+Coverage opens with Share selected, shows both percentages and area, and country
+rows show visited/total regions plus a chevron. Expanded countries initially show
+eight regions with Show all/Show fewer controls, matching the web preview size.
+
+
+Flutter 0.9.1 replaces all Material dropdown menus with Cupertino action-sheet
+pickers, including clock, recording cadence, accuracy and connector intervals.
+Settings remains rendered behind modal pickers and input dialogs; previously an
+isCurrent-based Offstage gate hid the whole screen under every popup. Sources,
+sync connectors, administration and account backups are embedded directly in
+their Settings categories. Connector lists disable their inner scrolling when
+embedded so the Settings tab owns the scroll. Input, authorization, file selection
+and destructive confirmations retain their necessary dialogs/system flows.
+
+
+Flutter 0.10.0 restores anchored dropdown pickers with rounded neutral surfaces
+and compact chevrons. Expanded menu headings remain white. Fullscreen sheets use
+unbounded width constraints and resolve their size during layout rather than
+capturing the portrait width on entry, so rotation fills the landscape viewport.
+Manual edit is a button in Personal; Settings categories reset their list scroll
+position. Import accepts files and up to ten Komoot share/tour links. Server
+0.139.0 adds /api/import/link, using the web's fetchTour, pointsToCells and
+buildRoutes, then the existing preview/transaction path. Share tokens and canonical
+activity links survive import; unsupported providers are rejected. Source lists
+and activity summaries provide the web's sourceLabel readings for native display.
+
+Basemap changes now update one persistent native map rather than replacing its
+platform-view key. That replacement could leave refresh awaiting a disposed
+map#getVisibleRegion channel. Style loading invalidates render generations and
+layer caches; refresh checks the captured controller after its viewport await.
+Location focus is armed through native tracking until a valid position and loaded
+style are available, also querying the native last position after style load and
+foreground resume. Focus clears only after the camera operation completes, and
+the location button uses the same guarded path.
+
+
+### Flutter Mapbox (0.11.0)
+
+MapLibre stays the renderer for CARTO, Terrain and tokenless Esri satellite.
+`MapboxView` uses the official Mapbox Flutter SDK for Standard and Standard
+Satellite, following the [Mapbox style configuration API](https://docs.mapbox.com/flutter/maps/guides/styles/set-a-style/).
+Engine switches retain the last camera; Standard/satellite switches reuse the
+Mapbox view and reload its style. Style identity includes token changes. A
+render generation invalidates pending viewport replies and resets all installed
+source/layer caches after style loading.
+
+`NativeMapController` adapts the shared overlay pipeline to each SDK. MapLibre
+layer properties serialize into the style specification's paint/layout groups;
+Mapbox layers use the same slots as the web: bottom for visited ground, middle
+for activity lines, top for selections and reference overlays. Activity, trip
+and selection lines use ground elevation references to retain their resolution
+over terrain. Emissive strengths keep app-owned overlays readable at night. Blob PNGs update native image sources in place;
+camera updates, screen conversion, feature hit tests and snapshots use the
+same adapter. Native tests load an in-memory style with explicit slots, so
+SDK verification does not require a production Mapbox credential.
+
+Only public pk. tokens are accepted. The editor fetches Standard directly from
+Mapbox with a 15-second timeout before writing the shared mapboxToken account
+preference. Clearing it returns 3D to Dark and satellite to Esri. Lighting is
+stored as mapboxLight (Day, Night or Auto); Auto uses the same solar elevation
+algorithm and ±6° thresholds as src/sun.js, updated each minute, on location
+focus and foreground resume. The latest device fix is retained in memory;
+before a fix, the time-zone longitude at latitude zero is used. Light/dark
+accents and route contrast follow the resolved preset. Terrain stays at real
+exaggeration 1 through all zooms, DEM maxzoom 14; landmarks begin at zoom 15.
+The current native SDK permits pitch up to 85°. Snow is outside this change.
+
+
+Flutter 0.12.0 replaces loading indicators with a steady white ring and rotating
+arc, with a labelled variant for initial map loading and asynchronous lists.
+Reduced motion stops the rotation. Material and Cupertino interface accents
+are white. The main menu removes its preview footer and duplicate Appearance
+section; its disclosures use right-facing chevrons and no inherited list padding.
+Settings keeps installed iOS version/build (from PackageInfo) and live server
+version together outside the scrollable categories, at the bottom of the screen.
+The account name/version header and category preview footers are removed.
+Activities occupies the left segment and remains the initial page. A shared
+source display helper renders apple-health and Apple Health as Apple health in
+activity app groups and Settings sources without changing stored source keys.
+
+Flutter 0.13.0 and server 0.140.0 show dated place visits as a disclosure with
+one row per recorded UTC calendar day. This count intentionally differs from
+heat-map hits (stays separated by a 24-hour gap, summed across cells). Date rows
+are deduplicated across cells and sources and sorted newest first. The collapsed
+place card is a compact capsule with a larger name, gray status and centered close
+button. Undated visits retain the plain visited status without source labels.
+
+cell_sources.visit_dates stores JSON date arrays; the startup migration leaves
+legacy rows empty. pointsToCells retains every measured day before discarding
+individual fixes. File uploads, browser imports, baked imports, device locations,
+Health, Photos, Strava and Home Assistant carry those arrays through their write
+paths. Legacy writes keep richer retained dates. The trailing optional column in
+/api/cells and restore/clear rows preserves dates through worker loading, undo
+and source renames. Existing clients can continue using the original columns.
+The date-array size participates in cell cache signatures.
+
+/api/render/at includes visitDates and visitCount. The web card uses authenticated
+/api/render/visit-dates, addressing either a grid coordinate/level or a named area
+kind/id, so search results never use a bounding-box midpoint to resolve dates.
+Both endpoints supplement old aggregate records with measured vertices from
+saved activity traces, cached by the account input and hidden-source selection.
+Same-day dated routes without a clock trace can also supply that day. Intermediate
+dates discarded by old loose-point imports need reimporting; intervals are never
+filled with invented visits. The web disclosure ignores stale asynchronous
+responses after the card changes or closes and retains local dates when offline.
+
+The Flutter activity card toggles Show all / Show this without closing the
+activity. Its outside spacing is 12 px on phone sides and bottom; action-row
+padding is 14 px on every side. Missing graph data adds no empty-state paragraph.
+
+Flutter 0.13.1 and web 0.140.1 animate disclosure chevrons from right to down
+through a quarter turn (220 ms), including menus, grouped activities and coverage.
+Navigation chevrons stay right-facing. Place cards omit the date-list heading.
+An unresolved name uses three pulsing gray dots, with a 220 ms fade into the name;
+the card's identity follows the tap request rather than the incoming name so the
+transition keeps its state. Reduced motion disables these animations. The web
+disclosure retains its button DOM node while toggling, allowing CSS rotation.
+
+Automatic location focus is armed only when the map screen starts. Resuming
+refreshes data and solar lighting without arming a camera move, and pausing
+cancels a pending focus; permission-dialog inactivity alone does not cancel it.
+The location button still explicitly arms a new focus. Startup indicators have
+no visible label, and background map reads use the same white ring instead of
+a linear progress bar. Place-card dismissal accepts only downward swipes.
+Closing the final menu panel triggers a light haptic; replacing a panel does not.
+
+Map failures wait persistentErrorDelay (3 s) before showing a notice, cancelling
+that timer on recovery. Connection failures automatically retry after
+connectionRetryDelay (2 s). App error toasts use the same delay and read the current
+error when it expires. Changed error text does not restart a continuing failure's
+window. Socket/client/timeout messages are replaced by a readable connection
+message. Background timers are cancelled when the map screen is disposed.
+
+
+Flutter iOS icons use SFIcon, backed by the sporra/symbols method channel. UIKit
+renders installed SF Symbols as transparent PNGs at the requested device scale;
+Flutter caches each symbol/size/scale and applies the current icon color. Other
+platforms and unavailable symbols use Cupertino fallbacks. Sync sections fetch
+connector status before choosing their initial expansion: disconnected or
+disabled services start collapsed. Status and connect/sync action share a row.
+The phone row edits the persisted native deviceName and exposes an icon sync
+action. Map controls and the place overlay have separate stable keys, and place
+dismissal skips Dismissible's resize phase to preserve the control anchor until
+the normal padding animation returns the controls to their resting position.
+
+The main Map overlays section includes the Interactable place-tap switch. Sync
+disclosures share the action buttons' 48-point trailing width and 20-point inset
+so their chevrons align with sync/connect icons. Account deletion and sign-out
+are pinned above the version footer on Personal; Backups contains only backup
+controls. The Personal fields scroll independently of those bottom actions.
+
+The Search popup uses a single text field and calendar action without a search
+or close glyph. Its header has equal 24-point top and side insets; the calendar
+is outside the input decoration so its position follows that shared inset.
+
+Your map omits the panel header divider, and its Appearance disclosure overrides
+the expanded ExpansionTile border so opening it adds no separating line.
+Opening Appearance also triggers a light haptic; collapsing it does not.
+The main Location, Menu, and Search buttons trigger the same light impact on
+activation. A disabled Search button has no feedback.
+
+Flutter photo sources now cluster within 36 source pixels through zoom 24, keeping
+coincident media grouped at maximum zoom. White circular badges show point_count
+or 1 for a single asset, with dark centered count labels. Both native adapters
+page cluster leaves in batches of 500; tapping opens the full nearest hit
+group without changing the camera. Circle and count layers share visibility.
+Photo headers count stills and videos separately and omit the header divider.
+The grid uses one, two, or three columns according to item count, shrink-wraps
+small galleries, and scrolls within the existing panel height cap for large ones.
+Trip/day map banners omit their category eyebrow and retain the date/name.
+
+The primary map controls use native SF Symbols: magnifyingglass,
+line.3.horizontal, and location (location.fill while native location tracking
+is armed). Explore and manage uses filled chart.bar, camera, and gearshape
+symbols, with corresponding Cupertino fallbacks.
+
+Flutter Settings keeps phone location, Health and photo-sync controls in an
+expandable Phone settings section on Sync. Device names are edited in the row
+and saved with Return, its checkmark action, or loss of focus. Personal pins
+Clear cache, Delete account and Sign out above the version footer; App settings
+and Personal's duplicate device-name editor are removed. Basemap selection stays
+in the main Appearance menu.
+
+The native rail reference accepts native=1, technical=0/1 and theme=light/dark.
+It shares technical-infrastructure filters with the browser, resolves global
+style state for native SDKs, normalizes color literals and fonts, and exports all
+six groups with line, symbol, fill and circle layers. Flutter installs cropped
+PNG/SDF sprite images from the authenticated rail proxy, preserves source-layer
+filters and base visibility, and persists group/technical options in account
+preferences. Technical or theme changes rebuild the layers; group changes only
+change visibility. Native dash-array matches and conditional colors are split into equivalent
+filtered layers with constant paint values to avoid UIKit expression conversion
+failures. Hover-only expressions resolve to their inactive state on native maps.
+
+Backups embeds the server's complete schedule and status in Settings: hourly,
+six-hour, daily, weekly, monthly or custom cron, server-local time, retention,
+last/next run, size, counters, errors, folder and downloadable files. Saving uses
+/api/backup; an immediate run uses /api/backup/run and displays saved, unchanged
+or failed outcomes. Import uses equal-width 48-point file/link buttons; the link
+button is shown only while the input contains text and hides after successful
+import. The file-import subtitle is removed.
+
+Train track options in Flutter Settings appear only while Train tracks is on,
+matching the conditional airport category controls.
+
+
+### Persistent Flutter map snapshots (0.17.0)
+
+Map reads omit the viewport bbox: each level is a reusable account-wide snapshot
+for its colouring, accent, hidden sources, info and fine-boundary mode. Cells are
+clipped locally using the server's directed longitude interval before painting
+and building tap facts. Fine region snapshots warm all visited country boundaries.
+Cached ground paints without waiting for independent route/activity requests.
+
+The response LRU allows 512 entries and 128 MiB of estimated string memory.
+As of Flutter 0.21.0, retained content has no age expiry, still requiring the
+server/account session check before restoration. Cached reads return saved data
+first and conditionally validate in the background, sharing concurrent requests. Changed responses notify the map to repaint. Explicit
+refresh awaits validation; writes, native sync, sign-out and Clear cache invalidate
+responses. Saves flush a temporary file and rename it atomically. Authentication, administration and connector status remain uncached.
+
+After painting, a two-second quiet period starts sequential warming of adjacent
+levels, remaining levels, then fine region/country snapshots. New map refreshes,
+camera motion, invalidation and app backgrounding stop further speculation;
+foreground requests pause warming until the connection is idle;
+an active HTTP download may finish. This is foreground idle prefetch, not an iOS
+background execution service or a measurement of spare bandwidth.
+
+Mapbox enables READ_AND_UPDATE on the shared native tile store with a 512 MiB
+quota to retain tile packs near browsed places across launches. Native prefetch
+zoom delta 2 requests an overview before detailed tiles. Storage and eviction stay
+with the SDK. MapLibre retains its existing ambient cache. This does not promise
+all visited basemaps offline; cold snapshots require their first download.
+
+
+### Location focus and device map preferences (Flutter 0.17.1)
+
+Location focus now sets the destination camera directly at zoom 13.6 instead of
+animating through coarser levels. Refreshes defer while focus obtains the location
+and moves the camera, then paint the destination viewport. Old in-flight cell
+responses cannot paint during focus. The focus camera explicitly retains tilt
+and bearing; regular panning and zooming continue to follow the level ladder.
+
+Basemap/theme, tilt and bearing persist in map-preferences.json in Application
+Support, scoped to the server and account. Restore runs before preferences and
+map creation; writes debounce for 500 ms and flush when the app becomes inactive.
+A damaged file falls back to the default view. The Mapbox-token fallback still
+applies, and the explicit compass reset remains available. Saving view preferences
+does not invalidate cell snapshots or require a server call.
+
+
+Flutter 0.17.2 renders the search/menu/location SF Symbols at UIKit semibold
+weight. Weight participates in the native symbol request and image cache key;
+other icons keep regular weight. The location button's fill now reflects camera
+centering rather than a pending location request, with a 25 m tolerance for GPS
+jitter and native camera rounding. Both map engines update this indication on
+camera changes; moving away clears it, and focusing restores it.
+
+Flutter 0.17.8 removes the closing-blur experiment and restores the original
+panel and dialog transitions. The snapshot capture bridge and its frame
+callbacks are removed after device testing showed severe movement stalls.
+
+### Missing activity measurements and compact loaders
+
+`src/route-metric.js` emits every recorded span within a route segment. Missing
+or non-finite speed/elevation is white, and elevation requires both ends to be
+measured. Real segment breaks remain gaps. The same collection drives web and
+Flutter maps, so changing metrics never makes unmeasured route sections vanish.
+Flutter activity dismissal uses the same light haptic as closing a menu.
+Flutter also draws the complete `route.geom` in white beneath the metric spans,
+with explicit `line-sort-key` ordering. This is a coverage fallback for cached
+responses from older servers that omitted unmeasured spans; it never connects
+separate recording segments or invents measurement values. Activity and activity
+statistics ETags include `SERVER_VERSION`, because unchanged stored coordinates
+can produce different render responses after a deployment. Tests revalidate
+both current and pre-deployment validators and exercise partial cached geometry.
+
+An unlabeled `LoadingIndicator` centres a 24×24 ring with width and height
+factors of one: a full-width settings list may centre it, while a ListTile
+trailing slot still receives a compact widget. This prevents a stretched
+rotating oval without expanding a compact loading control to the tile width.
+
+### Flutter interaction and zoom latency (0.20.0)
+
+Full cell snapshots now stay in a long-lived Dart isolate. `CellSnapshotReader`
+decodes a snapshot once and indexes its Mercator coordinates in 256×256 buckets.
+Only cells inside the padded viewport return to the UI isolate, in their
+original compositing order, with independently owned visit facts. Directed
+longitude intervals handle Greenwich and the date line. Its LRU retains at most
+three prepared snapshots and 24 MiB of estimated JSON string size; decoded
+objects and bucket indexes add memory beyond that estimate. Oversized snapshots
+are used for the current request without remaining in the LRU. Account/cache
+clearing clears those prepared snapshots too. Idle prefetch prepares cell indexes
+without transferring full off-screen snapshots into Flutter. Large HTTP response
+text decoding and large Mapbox GeoJSON encoding also run outside the UI isolate.
+
+Ground render identity follows the data, filters, level, fine-boundary mode,
+camera focus and output size, rather than every AppState revision. Opening an
+activity or changing opacity therefore retains the visited sheet; opacity and
+visibility patch its native layers. Moving the camera makes a pending decode or
+paint obsolete, allowing the next viewport to start before an old HTTP request
+finishes. The existing sheet remains until its replacement is ready. Blob
+crossfades use eight 16 ms steps (128 ms), instead of twenty 31 ms steps.
+Area snapshots are account-wide, so panning, zooming and resizing reuse their
+native geometry and tap paths while the level and fine-boundary mode match.
+Reference-overlay loading runs independently of ground refreshes. Appearance
+or filter changes can supersede an obsolete pending ground read too.
+MapLibre's idle callback adopts the controller's final camera, including direct
+camera jumps that emit no movement callback. Mapbox coalesces camera-state reads
+and resolves its final camera before refreshing at idle.
+
+Native route sources retain their complete geometry. Selection and metric-route
+exclusion use layer filters, and activity visibility uses native visibility.
+These changes no longer decode, decorate and resend the full activity collection.
+Metric/cursor updates are serialized and coalesced to the latest selection.
+Mapbox layer patches send all properties in one bridge call. MapLibre's unused
+annotation managers are disabled; this app owns its style sources directly.
+
+Preference saves invalidate preferences, rendered routes, trips, search and
+track responses, preserving ground snapshots, activity details and statistics.
+Per-endpoint generations prevent a read crossing targeted invalidation from
+repopulating those entries, while unrelated in-flight ground reads remain valid.
+Writes to visits/routes, native sync and sign-out retain full invalidation.
+Repeated cache flushes skip encoding/writing when nothing has changed.
+
+Activities/statistics, sources, calendars, trips, route summaries and saved
+activity details can display retained responses immediately and conditionally
+refresh in the background. Visible lists and the active activity receive changed
+responses; background activity updates preserve Show all / Show this. Sessions,
+administration and connector status still require server reads. Activity totals
+warm alongside the existing login datasets. Activity rows and expanded groups
+are built on demand. Graph scrubbing reuses prepared point/sample indexes,
+binary-searches the nearest distance, and paints its cursor over a retained
+graph rather than repainting all segments.
+
+`test/performance_test.dart` covers viewport equivalence, independent facts,
+targeted invalidation, delayed menu refresh, activity reconciliation and a
+10,000-activity list. Its optional `SPORRA_BENCHMARK=true` fixture compares the
+old full decode/clip path with prepared queries on 50,000 synthetic cells; those
+are host processing measurements, not end-to-end phone timings.
+`integration_test/performance_test.dart` uses mock responses and a local native
+style, with location disabled, to hold an obsolete zoom download open while
+checking the new level, retained ground and native selection filters.
+
+
+### Cached Flutter startup and moving cells (0.21.0)
+
+Every cacheable content read now uses its saved response regardless of age, then
+starts an ETag validation without waiting for it. Changed content replaces the
+visible list, active activity/track, preferences, search results, map facts,
+reference overlays or basemap style. List, activity/track, preferences, search
+and point-fact update handlers read the new body without another validation. Explicit refresh and preference merges for
+writes await the server; account/session checks remain uncached. The existing
+server/account scope, invalidation and bounded LRU still apply: age never removes
+an entry, but capacity, sign-out, Clear cache and relevant writes can remove it.
+Preference writes retain activity/trip/search/track responses for immediate reuse
+and mark their in-flight reads obsolete; the accepted preferences are saved
+locally after the write succeeds, so a settings save does not force a cold
+appearance or activity download at the next launch. Unchanged responses no
+longer rewrite the entire response file. Content revisions include the exact map query, so warming a different zoom does not discard the
+active sheet. Idle speculation reads existing snapshots without needless network
+validation. Prefetch prepares only the two nearest cell snapshots
+(`prefetchPreparedSnapshots = cellSnapshotLimit - 1`); preparing every remaining
+level used to evict the active and adjacent indexes in favour of distant levels.
+The remaining snapshots warm their raw responses only.
+
+Startup restores response and view files concurrently after session verification.
+The device view now remembers latitude, longitude and zoom as well as orientation
+and basemap. Its initial cell index starts preparing while the native style loads.
+Saved cells and complete activity lines render independently of a fresh location
+fix or route-summary metadata. Cached ground and native activity sources are
+installed before starting their background validation; only the eventual focus
+jump supersedes an earlier viewport. Menu/statistics warming waits until the first ground layer is installed and then waits another
+two seconds (`startupMenuWarmDelay`), keeping those requests off the initial map
+path. A missing cache entry still requires its first download, and session
+verification and native basemap setup still contribute to total launch time.
+
+Both camera callbacks schedule ground work during motion at most once per 150 ms
+(`gestureRefreshInterval`), coalescing movement while a render runs. Warm gesture
+reads use local snapshots; a missing level shares its outstanding download, and
+idle validates the final viewport. Moving within a level allows the padded sheet
+to finish rather than continually cancelling it. Level, filter and style changes
+can still supersede it. GPU paint and PNG encoding are serialized because that
+work cannot be cancelled. Motion uses a 256–1024 pixel sheet
+(`gestureSheetMinPixels`/`gestureSheetMaxPixels`), replaces it without a bridge
+crossfade, and leaves routes, overlays and speculation out of the gesture loop.
+Idle replaces a motion sheet with the normal quality image. The existing native
+layer moves with the camera throughout; cell detail changes arrive at the bounded
+render cadence rather than at the camera's display refresh rate.
+
+`test/api_test.dart` checks 800-day-old data before held validation, concurrent
+request sharing, changed-data notifications, query-specific ground revisions and
+unchanged-file retention. `integration_test/startup_performance_test.dart` uses a
+local native style and synthetic saved cells/routes with held server responses
+and a pending location flag, while an uncached route-summary response is also
+held. It verifies both initial layers before validation and a cell level replacement during a four-second native zoom animation, before
+idle, with no gesture HTTP validation. These are simulator fixtures, not an
+end-to-end measurement of the user's phone or account.
+
+
+An opt-in `SPORRA_PERFORMANCE_TRACE=true` Dart define emits startup, native-style,
+first-ground/activities, cell filtering/painting and HTTP durations, status codes
+and cache-hit counts via `performance.dart`. It is disabled by default. The trace
+omits account names, coordinates, request queries, tokens and response payloads;
+unrecognized HTTP paths are labelled `other`. This supports timing a normal
+release on the phone without replacing it with an integration-test entrypoint.
+
+
+### Release-device cache retention (Flutter 0.21.1)
+
+On the iPhone release build, initial cell downloads took 2.3–2.8 seconds and full
+snapshot indexing roughly 0.6 seconds; cell image painting took 46–114 ms. One
+session check also waited 5.8 seconds while earlier speculation was still active.
+Repeat launches missed saved content, so live tracing now includes restore/save
+outcomes, response sizes, cache retention and prepared-index reuse, without
+recording payloads, URLs, coordinates or account identifiers.
+
+Both response and prepared-snapshot caches use `BoundedCache`. An oversized
+entry is rejected before normal LRU eviction rather than flushing all useful
+entries and then evicting itself. Replacements remove only their previous entry;
+reads retain recent entries, and account/invalidation removal updates the byte
+accounting. Speculative responses and prepared indexes fill spare capacity only,
+so normal-sized speculation cannot evict foreground entries either. A foreground
+read sharing an outstanding speculative request promotes that response. Index
+preparation skips work when its result cannot be retained. Raw responses retain the 128 MiB/512-entry budget. Prepared snapshots
+now have a 64 MiB estimated JSON-string allowance (still three snapshots), so
+larger active cell indexes can remain prepared; decoded facts and buckets consume
+additional memory beyond that estimate. The limits remain estimates, not whole
+process memory ceilings.
+
+Idle prefetch is limited to two nearest levels (`prefetchResponseLimit = 2`),
+with at most two prepared cell indexes. It no longer walks all remaining levels
+or speculatively fetches fine region/country boundaries. Fixed detail modes do
+not prefetch other levels. Missing snapshots still load when selected. This
+keeps distant exports from competing with ordinary foreground requests and
+startup restoration. Capacity and persistence regression tests cover oversized
+speculation retaining saved preferences and activity lines across restart.
+
+
+### Geometry before cell histories (Flutter 0.21.2)
+
+The phone trace revealed an approximately 54 MB level-zero response with
+`info=1`, too large for even the expanded prepared-index allowance. Repeated
+viewport reads decoded it again, and the saved response file took about a second
+to restore. Cell geometry now uses the account-wide `info=0` response, retaining
+the same colours, sparse flags and spatial index while excluding visit histories.
+Region responses still carry their area facts and independent outline geometry.
+
+After installing the ground layer, idle views request cell facts with `info=1`
+and the padded viewport's `bbox`. These requests use available cached responses
+before validation and never hold up geometry, activity lines or moving sheets.
+Known cell keys provide an immediate visited indicator, and previously loaded
+facts remain available for overlapping cells with the same level and filters.
+Changed facts update a selected place without repainting the ground. Selection,
+query, level, style and request guards keep obsolete facts out of a new view.
+The existing independent point lookup remains available while details load.
+
+Restoration converts legacy account-wide cell responses to geometry in a worker,
+after verifying their server/account scope; this retains useful old geometry
+instead of requiring a fresh download during upgrade. A migrated response drops
+its ETag because the geometry query has a different signature. Existing geometry
+responses take precedence, and the smaller migrated cache is saved atomically.
+Account-wide cell-history responses are no longer retained; viewport histories
+and region facts remain eligible for the bounded response cache.
+
+The startup simulator fixture holds cold facts, route summaries, validation and
+location independently. It checks initial native layers and live zoom first,
+then releases facts and verifies that both initial and changed details update
+the selected place without replacing the painted sheet. API migration tests
+cover old geometry reuse, separate ETag scope and removal of bulk histories.
+
+
+### Read cache bodies on demand (Flutter 0.21.3)
+
+With geometry and visible facts separated, a repeat phone launch still spent
+1.65 seconds restoring roughly 66 MB of saved response strings before creating
+the map. Cached cells then appeared in 619 ms and activity lines in 330 ms from
+map creation. The remaining bulk restoration delay was independent of network
+validation and required changing persistence rather than rendering.
+
+`responses.json` is now a small format-two index containing the verified
+server/account scope, response URL, ETag, timestamp, estimated size and numeric
+body-file ID. Bodies live in its sibling `responses.json.data` directory and
+load only when requested. Shared in-flight file reads avoid loading a startup
+snapshot twice while its index prepares alongside the native style. Large body
+UTF-8 encoding and decoding run in workers. The disk index and loaded response
+LRUs each obey the 512-entry/128 MiB estimated-string budget; speculation cannot
+evict foreground content from either. Unread bodies remain eligible regardless
+of age. Missing or truncated bodies fall back to a server request without reusing
+their ETag, while unrelated cached content remains available.
+
+Saves write changed bodies to new numeric IDs, rename each temporary body, then
+atomically replace the index. Unchanged bodies retain their files. Old body files
+are removed after the new index commits, and Clear cache/sign-out remove both
+the index and its body directory. Legacy files are read once and migrated with
+their useful geometry and content retained; subsequent launches parse metadata
+only. API tests check lazy reads, missing-body recovery, orphan cleanup, scope,
+invalidation and retention across restart. The native startup fixture restores
+this indexed format before exercising held requests and live zoom.
+
+On the release iPhone, indexed repeat startup restored the response index in
+3 ms (previously 1647 ms), with no bodies loaded by restoration. Session checking
+and cached preferences completed at 261 ms; native activity lines appeared
+309 ms after map creation and the first cell sheet at 648 ms. Combined, that is
+approximately 0.57 seconds for lines and 0.91 seconds for cells from app-state
+initialization, versus 2.17 and 2.46 seconds respectively before indexed storage.
+These are measured release runs on this phone with the server reachable, not
+guaranteed launch deadlines or timings for a missing cache entry.
+
+Flutter 0.21.4 gives the disk LRU its own 256 MiB estimated-string allowance
+(`diskCacheBytes`), keeping the loaded-response allowance at 128 MiB. The device's
+existing snapshots nearly filled the old shared 128 MiB allowance, so idle
+warming could not retain the adjacent level even though the active and nearby
+geometry themselves fit comfortably. The separate disk budget preserves more
+zoom levels across launch without restoring or holding all their bodies in RAM.
+Both LRUs still have 512 entries and speculation still fills spare space only.
+A regression test alternates cached responses while offline with a smaller RAM
+allowance than disk allowance, checking reuse after loaded-body eviction.
+
+Route visibility now updates independently of ground and route downloads. The
+selected activity's metric overlay normally replaces its base line, so the base
+filter can simultaneously select that ID and exclude it. Closing previously
+cleared the overlay immediately but could leave that filter installed until a
+ground refresh finished, hiding every activity. A serialized route-style worker
+coalesces selection/Show all/close changes and applies their latest filter to the
+retained native source, even while a camera or data refresh is pending. Data
+replacement and style replacement share that single writer. The native simulator
+fixture reproduces the old filter remaining after close, then verifies both base
+activities are actually rendered before releasing a held ground request.
+
+Opt-in timing now also records activity-data readiness, first card layout and
+route-style duration with boolean selection/metric/visibility counts. These
+events contain no route IDs or other account data. In the installed normal
+0.21.4+43 release, the user confirmed other activity lines remained visible after
+closing. Across 13 phone openings, six cached activities reached data readiness
+in 4–22 ms; seven uncached activities took 96–219 ms. First card layout took
+18–34 ms for cached activities and 118–242 ms for uncached activities. The close
+filter updates took 4–19 ms. These timings cover the observed activities and
+server conditions rather than guaranteeing every future opening's latency.
+
+That launch restored the cache index in 1 ms and app state in 212 ms. Native
+activity lines appeared 777 ms after map creation and cells at 1188 ms, roughly
+0.99 and 1.40 seconds respectively from app-state initialization. Native style
+loading and the first geometry body read varied across phone runs; they remain
+part of startup latency even though bulk cache restoration no longer blocks it.

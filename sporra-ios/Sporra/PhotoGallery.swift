@@ -139,21 +139,23 @@ final class PhotoGalleryController: UIViewController {
         close.setImage(UIImage(systemName: "xmark"), for: .normal)
         close.tintColor = .white
         close.backgroundColor = UIColor(white: 0, alpha: 0.45)
-        close.frame = CGRect(x: 16, y: 16, width: 40, height: 40)
-        close.layer.cornerRadius = 20
+        close.frame = CGRect(x: 16, y: 16, width: 48, height: 48)
+        close.layer.cornerRadius = 24
         close.addTarget(self, action: #selector(dismissSelf), for: .touchUpInside)
         close.autoresizingMask = [.flexibleRightMargin, .flexibleBottomMargin]
         view.addSubview(close)
 
-        // "3 of 12", which is the one thing a gallery has to say that a single
-        // picture does not: how much of the group is behind and ahead of you.
-        // Left out entirely for a group of one, where it would be "1 of 1".
+        // The capture date stays visible for a single item too. The second
+        // line locates the current item in a group without crowding the player controls.
         counter.textAlignment = .center
         counter.font = .systemFont(ofSize: 13, weight: .medium)
         counter.textColor = UIColor(white: 1, alpha: 0.85)
-        counter.frame = CGRect(x: 72, y: 16, width: view.bounds.width - 144, height: 40)
+        counter.numberOfLines = 2
+        counter.backgroundColor = UIColor(white: 0, alpha: 0.45)
+        counter.layer.cornerRadius = 24
+        counter.clipsToBounds = true
+        counter.frame = CGRect(x: 72, y: 16, width: view.bounds.width - 144, height: 48)
         counter.autoresizingMask = [.flexibleWidth, .flexibleBottomMargin]
-        counter.isHidden = items.count < 2
         view.addSubview(counter)
         refreshCounter()
         refreshChrome()
@@ -171,10 +173,11 @@ final class PhotoGalleryController: UIViewController {
         close.isHidden = onVideo
     }
 
-    override func viewSafeAreaInsetsDidChange() {
-        super.viewSafeAreaInsetsDidChange()
-        close.frame.origin.y = view.safeAreaInsets.top + 12
-        counter.frame.origin.y = close.frame.origin.y
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let top = view.safeAreaInsets.top + 12
+        close.frame = CGRect(x: 16, y: top, width: 48, height: 48)
+        counter.frame = CGRect(x: 72, y: top, width: max(0, view.bounds.width - 144), height: 48)
     }
 
     private func page(at index: Int) -> PhotoPageController {
@@ -182,7 +185,13 @@ final class PhotoGalleryController: UIViewController {
     }
 
     private func refreshCounter() {
-        counter.text = "\(at + 1) of \(items.count)"
+        guard items.indices.contains(at) else { return }
+        let item = items[at]
+        let date = nativeDate(.number(Double(item.t)))
+        let time = DateFormatter.localizedString(from: Date(timeIntervalSince1970: Double(item.t)), dateStyle: .none, timeStyle: .short)
+        let captured = "\(date) · \(time)"
+        counter.text = items.count > 1 ? "\(captured)\n\(at + 1) of \(items.count)" : captured
+        counter.accessibilityLabel = counter.text
     }
 
     @objc private func dismissSelf() {

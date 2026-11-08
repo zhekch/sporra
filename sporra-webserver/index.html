@@ -116,10 +116,44 @@
           <span data-i18n="hud.region">Region</span>
           <span class="hud-region">
             <b id="hud-region">—</b>
-            <button type="button" id="hud-region-clear" data-i18n="hud-region-clear.clear" data-i18n-aria-label="hud-region-clear.clear-this-region" aria-label="Clear this region" disabled>Clear</button>
+            <button type="button" id="hud-region-clear" data-i18n="hud-region-clear.clear" data-i18n-aria-label="hud-region-clear.clear-this-region" aria-label="Hover a region, then tap it to clear" aria-pressed="false" disabled>Clear</button>
           </span>
         </div>
-        <div data-i18n="hud-hint.tap-toggles-ctrl-paints" class="hud-hint" id="hud-hint">Tap toggles · tap a track to paint it · Ctrl paints · Option erases · Shift clears a region</div>
+        <div class="hud-route" id="hud-route">
+          <div class="hud-row" id="hud-route-row">
+            <span data-i18n="hud.route">Route</span>
+            <button type="button" class="hud-route-add" id="hud-route-add" data-i18n="hud-route-add.add">Add</button>
+          </div>
+          <div class="hud-route-form" id="hud-route-form" hidden>
+            <div class="hud-route-end" id="hud-route-start">
+              <label data-i18n="hud-route-start.start" for="hud-route-start-input">Start</label>
+              <input id="hud-route-start-input" class="hud-route-query" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" data-i18n-placeholder="hud-route-query.city" placeholder="City">
+              <div class="hud-route-hits" id="hud-route-start-hits" hidden></div>
+            </div>
+            <div class="hud-route-end" id="hud-route-end">
+              <label data-i18n="hud-route-end.destination" for="hud-route-end-input">Destination</label>
+              <input id="hud-route-end-input" class="hud-route-query" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" data-i18n-placeholder="hud-route-query.city" placeholder="City">
+              <div class="hud-route-hits" id="hud-route-end-hits" hidden></div>
+            </div>
+            <div class="seg" id="hud-route-mode" role="group" data-i18n-aria-label="hud-route-mode.transport">
+              <button type="button" class="seg-btn active" id="hud-route-car" data-i18n="hud-route-car.car">Car</button>
+              <button type="button" class="seg-btn" id="hud-route-train" data-i18n="hud-route-train.train">Train</button>
+            </div>
+            <p class="hud-route-status" id="hud-route-status"></p>
+            <p class="hud-route-credit" id="hud-route-credit-car">
+              <a href="https://project-osrm.org/" target="_blank" rel="noreferrer">OSRM</a>
+              · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a>
+            </p>
+            <p class="hud-route-credit" id="hud-route-credit-train" hidden>
+              <a href="https://transitous.org/sources/" target="_blank" rel="noreferrer">Transitous</a>
+            </p>
+            <div class="hud-route-actions">
+              <button type="button" id="hud-route-cancel" data-i18n="hud-route-cancel.cancel">Cancel</button>
+              <button type="button" id="hud-route-confirm" data-i18n="hud-route-confirm.confirm" disabled>Confirm</button>
+            </div>
+          </div>
+        </div>
+        <div data-i18n="hud-hint.tap-toggles-ctrl-paints" class="hud-hint" id="hud-hint">Tap toggles · tap a track to paint it · Ctrl paints · Option erases · Clear, then hover a region and tap it</div>
       </div>
     </div>
 
@@ -211,6 +245,10 @@
                 <button data-i18n-aria-label="hud-color.visited-color" type="button" class="color-swatch" id="hud-color" aria-label="Visited color"></button>
               </div>
               <div data-i18n="cells-off.visited-areas-hidden" class="menu-note" id="cells-off" hidden>Visited areas hidden.</div>
+            </div>
+            <div class="map-opacity-control">
+              <label for="map-opacity">Opacity <span id="map-opacity-value">30%</span></label>
+              <input id="map-opacity" type="range" min="0" max="100" step="1" value="30" />
             </div>
           </section>
 
@@ -362,7 +400,7 @@
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
               </svg>
-              <span data-i18n="stats-open.routes-and-statistics">Routes and statistics</span>
+              <span data-i18n="stats-open.routes-and-statistics">Activities and statistics</span>
             </button>
             <!-- Two doors, and both are a destination rather than a signpost.
 
@@ -459,7 +497,7 @@
       <div class="modal-card">
         <div class="modal-head">
           <div>
-            <div data-i18n="stats.routes-and-statistics" class="modal-title">Routes and statistics</div>
+            <div data-i18n="stats.routes-and-statistics" class="modal-title">Activities and statistics</div>
             <div data-i18n="stats.how-much-ground-your-visited" class="modal-sub">How much ground your visited cells actually cover.</div>
           </div>
           <button data-i18n-aria-label="stats-close.close" class="cell-info-close" id="stats-close" type="button" aria-label="Close">
@@ -472,7 +510,7 @@
              down. This is the switch between the two halves of the dialog, and
              it was wearing the same clothes as "Area / Share". -->
         <div class="seg stats-tabs" id="stats-tabs">
-          <button data-i18n="stats-tabs.routes" type="button" class="seg-btn active" data-tab="routes">Routes</button>
+          <button data-i18n="stats-tabs.routes" type="button" class="seg-btn active" data-tab="routes">Activities</button>
           <button data-i18n="stats-tabs.statistics" type="button" class="seg-btn" data-tab="cells">Statistics</button>
         </div>
         <div class="stats-body" id="stats-body">
@@ -496,10 +534,21 @@
           </svg>
         </button>
       </div>
+      <div id="cell-info-dates" hidden></div>
       <div class="cell-info-rows" id="cell-info-rows"></div>
     </div>
 
     <div class="cell-info" id="route-info" hidden>
+      <!-- Above the card, not in it. Which of the two the line is coloured by.
+           Hidden when this activity was saved before either was kept. -->
+      <div class="route-metric-pills" id="route-metric-pills" hidden>
+        <button data-i18n="route-metric-speed.speed" type="button" id="route-metric-speed">Speed</button>
+        <button data-i18n="route-metric-elev.elevation" type="button" id="route-metric-elev">Elevation</button>
+      </div>
+      <!-- The glass is on this sheet, not on #route-info. The pills are in
+           that box and stick out above this one; a backdrop-filter on the
+           shared parent would stop them blurring the map. -->
+      <div class="route-info-card">
       <div class="cell-info-head">
         <div>
           <div data-i18n="route-info-name.route" class="cell-info-title" id="route-info-name">Route</div>
@@ -512,6 +561,8 @@
         </button>
       </div>
       <div class="cell-info-rows" id="route-info-rows"></div>
+      <div class="route-metric-graph" id="route-metric-graph" hidden></div>
+      <p data-i18n="route-metric-empty.import-the-file-again" class="route-metric-empty" id="route-metric-empty" hidden>Speed and elevation aren't kept for this activity yet. Import the file again and they will be.</p>
       <!-- The suggestions for the Activity field. The editing form itself
            moved into the routes dialog (Routes and statistics → a route →
            Edit); this list is what that form's input reads from, so it stays
@@ -528,8 +579,8 @@
       </datalist>
       <div class="route-info-actions">
         <button data-i18n="route-zoom.zoom" type="button" class="modal-btn" id="route-zoom">Zoom</button>
-        <button data-i18n="route-only.only-this" type="button" class="modal-btn" id="route-only">Only this</button>
         <button data-i18n="route-more.more-info" type="button" class="modal-btn primary" id="route-more">More info</button>
+      </div>
       </div>
     </div>
 
@@ -537,6 +588,10 @@
          picture in the middle: the strip is the rest of the group, and it is
          there far more often than not — forty photographs of one dinner are one
          point on the map at every zoom there is. -->
+    <!-- The pile of activities under one tap, on a phone. Filled from
+         showRouteStack; a desktop puts the same card in a popup instead. -->
+    <div class="cell-info route-stack-sheet" id="route-stack-sheet" hidden></div>
+
     <div class="cell-info photo-info" id="photo-info" hidden>
       <div class="cell-info-head">
         <div>
@@ -624,9 +679,10 @@
            day with activities is on the chip above, this one is up from the
            start: "2 activities · Show", then the name of the one on the map
            and *Hide* once Show has been pressed. Sideways over it is the
-           next activity, the same gesture the day chip takes along the days,
-           and the arrows are the same hint — and the way through for a mouse.
-           See `updateSoloChip` in src/main.js. -->
+           next activity of that day. With *Show all* — a route picked out of
+           the map, not one of a day's — the same swipe is the workout before
+           or after it in time. The arrows are the hint, and the way through
+           for a mouse. See `updateSoloChip` in src/main.js. -->
       <div class="route-solo" id="route-solo" hidden>
         <button data-i18n-aria-label="route-solo-prev.the-activity-before" class="chip-arrow chip-arrow-l" type="button" id="route-solo-prev" hidden>
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 6l-6 6 6 6"/></svg>
@@ -784,17 +840,6 @@
                    away on the right with nothing in between. -->
               <div class="pane-body settings-cols two">
                 <div class="settings-col">
-                <!-- iOS only. Hidden until `sporraSettings` answers, which a
-                     browser never has — the native settings screen (server
-                     address, location, Health, photos) lives in the app, and
-                     this is the door the page opens it with. See
-                     SettingsBridge.swift. -->
-                <button type="button" class="app-settings-row" id="settings-app" hidden>
-                  <span data-i18n="personal.app-settings">App settings</span>
-                  <svg class="app-settings-go" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="m9 5 7 7-7 7" />
-                  </svg>
-                </button>
                 <div class="home-row">
                   <div class="home-line">
                     <span class="home-text">
@@ -898,10 +943,6 @@
                        is what it draws. -->
                   <div class="settings-col">
                     <div data-i18n="rail.train-tracks" class="dialog-heading first">Train tracks</div>
-                    <label class="import-row">
-                      <span data-i18n-text="rail.interactable">Interactable<small data-i18n="rail.a-tap-on-a-railway">A tap on a railway opens a card about it, and the cursor says so</small></span>
-                      <input type="checkbox" id="rail-interactive" />
-                    </label>
                     <div class="menu-subhead"><span data-i18n="rail.show">Show</span></div>
                     <div id="rail-groups"></div>
                     <!-- Last, and outside the list above, because it is not a
@@ -1032,7 +1073,7 @@
                   <select id="import-source"></select>
                 </label>
                 <label class="import-row" id="import-routes-row" hidden>
-                  <span data-i18n-text="import-routes-row.save-routes">Save routes<small data-i18n="import-routes-note.keeps-the-tracks-themselves-drawn" id="import-routes-note">Keeps the tracks themselves, drawn over the map</small></span>
+                  <span data-i18n-text="import-routes-row.save-routes">Save activities<small data-i18n="import-routes-note.keeps-the-tracks-themselves-drawn" id="import-routes-note">Keeps the tracks themselves, drawn over the map</small></span>
                   <input type="checkbox" id="import-routes" checked />
                 </label>
               </div>
@@ -1228,7 +1269,7 @@
                             </select>
                           </label>
                           <label class="import-row" id="strava-routes-row" hidden>
-                            <span data-i18n-text="strava-routes-row.save-routes">Save routes<small data-i18n="strava-routes-row.keeps-each-activity-s-line">Keeps each activity's line, drawn over the map</small></span>
+                            <span data-i18n-text="strava-routes-row.save-routes">Save activities<small data-i18n="strava-routes-row.keeps-each-activity-s-line">Keeps each activity's line, drawn over the map</small></span>
                             <input type="checkbox" id="strava-routes" checked />
                           </label>
                           <label class="import-row" id="strava-enabled-row" hidden>
@@ -1747,7 +1788,7 @@
         <div class="import-error" id="komoot-error" hidden></div>
 
         <label class="import-row" id="komoot-routes-row" hidden>
-          <span data-i18n-text="komoot-routes-row.save-route">Save route<small data-i18n="komoot-routes-row.keeps-the-line-itself-drawn">Keeps the line itself, drawn over the map</small></span>
+          <span data-i18n-text="komoot-routes-row.save-route">Save activity<small data-i18n="komoot-routes-row.keeps-the-line-itself-drawn">Keeps the line itself, drawn over the map</small></span>
           <input type="checkbox" id="komoot-routes" checked />
         </label>
 

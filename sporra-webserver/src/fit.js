@@ -13,9 +13,10 @@
 // every data message after it.
 //
 // We want global message 20 (`record`) — field 0 position_lat, field 1
-// position_long, field 253 timestamp — plus the sport, if the file names it.
-// Power, heart rate, laps and everything else are stepped over by their
-// declared width without being decoded.
+// position_long, field 2 altitude (or field 78, the enhanced one), field 253
+// timestamp — plus the sport, if the file names it. Power, heart rate, laps
+// and everything else are stepped over by their declared width without being
+// decoded.
 //
 // Nothing here verifies a CRC, neither the header's nor the file's. A FIT that
 // is actually damaged trips over its own structure long before the checksum
@@ -238,8 +239,20 @@ function readMessages(view, off, end, out) {
   return true;
 }
 
-// Altitude, speed, power and the rest of a record are skipped by width: the
-// map only ever stores lat/lng/time.
+// FIT stores a height as an integer: metres = raw / 5 − 500. Field 78 is the
+// wider enhanced altitude; field 2 is the original uint16. Either can be
+// absent. Anything outside the range a ride can actually reach is a sentinel
+// that the invalid-value check did not catch.
+function fitMetres(raw) {
+  if (!Number.isFinite(raw)) return null;
+  const metres = raw / 5 - 500;
+  if (metres < -500 || metres > 9000) return null;
+  return metres;
+}
+
+// Speed, power and the rest of a record are skipped by width. Height is not:
+// the activity card colours and graphs it, and a FIT file is where most of a
+// Strava archive keeps it.
 function readRecord(view, off, def, t, out) {
   const lat = fieldOf(view, off, def, 0);
   const lng = fieldOf(view, off, def, 1);
@@ -248,7 +261,10 @@ function readRecord(view, off, def, t, out) {
   const deg = { lat: lat * SEMICIRCLE, lng: lng * SEMICIRCLE };
   if (Math.abs(deg.lat) > 90 || Math.abs(deg.lng) > 180) return;
   if (deg.lat === 0 && deg.lng === 0) return; // null-island noise, as in src/locations.js
-  out.points.push({ lat: deg.lat, lng: deg.lng, t: unixSeconds(t) });
+  const p = { lat: deg.lat, lng: deg.lng, t: unixSeconds(t) };
+  const ele = fitMetres(fieldOf(view, off, def, 78)) ?? fitMetres(fieldOf(view, off, def, 2));
+  if (ele != null) p.ele = ele;
+  out.points.push(p);
 }
 
 /**

@@ -1,3 +1,4 @@
+import { cellFixtures } from './cell-fixtures.mjs';
 // Conditional GETs on the per-account reads.
 //
 // The point of an ETag here is that a map of 25,000 cells is a megabyte of JSON
@@ -69,7 +70,7 @@ async function api(method, url, body, headers = {}) {
   const res = await fetch(`${BASE}${url}`, {
     method,
     headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...headers },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(cellFixtures(body)),
   });
   const setCookie = res.headers.get('set-cookie');
   if (setCookie) cookie = setCookie.split(';')[0];

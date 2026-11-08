@@ -11,11 +11,16 @@
 //
 // `t` is milliseconds since the tour started, so the tour's own `date` turns
 // the whole list into real timestamps — which is all the rest of the app needs
-// to fold it into cells and count visits the usual way. The GPX download isn't
+// to fold it into cells and count visits the usual way. A recording left open
+// reports that clock as days, with every fix but the first piled on the end;
+// `time_in_motion` is the duration the tour page shows, and it replaces the
+// clock when the points themselves have no pace in them. The GPX download isn't
 // needed at all: this is the same data, already parsed.
 //
 // Being undocumented, it can change without warning. Everything here fails
 // with a readable message rather than assuming a shape.
+
+import { ROUTE_MIN_SPEED_KMH, TRACK_GAP_SEC, segmentLength } from './routes.js';
 
 const API = 'https://www.komoot.com/api/v007/tours';
 
@@ -157,6 +162,99 @@ const SPORTS = {
 
 export const sportLabel = (key) => SPORTS[key] ?? '';
 
+// The same test `recordedSeconds` uses. A span slower than this was a clock
+// left running, and covering the tour's own distance at that pace is how you
+// can tell without already knowing the answer.
+const clockBelievable = (metres, sec) =>
+  sec > 0 && metres > 0 && (metres / 1000) / (sec / 3600) >= ROUTE_MIN_SPEED_KMH;
+
+// Time that is not inside the single longest hole. A collapsed recording is
+// one hole with the fixes piled at either end of it; a real ride still has
+// its own span once that hole is taken out.
+function spanBesideLongestGap(points) {
+  let span = 0;
+  let biggest = 0;
+  for (let i = 1; i < points.length; i++) {
+    const dt = (points[i].t || 0) - (points[i - 1].t || 0);
+    if (dt > 0) span += dt;
+    if (dt > biggest) biggest = dt;
+  }
+  return span - biggest;
+}
+
+// The points carry no pace: put the ride's duration along the line, so the
+// card, the graph and the summary all measure the same hour. Distance, not
+// index — a long straight and a cluster of fixes at a junction are not the
+// same amount of the ride.
+function spreadOver(points, seconds) {
+  const cum = [0];
+  for (let i = 1; i < points.length; i++) cum.push(cum[i - 1] + segmentLength([points[i - 1], points[i]]));
+  const total = cum[cum.length - 1];
+  const last = points.length - 1;
+  for (let i = 0; i < points.length; i++) {
+    const frac = total > 0 ? cum[i] / total : last ? i / last : 0;
+    points[i].t = Math.round(frac * seconds);
+  }
+}
+
+/**
+ * How long this tour took, and point timestamps that agree with it.
+ *
+ * `duration` is wall-clock time and `time_in_motion` is what the tour page
+ * prints. Both are seconds. On a recording that was actually stopped they
+ * agree with the coordinates, and those coordinates are kept — the pauses in
+ * them are real. On one that was not, the wall clock and the coordinates are
+ * the same absurd span (one tour: 163 hours for 11.8 km, every fix but the
+ * first sharing that timestamp) while the page still says 1 h 49 min. That
+ * moving time is the one the route is given, spread along the line because a
+ * single timestamp has nothing to graph.
+ *
+ * Points come in as seconds from the start and leave as unix seconds when
+ * `startedAt` is known. An undated tour keeps `t` at 0: a small offset would
+ * otherwise read as 1970.
+ *
+ * @param {Array<{lat:number,lng:number,t:number}>} points
+ * @returns {{durationSec:number, lastAt:number}}
+ */
+export function applyKomootClock(points, { motionSec = 0, wallSec = 0, lengthM = 0, startedAt = 0 } = {}) {
+  const motion = Math.max(0, Math.round(+motionSec || 0));
+  const wall = Math.max(0, Math.round(+wallSec || 0));
+  const lastT = points.length ? points[points.length - 1].t || 0 : 0;
+  const span = points.length > 1 ? lastT - (points[0].t || 0) : 0;
+  const metres = lengthM > 0 ? lengthM : segmentLength(points);
+  const believable = (sec) => clockBelievable(metres, sec);
+  const collapsed = span > 0 && !believable(span) && spanBesideLongestGap(points) < TRACK_GAP_SEC;
+  // Moving time first: it is the number on the page. The wall clock is only
+  // a fallback for a tour that never recorded one.
+  const trusted = believable(motion) ? motion : believable(wall) ? wall : 0;
+
+  let durationSec;
+  let endOffset;
+  if (collapsed && trusted) {
+    spreadOver(points, trusted);
+    durationSec = trusted;
+    endOffset = trusted;
+  } else if (span > 0 && believable(span) && wall > 0 && !believable(wall)) {
+    // The coordinates already describe the ride. Extending them out to a
+    // wall clock that fails the same test is how a good line becomes a
+    // week-long one. The moving time is not substituted either: the pauses
+    // in a real line are part of how long it took.
+    durationSec = span;
+    endOffset = lastT;
+  } else {
+    durationSec = wall || motion || span;
+    endOffset = wall || lastT;
+  }
+
+  const start = Math.floor(+startedAt) || 0;
+  if (start) {
+    for (const p of points) p.t += start;
+  } else {
+    for (const p of points) p.t = 0;
+  }
+  return { durationSec, lastAt: start ? start + endOffset : 0 };
+}
+
 /**
  * Fetch one tour and turn it into the shapes the rest of the app already
  * understands: flat `points` for the cell folding, and a `tracks` entry (the
@@ -180,23 +278,18 @@ export async function fetchTour({ id, shareToken }) {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
     if (Math.abs(lat) > 90 || Math.abs(lng) > 180) continue;
     const offset = Number.isFinite(+it?.t) ? Math.round(+it.t / 1000) : 0;
-    const p = { lat, lng, t: startedAt ? startedAt + offset : 0 };
+    const p = { lat, lng, t: offset };
     if (Number.isFinite(+it?.alt)) p.ele = +it.alt;
     points.push(p);
   }
   if (!points.length) throw new Error('That tour has no usable coordinates.');
 
-  // Komoot's own `duration` is the tour's answer to "how long did this take",
-  // and the last coordinate's offset is only a guess at it — a guess that one
-  // stray point ruins. Two real tours here end twenty-five days and seven days
-  // after they started, for twenty kilometres and eleven: a recording left
-  // running, with a final fix landing whenever the phone next looked. The
-  // duration is preferred where the API gives one, and the coordinates are the
-  // fallback for tours that carry none.
-  const durationSec = Math.max(0, Math.round(+tour?.duration || 0));
-  const lastAt = startedAt
-    ? startedAt + (durationSec || points[points.length - 1].t - startedAt)
-    : 0;
+  const { durationSec, lastAt } = applyKomootClock(points, {
+    motionSec: tour?.time_in_motion,
+    wallSec: tour?.duration,
+    lengthM: +tour?.distance || 0,
+    startedAt,
+  });
   const name = String(tour?.name ?? '').trim();
   return {
     tour: {

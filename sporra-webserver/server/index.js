@@ -1,3 +1,5 @@
+import { normalizeVisitDates, normalizeVisitTimes, withRouteVisitTimes } from '../src/visit-dates.js';
+import { trackData } from '../src/track-data.js';
 // Tiny auth + per-user cell-storage API for Sporra.
 //
 // Built entirely on Node's standard library — no npm dependencies:
@@ -84,6 +86,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeLimiter, clientIp } from './rate-limit.js';
 import * as derive from './derive.js';
+import { announcementFor, announcementBaseline } from './announcements.js';
+import * as render from './render.js';
+import * as renderGeo from './render-geography.js';
+import * as renderReference from './render-reference.js';
+import { routeFeatures, activityData, activityStats, foldedActivities, ACTIVITY_FOLD_REVISION } from './render-routes.js';
+import { expand, parseExpanded } from '../src/import-data.js';
+import localeEn from '../src/locales/en.js';
 import { banner } from './banner.js';
 
 // ┌──────────────────────────────────────────────────────────────────────────┐
@@ -103,7 +112,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.107.1';
+export const SERVER_VERSION = '0.143.4';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -211,7 +220,7 @@ async function publishedVersion() {
 const scrypt = promisify(scryptCb);
 // The same folding the browser importer uses, so a fix from Home Assistant and
 // a fix from a GPX file land in the same cell and count the same way.
-import { pointsToCells, VISIT_GAP_SEC } from '../src/locations.js';
+import { pointsToCells, VISIT_GAP_SEC, sourceLabel } from '../src/locations.js';
 import { probe, ping, pullFixes, normalizeBaseUrl, isFollowableEntity, FIRST_SYNC_DAYS } from './home-assistant.js';
 import * as strava from './strava.js';
 import { userMessage } from './user-error.js';
@@ -219,7 +228,8 @@ import { userMessage } from './user-error.js';
 // so a Strava ride and an imported GPX are keyed and simplified identically.
 // Their *names* are left blank: the place-name dataset is a 2 MB browser chunk,
 // and POST /api/routes/places already exists to fill them in from the page.
-import { buildRoutes, guessSport, canonicalSport, routeThumb, splitOnGaps, trackName } from '../src/routes.js';
+import { alignTrace, buildRoutes, guessSport, canonicalSport, routeThumb, splitOnGaps, trackName, traceSupersedes } from '../src/routes.js';
+import { prepareLinkImport } from './import-links.js';
 import { isKomootTourUrl } from '../src/komoot.js';
 // Everything above is about getting data *in*. This is the one thing that
 // copies it back out again, on a schedule, without being asked.
@@ -232,6 +242,7 @@ import { createFineRegions } from './regions-fine.js';
 // before touching how often it asks upstream.
 import { createRailTiles } from './rail-tiles.js';
 import { railSpan } from './rail-span.js';
+import { fetchDirections, RouteError } from './directions.js';
 // The trails overlay's raster tiles, and the lookup behind the card a tap
 // opens. Both proxied rather than fetched from the page — the note at the top
 // of that module is about why, and one of the three reasons is that a tile
@@ -334,6 +345,10 @@ db.exec(`
     -- is the other account in every respect, permissions included.
     admin_id   INTEGER NOT NULL DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS user_announcements (
+    user_id INTEGER PRIMARY KEY,
+    snapshot TEXT NOT NULL
+  );
   -- Legacy single-blob storage. Kept as a backup of the pre-provenance data;
   -- nothing writes to it any more (see migrateCellSets).
   CREATE TABLE IF NOT EXISTS cell_sets (
@@ -382,6 +397,7 @@ db.exec(`
     max_lng  REAL NOT NULL DEFAULT 0,
     max_lat  REAL NOT NULL DEFAULT 0,
     geom     TEXT NOT NULL,             -- JSON [[ [lng,lat], … ], …] (one array per segment)
+    trace    TEXT NOT NULL DEFAULT '',  -- JSON [[ [ele|null, epoch s], … ], …], aligned with geom
     UNIQUE (user_id, key)
   );
   CREATE INDEX IF NOT EXISTS routes_user ON routes(user_id);
@@ -489,8 +505,11 @@ for (const [table, column, decl] of [
   ['routes', 'sport_guessed', 'INTEGER NOT NULL DEFAULT 0'],
   ['routes', 'thumb', "TEXT NOT NULL DEFAULT ''"],
   ['routes', 'link', "TEXT NOT NULL DEFAULT ''"],
+  ['routes', 'trace', "TEXT NOT NULL DEFAULT ''"],
   ['device_links', 'last_photo_scan', 'INTEGER NOT NULL DEFAULT 0'],
   ['device_links', 'total_photos', 'INTEGER NOT NULL DEFAULT 0'],
+  ['cell_sources', 'visit_dates', "TEXT NOT NULL DEFAULT '[]'"],
+  ['cell_sources', 'visit_times', "TEXT NOT NULL DEFAULT '[]'"],
   ['users', 'is_admin', 'INTEGER NOT NULL DEFAULT 0'],
   ['users', 'last_login', "TEXT NOT NULL DEFAULT ''"],
   ['users', 'last_seen', "TEXT NOT NULL DEFAULT ''"],
@@ -557,26 +576,9 @@ const railSources = (() => {
     return new Set();
   }
 })();
-// `source/sourceLayer` for every layer the overlay draws — the allowlist for
-// their feature API, which the click popup asks for a line's route relations.
-// Their source ids as MapLibre sees them are ours with the namespace stripped,
-// which is the form their API expects.
-const railFeatureViews = (() => {
-  try {
-    const style = JSON.parse(readFileSync(path.join(ROOT, 'src', 'rail-style.json'), 'utf8'));
-    return new Set(
-      style.layers
-        .filter((l) => l['source-layer'])
-        .map((l) => `${l.source.replace(/^sporra-orm-/, '')}/${l['source-layer']}`),
-    );
-  } catch {
-    return new Set();
-  }
-})();
 const railTiles = createRailTiles({
   dir: RAIL_CACHE_DIR,
   sources: railSources,
-  featureViews: railFeatureViews,
   log: (msg) => console.log(`[visited-map] rail: ${msg}`),
 });
 
@@ -613,6 +615,11 @@ const q = {
   countSessions: db.prepare('SELECT user_id, COUNT(*) AS n FROM sessions GROUP BY user_id'),
 
   prefs: db.prepare('SELECT prefs FROM user_prefs WHERE user_id = ?'),
+  announcements: db.prepare('SELECT snapshot FROM user_announcements WHERE user_id = ?'),
+  setAnnouncements: db.prepare(`
+    INSERT INTO user_announcements(user_id, snapshot) VALUES(?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET snapshot = excluded.snapshot
+  `),
   setPrefs: db.prepare(`
     INSERT INTO user_prefs(user_id, prefs, updated_at) VALUES(?, ?, ?)
     ON CONFLICT(user_id) DO UPDATE SET prefs = excluded.prefs, updated_at = excluded.updated_at
@@ -620,7 +627,7 @@ const q = {
   getMeta: db.prepare('SELECT value FROM meta WHERE key = ?'),
   setMeta: db.prepare('INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'),
 
-  rows: db.prepare('SELECT cell_id, source, added_at, first_at, last_at, hits, fixes FROM cell_sources WHERE user_id = ? ORDER BY cell_id'),
+  rows: db.prepare('SELECT cell_id, source, added_at, first_at, last_at, hits, fixes, visit_dates, visit_times FROM cell_sources WHERE user_id = ? ORDER BY cell_id'),
   countCells: db.prepare('SELECT COUNT(DISTINCT cell_id) AS n FROM cell_sources WHERE user_id = ?'),
   // What the derived endpoints key their cache on. Aggregates rather than a
   // counter this file has to remember to bump: six separate paths write cells
@@ -636,7 +643,8 @@ const q = {
   ),
   cellSignature: db.prepare(`
     SELECT COUNT(*) AS n, COALESCE(MAX(added_at), 0) AS added, COALESCE(MAX(last_at), 0) AS last,
-           COALESCE(SUM(hits), 0) AS hits
+           COALESCE(SUM(hits), 0) AS hits, COALESCE(SUM(LENGTH(visit_dates)), 0) AS dates,
+           COALESCE(SUM(LENGTH(visit_times)), 0) AS times
     FROM cell_sources WHERE user_id = ?
   `),
   routeSignature: db.prepare(`
@@ -656,8 +664,13 @@ const q = {
   // dozens, next to a cells read that walks tens of thousands, so the honest
   // answer costs less than the shortcut would save. `geom` is deliberately not
   // in it: it cannot change without changing `key`, which changes the count.
+  // `trace` can. A workout already stored may come back with the times or the
+  // heights it was missing, and nothing else about the row moves — so the map
+  // would be told the old card was still current and the climb would never
+  // appear. The length is enough to see that arrival.
   routeEdits: db.prepare(`
-    SELECT id, name, place, sport, sport_guessed, source, elev_up, link, LENGTH(thumb) AS thumb
+    SELECT id, name, place, sport, sport_guessed, source, elev_up, link, LENGTH(thumb) AS thumb,
+           LENGTH(trace) AS trace
     FROM routes WHERE user_id = ? ORDER BY id
   `),
   hasCell: db.prepare('SELECT 1 FROM cell_sources WHERE user_id = ? AND cell_id = ? LIMIT 1'),
@@ -717,7 +730,7 @@ const q = {
   `),
   routesGeom: db.prepare(`
     SELECT id, name, place, sport, sport_guessed, elev_up, source, added_at, first_at, last_at, length_m, points,
-           min_lng, min_lat, max_lng, max_lat, thumb, link, geom
+           min_lng, min_lat, max_lng, max_lat, thumb, link, geom, trace
     FROM routes WHERE user_id = ?
     ORDER BY (CASE WHEN first_at > 0 THEN first_at ELSE added_at END) DESC, id DESC
   `),
@@ -741,11 +754,14 @@ const q = {
   //   • source   — never. Re-filing a route under a different app is an edit.
   //
   // The geometry, dates and length are what the key is built from, so they are
-  // identical by definition and there is nothing to update.
+  // identical by definition and there is nothing to update. The trace is not
+  // part of that key — it is the heights and times the line was stored
+  // without — so a re-import may fill an empty one and must not replace one
+  // that is already there.
   insRoute: db.prepare(`
     INSERT INTO routes(user_id, key, name, place, sport, sport_guessed, elev_up, source, added_at, first_at, last_at,
-                       length_m, points, min_lng, min_lat, max_lng, max_lat, thumb, link, geom)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       length_m, points, min_lng, min_lat, max_lng, max_lat, thumb, link, geom, trace)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id, key) DO UPDATE SET
       elev_up = CASE WHEN elev_up = 0 AND excluded.elev_up > 0 THEN excluded.elev_up ELSE elev_up END,
       -- A guess is a placeholder, so re-importing the file replaces it outright:
@@ -773,7 +789,8 @@ const q = {
                WHEN excluded.name = '' OR excluded.name = 'Route' THEN name
                WHEN name = 'Route' OR name GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
                  THEN excluded.name
-               ELSE name END
+               ELSE name END,
+      trace = CASE WHEN trace = '' AND excluded.trace != '' THEN excluded.trace ELSE trace END
   `),
   // Backfill for routes stored before place names existed. Only ever fills a
   // blank in: a place already worked out is not second-guessed.
@@ -801,6 +818,10 @@ const q = {
   // ON CONFLICT DO UPDATE always reports a change, so "was this new?" has to be
   // asked before the insert rather than read off its result.
   hasRoute: db.prepare('SELECT 1 FROM routes WHERE user_id = ? AND key = ? LIMIT 1'),
+  // The trace backfill on a workout the server already knows. The key is the
+  // line, so this is that route and not a search.
+  routeByKey: db.prepare('SELECT id, trace FROM routes WHERE user_id = ? AND key = ?'),
+  setRouteTrace: db.prepare('UPDATE routes SET trace = ? WHERE user_id = ? AND id = ?'),
   // Read whole (geometry included) before a delete, so the answer can carry
   // the row away with it — see POST /api/routes/delete.
   routeById: db.prepare('SELECT * FROM routes WHERE user_id = ? AND id = ?'),
@@ -929,7 +950,7 @@ const q = {
     'SELECT 1 FROM cell_sources WHERE user_id = ? AND source = ? AND cell_id = ? LIMIT 1',
   ),
   sourceRowsFull: db.prepare(
-    'SELECT cell_id, added_at, first_at, last_at, hits, fixes FROM cell_sources WHERE user_id = ? AND source = ?',
+    'SELECT cell_id, added_at, first_at, last_at, hits, fixes, visit_dates, visit_times FROM cell_sources WHERE user_id = ? AND source = ?',
   ),
   renameRoutes: db.prepare('UPDATE routes SET source = ? WHERE user_id = ? AND source = ?'),
   setPhotoScan: db.prepare(`
@@ -978,6 +999,28 @@ const q = {
   haPerUser: db.prepare('SELECT user_id, enabled, last_ok, last_error FROM ha_links'),
   stravaPerUser: db.prepare('SELECT user_id, enabled, last_ok, last_error, refresh_token FROM strava_links'),
 };
+
+// Imports add evidence and pollers arrive in batches. Union measured dates
+// and times so refreshing one file never erases other recorded visits.
+const readVisitDates = db.prepare('SELECT visit_dates, visit_times FROM cell_sources WHERE user_id = ? AND cell_id = ? AND source = ?');
+const writeVisitDates = db.prepare('UPDATE cell_sources SET visit_dates = ?, visit_times = ? WHERE user_id = ? AND cell_id = ? AND source = ?');
+for (const [name, arity] of [['upsertRow', 8], ['mergeRow', 9]]) {
+  const statement = q[name];
+  q[name] = { run(...args) {
+    const [user, cell, source] = args;
+    const result = statement.run(...args.slice(0, arity));
+    if (source !== 'manual' && source !== 'unknown') {
+      const old = readVisitDates.get(user, cell, source);
+      const times = normalizeVisitTimes([
+        ...JSON.parse(old?.visit_times ?? '[]'),
+        ...args[arity + 1], args[4], args[5],
+      ]);
+      const dates = normalizeVisitDates([...JSON.parse(old?.visit_dates ?? '[]'), ...args[arity], ...times]);
+      writeVisitDates.run(JSON.stringify(dates), JSON.stringify(times), user, cell, source);
+    }
+    return result;
+  } };
+}
 
 // The two sources that are not really sources: 'unknown', the placeholder the
 // pre-provenance migration left on every cell it carried over, and 'manual', the
@@ -1177,9 +1220,11 @@ assertGridGeneration();
 function loadImported() {
   try {
     const j = JSON.parse(readFileSync(path.join(ROOT, 'src', 'imported-cells.json'), 'utf8'));
-    const detail = Array.isArray(j.detail)
-      ? j.detail
-      : (Array.isArray(j.cells) ? j.cells : []).map((id) => [id, 'unknown', 0, 0, 1, 0]);
+    const detail = Array.isArray(j.detail) ? j.detail : [];
+    if (detail.some(row => !Array.isArray(row) || row.length !== 8 || !Array.isArray(row[6]) || !Array.isArray(row[7]))) {
+      console.warn('[visited-map] rebuild imported-cells.json with npm run import to retain visit times');
+      return { stamp: null, detail: [] };
+    }
     return { stamp: j.generatedAt || null, detail };
   } catch {
     return { stamp: null, detail: [] };
@@ -1341,9 +1386,9 @@ function mergeBakedImport(user) {
   if (q.getMeta.get(key)?.value === imported.stamp) return;
   const at = nowSec();
   tx(() => {
-    for (const [id, source, first, last, hits, fixes] of imported.detail) {
+    for (const [id, source, first, last, hits, fixes, visitDates, visitTimes] of imported.detail) {
       if (typeof id !== 'string') continue;
-      q.upsertRow.run(user.id, id, String(source || 'unknown'), at, +first || 0, +last || 0, +hits || 1, +fixes || 0);
+      q.upsertRow.run(user.id, id, String(source || 'unknown'), at, +first || 0, +last || 0, +hits || 1, +fixes || 0, visitDates, visitTimes);
     }
     q.setMeta.run(key, imported.stamp);
   });
@@ -1351,7 +1396,7 @@ function mergeBakedImport(user) {
 }
 
 // Wire format: a source dictionary plus one compact row per (cell, source) —
-// [cellId, sourceIndex, addedAt, firstAt, lastAt, hits, fixes]. Tens of thousands
+// [cellId, sourceIndex, addedAt, firstAt, lastAt, hits, fixes, visitDates, visitTimes]. Tens of thousands
 // of rows stay a manageable payload, and the client can answer "who marked this
 // cell, and when" without another round trip.
 function userCellRows(user) {
@@ -1365,7 +1410,7 @@ function userCellRows(user) {
       index.set(r.source, i);
       sources.push(r.source);
     }
-    return [r.cell_id, i, r.added_at, r.first_at, r.last_at, r.hits, r.fixes];
+    return [r.cell_id, i, r.added_at, r.first_at, r.last_at, r.hits, r.fixes, JSON.parse(r.visit_dates), JSON.parse(r.visit_times)];
   });
   return { sources, rows };
 }
@@ -1399,6 +1444,8 @@ function derivedInput(user, home) {
         lastAt: r.last_at,
         hits: r.hits,
         fixes: r.fixes ?? 0,
+        visitDates: JSON.parse(r.visit_dates),
+        visitTimes: JSON.parse(r.visit_times),
       };
       const list = cellMeta.get(r.cell_id);
       if (list) {
@@ -1409,7 +1456,14 @@ function derivedInput(user, home) {
       }
     }
 
-    return (held = { cellMeta, cellIds, routes: q.routes.all(user.id).map(routeOut), home });
+    let trackCells;
+    return (held = {
+      cellMeta, cellIds, routes: q.routes.all(user.id).map(routeOut), home,
+      // Geometry is needed only for trip/day chronology, not map shading/stats.
+      get trackCellMeta() {
+        return trackCells ??= withRouteVisitTimes(cellMeta, q.routesGeom.all(user.id).map(routeOut));
+      },
+    });
   };
 }
 
@@ -1484,6 +1538,7 @@ function derivedSignature(user, home) {
     .digest('base64url')
     .slice(0, 12);
   return [
+    SERVER_VERSION,
     cellsSignature(user),
     routes.n, routes.added, routes.len, edits,
     // The gazetteers, for the same reason home is here — see GAZETTEER_STAMP.
@@ -1506,7 +1561,7 @@ function derivedSignature(user, home) {
  */
 function cellsSignature(user) {
   const c = q.cellSignature.get(user.id) ?? {};
-  return [c.n, c.added, c.last, c.hits, sourceStamp(user)].join(':');
+  return [c.n, c.added, c.last, c.hits, c.dates, c.times, sourceStamp(user)].join(':');
 }
 
 /**
@@ -1556,6 +1611,44 @@ function derivedFor(user) {
   return { signature: derivedSignature(user, home), supply: derivedInput(user, home) };
 }
 
+// One route write path for raw file uploads and the browser's parsed import.
+function storeImportedRoute(user, r, at) {
+  const geom = r && cleanGeom(r.geom);
+  const key = String(r?.key ?? '').slice(0, 64);
+  if (!geom || !key) {
+    return null;
+  }
+  const [minLng, minLat, maxLng, maxLat] = routeBounds(geom);
+  const points = geom.reduce((n, s) => n + s.length, 0);
+  const existed = !!q.hasRoute.get(user.id, key);
+  q.insRoute.run(
+    user.id,
+    key,
+    String(r.name ?? '').slice(0, 120) || 'Route',
+    String(r.place ?? '').slice(0, 120),
+    String(r.sport ?? '').slice(0, 40),
+    r.sportGuessed ? 1 : 0,
+    Math.max(0, Math.round(+r.elevUp || 0)),
+    String(r.source ?? 'other').slice(0, 40),
+    at,
+    Math.max(0, Math.trunc(+r.firstAt || 0)),
+    Math.max(0, Math.trunc(+r.lastAt || 0)),
+    Math.max(0, +r.lengthM || 0),
+    points,
+    minLng,
+    minLat,
+    maxLng,
+    maxLat,
+    String(r.thumb ?? '') || routeThumb(geom),
+    isKomootTourUrl(r.link) ? String(r.link).slice(0, 300) : '',
+    JSON.stringify(geom),
+    traceJson(geom, r.trace),
+  );
+  // A route already here is refreshed rather than duplicated — see
+  // insRoute — so it counts as updated, not as skipped.
+  return existed ? 'updated' : 'added';
+}
+
 // --- Routes ------------------------------------------------------------------
 // Geometry arrives from the browser already thinned out (src/routes.js), but
 // it's still client input: rebuild it here from numbers we've checked, so what
@@ -1588,6 +1681,54 @@ function cleanGeom(geom) {
     if (points >= MAX_ROUTE_POINTS) break;
   }
   return out.length ? out : null;
+}
+
+// A trace that does not line up with the line is stored as nothing. The route
+// itself still lands — the coordinates are what make it a route — and the card
+// says the heights were not kept rather than graphing them in the wrong place.
+function traceJson(geom, raw) {
+  let parsed = raw;
+  if (typeof raw === 'string' && raw) {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return '';
+    }
+  }
+  const aligned = alignTrace(geom, parsed);
+  return aligned ? JSON.stringify(aligned) : '';
+}
+
+// A workout the server has already counted can still arrive again, carrying
+// the times or the heights it was stored without. The cells stay put — adding
+// them twice is a place visited twice — and the line is replaced only where
+// the new trace actually says more.
+function backfillHealthTrace(user, w) {
+  const built = buildRoutes([w.track], { source: HEALTH_SOURCE });
+  for (const r of built) {
+    const geom = cleanGeom(r.geom);
+    if (!geom) continue;
+    const incoming = traceJson(geom, r.trace);
+    if (!incoming) continue;
+    const row = q.routeByKey.get(user.id, String(r.key).slice(0, 64));
+    if (!row) continue;
+    let stored = null;
+    if (row.trace) {
+      try {
+        stored = JSON.parse(row.trace);
+      } catch {
+        stored = null;
+      }
+    }
+    let next;
+    try {
+      next = JSON.parse(incoming);
+    } catch {
+      continue;
+    }
+    if (!traceSupersedes(stored, next)) continue;
+    q.setRouteTrace.run(incoming, user.id, row.id);
+  }
 }
 
 function routeBounds(geom) {
@@ -1629,6 +1770,16 @@ function routeOut(r) {
       out.geom = JSON.parse(r.geom);
     } catch {
       out.geom = [];
+    }
+  }
+  // Only the geometry query selects this column. An empty one is the same as
+  // a route saved before heights were kept, and the card treats both as absent.
+  if (r.trace) {
+    try {
+      const parsed = JSON.parse(r.trace);
+      if (Array.isArray(parsed) && parsed.length) out.trace = parsed;
+    } catch {
+      /* a damaged trace is the same as none */
     }
   }
   return out;
@@ -1707,7 +1858,7 @@ async function haSync(row, { verify = false } = {}) {
   const at = nowSec();
   tx(() => {
     for (const c of cells) {
-      q.mergeRow.run(row.user_id, c.id, HA_SOURCE, at, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC);
+      q.mergeRow.run(row.user_id, c.id, HA_SOURCE, at, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC, c.visitDates, c.visitTimes);
       // Same as an imported file: a real reading beats a placeholder.
       clearPlaceholders(row.user_id, c.id, HA_SOURCE);
     }
@@ -1822,7 +1973,7 @@ async function stravaSync(row) {
         : [];
       tx(() => {
         for (const c of folded) {
-          q.mergeRow.run(row.user_id, c.id, STRAVA_SOURCE, at, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC);
+          q.mergeRow.run(row.user_id, c.id, STRAVA_SOURCE, at, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC, c.visitDates, c.visitTimes);
           clearPlaceholders(row.user_id, c.id, STRAVA_SOURCE);
         }
         for (const r of routes) {
@@ -1850,6 +2001,7 @@ async function stravaSync(row) {
             routeThumb(geom),
             '',
             JSON.stringify(geom),
+            traceJson(geom, r.trace),
           );
         }
       });
@@ -1999,10 +2151,15 @@ function healthWorkout(w) {
       const lng = +p?.[0];
       const lat = +p?.[1];
       const t = Math.trunc(+p?.[2]) || 0;
+      // The fourth number is the fix's own altitude, and only when the watch
+      // believed it. Absent is not sea level — 0 m is a real shoreline, and a
+      // point that did not carry a height must stay without one.
+      const rawEle = p?.length > 3 ? +p[3] : NaN;
+      const ele = Number.isFinite(rawEle) && rawEle >= -500 && rawEle <= 9000 ? rawEle : undefined;
       if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
       if (Math.abs(lng) > 180 || Math.abs(lat) > 90) continue;
       if (lng === 0 && lat === 0) continue;
-      line.push({ lng, lat, t });
+      line.push(ele === undefined ? { lng, lat, t } : { lng, lat, t, ele });
       if (line.length >= budget) break;
     }
     if (!line.length) continue;
@@ -2103,6 +2260,7 @@ const USER_TABLES = [
   'ha_links',
   'strava_links',
   'user_prefs',
+  'user_announcements',
   'device_links',
   'device_workouts',
 ];
@@ -2132,6 +2290,8 @@ function deleteAccount(user) {
   // and ids are handed out by AUTOINCREMENT — but a cache that outlives its
   // account is a bug waiting for the reuse that proves it.
   derive.forget(user.id);
+  render.forget(user.id);
+  renderGeo.forget(user.id);
   const rows = Object.values(removed).reduce((a, b) => a + b, 0);
   console.log(`[visited-map] deleted account ${user.id} (${user.username}): ${rows} rows`);
   return removed;
@@ -2754,6 +2914,174 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       return send(res, 200, { ok: true });
     }
 
+    if (req.method === 'POST' && pathname === '/api/render/activity-palette') {
+      if (!currentUser(req)) return send(res, 401, { error: 'not authenticated' });
+      const body = await readBody(req);
+      try { return send(res, 200, { colors: renderReference.activityPalette(body?.keys) }); }
+      catch (e) { return send(res, 400, { error: e.message }); }
+    }
+
+    if (req.method === 'GET' && ['/api/render/style', '/api/render/reference'].includes(pathname)) {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      try {
+        const data = pathname.endsWith('/style') ? await renderReference.style(query.get('name')) : await renderReference.reference(query.get('kind'), selfOrigin(req), query.get('group') ?? 'airline', query.get('index'), { native: query.get('native') === '1', technical: query.get('technical') === '1', theme: query.get('theme') });
+        const tag = 'reference:' + createHash('sha1').update(JSON.stringify(data)).digest('base64url');
+        const head = conditional(req, res, tag);
+        if (!head) return;
+        return send(res, 200, data, head);
+      } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+
+    if (req.method === 'GET' && ['/api/render/regions', '/api/render/at', '/api/render/visit-dates', '/api/search', '/api/locale/en'].includes(pathname)) {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      mergeBakedImport(user);
+      const { signature, supply } = derivedFor(user);
+      const searchPrefs = pathname === '/api/search' ? JSON.parse(q.prefs.get(user.id)?.prefs ?? '{}') : null;
+      const tag = 'render:' + createHash('sha1').update(JSON.stringify([SERVER_VERSION, signature, pathname, [...query], searchPrefs?.tripNames, searchPrefs?.hiddenTrips])).digest('base64url');
+      if (pathname === '/api/locale/en') {
+        const head = conditional(req, res, 'locale:' + SERVER_VERSION);
+        if (!head) return;
+        return send(res, 200, localeEn, head);
+      }
+      let options, point, level;
+      try {
+        if (pathname === '/api/render/regions') {
+          level = Number(query.get('level') ?? 6);
+          if (!Number.isInteger(level) || level < 6 || level > 8) throw new Error('region level must be 6–8');
+          const plain = new URLSearchParams(query); plain.set('level', '0');
+          options = { ...render.cellsOptions(plain), level, fine: query.get('fine') === '1' };
+        }
+        if (pathname === '/api/render/visit-dates' && query.has('kind') && (!['region', 'country', 'continent'].includes(query.get('kind')) || !query.get('id') || query.get('id').length > 200)) throw new Error('invalid area');
+        if (pathname === '/api/render/at' || (pathname === '/api/render/visit-dates' && !query.has('kind'))) {
+          point = renderGeo.coordinate(query.get('lng'), query.get('lat'));
+          const zoom = Number(query.get('zoom') ?? 13.6);
+          if (!Number.isFinite(zoom)) throw new Error('invalid zoom');
+          level = query.has('level') ? Number(query.get('level')) : Math.min(8, Math.max(0, Math.ceil((13.6 - zoom) / Math.log2(3) - 1e-9)));
+          if (!Number.isInteger(level) || level < 0 || level > 8) throw new Error('invalid level');
+        }
+      } catch (e) { return send(res, 400, { error: e.message }); }
+      const head = conditional(req, res, tag);
+      if (!head) return;
+      if (pathname === '/api/render/regions') return send(res, 200, await renderGeo.regions(renderGeo.inputFor(user.id, signature, supply), options, iso => fineRegions.get(iso)), head);
+      if (pathname === '/api/render/visit-dates') {
+        const input = renderGeo.inputFor(user.id, signature, supply);
+        const routes = () => q.routesGeom.all(user.id).map(routeOut);
+        const data = query.has('kind')
+          ? await renderGeo.visitDatesForArea(input, query.get('kind'), query.get('id'), query.getAll('hidden'), routes)
+          : await renderGeo.at(input, ...point, level, query.getAll('hidden'), routes);
+        return send(res, 200, {visited: data.visited, name: data.name, visitDates: data.visitDates ?? [], visitCount: data.visitCount ?? 0}, head);
+      }
+      if (pathname === '/api/render/at') return send(res, 200, await renderGeo.at(renderGeo.inputFor(user.id, signature, supply), ...point, level, query.getAll('hidden'), () => q.routesGeom.all(user.id).map(routeOut)), head);
+      const trips = await derive.trips(user.id, signature, supply);
+      const hiddenTrips = new Set(searchPrefs?.hiddenTrips ?? []);
+      const namedTrips = trips.trips.filter(t => !hiddenTrips.has(t.id)).map(t => ({ ...t, name: searchPrefs?.tripNames?.[t.id] || t.name }));
+      return send(res, 200, { results: await renderGeo.search(query.get('q'), supply().routes, namedTrips) }, head);
+    }
+
+    if (req.method === 'POST' && ['/api/render/brush', '/api/render/region-clear'].includes(pathname)) {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      const body = await readBody(req, 512 * 1024);
+      mergeBakedImport(user);
+      const input = derivedInput(user, null)();
+      let add = [], remove = [];
+      try {
+        if (pathname.endsWith('brush')) {
+          const ids = renderGeo.brush(body);
+          if (body.action === 'paint') add = ids.filter(id => !input.cellMeta.has(id));
+          else remove = renderGeo.storedForBrush(input, ids);
+        } else {
+          const point = renderGeo.coordinate(body.lng, body.lat);
+          remove = await renderGeo.regionClear(input, ...point);
+          if (remove.length > MAX_CELLS_PER_MUTATE) throw new Error('region exceeds 50000 cells');
+        }
+      } catch (e) { return send(res, 400, { error: e.message }); }
+      const rows = remove.flatMap(id => (input.cellMeta.get(id) ?? []).map(m => [id, m.source, m.addedAt, m.firstAt, m.lastAt, m.hits, m.fixes, m.visitDates, m.visitTimes]));
+      if (rows.length > MAX_CELLS_PER_MUTATE) return send(res, 400, { error: 'too many provenance rows to undo' });
+      const at = nowSec();
+      db.exec('BEGIN');
+      try {
+        for (const id of remove) q.delCell.run(user.id, id);
+        for (const id of add) q.touchRow.run(user.id, id, 'manual', at);
+        db.exec('COMMIT');
+      } catch (e) { db.exec('ROLLBACK'); throw e; }
+      return send(res, 200, { ok: true, total: cellCount(user), signature: cellsSignature(user), undo: { remove: add, rows } });
+    }
+
+    if (req.method === 'POST' && (pathname === '/api/import/file' || pathname === '/api/import/link')) {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      if (bigRequestsInFlight >= MAX_BIG_REQUESTS) return send(res, 503, { error: 'Busy importing something else — try again.' });
+      bigRequestsInFlight++;
+      try {
+        const body = await readBody(req, BIG_BODY_LIMIT);
+        let batches, sources, fileNames;
+        if (pathname === '/api/import/link') {
+          try {
+            const prepared = await prepareLinkImport(body);
+            batches = prepared.batches; sources = prepared.sources; fileNames = prepared.files;
+          } catch (e) { return send(res, 400, { error: e.message }); }
+        } else {
+          if (typeof body.name !== 'string' || (typeof body.text !== 'string' && typeof body.base64 !== 'string')) return send(res, 400, { error: 'name and text or base64 are required' });
+          const bytes = typeof body.text === 'string' ? Buffer.from(body.text) : Buffer.from(body.base64, 'base64');
+          let files;
+          try { files = await expand({ name: body.name.slice(0,200), arrayBuffer: async () => bytes }); }
+          catch (e) { return send(res, 400, { error: e.message }); }
+          if (files.items.length > MAX_ROUTES_PER_REQUEST || files.items.reduce((n,f) => n + f.bytes.length,0) > 64*1024*1024) return send(res, 400, { error: 'expanded archive is too large' });
+          const groups = new Map();
+          for (const file of files.items) {
+            let parsed;
+            try { parsed = parseExpanded(file.name, file.bytes); }
+            catch (e) { return send(res, 400, { error: e.message }); }
+            if (parsed.error) return send(res, 400, { error: parsed.error });
+            const source = String(body.source ?? files.source ?? parsed.source ?? 'other').slice(0,40);
+            let group = groups.get(source);
+            if (!group) groups.set(source, group = { points: [], tracks: [] });
+            for (const point of parsed.points) group.points.push(point);
+            for (const track of parsed.tracks) group.tracks.push(track);
+          }
+          batches = [...groups].map(([source, group]) => ({ source, cells: pointsToCells(group.points), routes: body.includeRoutes === false ? [] : buildRoutes(group.tracks, { source, fileName: body.name }) }));
+          sources = [...groups.keys()];
+          fileNames = files.items.map(f => f.name);
+        }
+        const imported = batches.reduce((n,b) => n + b.cells.length,0);
+        if (!imported || imported > MAX_CELLS_PER_IMPORT) return send(res, 400, { error: imported ? 'too many cells' : 'No locations in this file.' });
+        if (body.preview === true) return send(res, 200, {
+          preview: true, imported, routes: batches.reduce((n, b) => n + b.routes.length, 0),
+          sources, files: fileNames,
+        });
+        let routeCount = 0;
+        const at = nowSec();
+        db.exec('BEGIN');
+        try {
+          for (const {source,cells,routes} of batches) {
+            for (const c of cells) {
+              q.upsertRow.run(user.id, c.id, source, at, c.first, c.last, c.hits, c.fixes, c.visitDates, c.visitTimes);
+              clearPlaceholders(user.id, c.id, source);
+            }
+            for (const route of routes) if (storeImportedRoute(user, route, at)) routeCount++;
+          }
+          db.exec('COMMIT');
+        } catch (e) { db.exec('ROLLBACK'); throw e; }
+        return send(res, 200, { ok: true, imported, routes: routeCount, sources, total: cellCount(user) });
+      } finally { bigRequestsInFlight--; }
+    }
+
+    if (req.method === 'GET' && pathname === '/api/render/cells') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      let options;
+      try { options = render.cellsOptions(query); }
+      catch (e) { return send(res, 400, { error: e.message }); }
+      mergeBakedImport(user);
+      const signature = cellsSignature(user);
+      const head = conditional(req, res, render.cellsTag(signature, options));
+      if (!head) return;
+      return send(res, 200, render.cells(user.id, signature, derivedInput(user, null), options), head);
+    }
+
     if (req.method === 'GET' && pathname === '/api/cells') {
       const user = currentUser(req);
       if (!user) return send(res, 401, { error: 'not authenticated' });
@@ -2817,13 +3145,12 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       const body = await readBody(req);
       const rows = Array.isArray(body.rows) ? body.rows : [];
       if (rows.length > MAX_CELLS_PER_MUTATE) return send(res, 400, { error: 'too many cells' });
+      if (rows.some(r => !Array.isArray(r) || r.length !== 9 || !Array.isArray(r[7]) || !Array.isArray(r[8]))) return send(res, 400, { error: 'rows must include visitDates and visitTimes arrays' });
       const at = nowSec();
       let restored = 0;
       await chunked(rows, (slice) => {
         for (const r of slice) {
-          const [id, source, addedAt, firstAt, lastAt, hits, fixes] = Array.isArray(r)
-            ? r
-            : [r.id, r.source, r.addedAt, r.firstAt, r.lastAt, r.hits, r.fixes];
+          const [id, source, addedAt, firstAt, lastAt, hits, fixes, visitDates, visitTimes] = r;
           if (typeof id !== 'string' || !id || id.length > 40) continue;
           const src = String(source ?? 'manual').slice(0, 40) || 'manual';
           // added_at is restored as it was: a cell that has been on the map
@@ -2836,6 +3163,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
             Math.max(0, Math.trunc(+lastAt) || 0),
             Math.max(1, Math.trunc(+hits) || 1),
             Math.max(0, Math.trunc(+fixes) || 0),
+            visitDates, visitTimes,
           );
           restored++;
         }
@@ -2862,19 +3190,18 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
         const source = String(body.source ?? '').trim().slice(0, 40) || 'other';
         if (!Array.isArray(body.cells)) return send(res, 400, { error: 'cells must be an array' });
         if (body.cells.length > MAX_CELLS_PER_IMPORT) return send(res, 400, { error: 'too many cells' });
+        if (body.cells.some(c => !Array.isArray(c) || c.length !== 7 || !Array.isArray(c[5]) || !Array.isArray(c[6]))) return send(res, 400, { error: 'cells must include visitDates and visitTimes arrays' });
 
         const at = nowSec();
         let added = 0;
         let updated = 0;
         await chunked(body.cells, (slice) => {
           for (const c of slice) {
-            const [id, first, last, hits, fixes] = Array.isArray(c)
-              ? c
-              : [c.id, c.first, c.last, c.hits, c.fixes];
+            const [id, first, last, hits, fixes, visitDates, visitTimes] = c;
             if (typeof id !== 'string' || !id || id.length > 40) continue;
             if (q.hasCell.get(user.id, id)) updated++;
             else added++;
-            q.upsertRow.run(user.id, id, source, at, +first || 0, +last || 0, +hits || 1, +fixes || 0);
+            q.upsertRow.run(user.id, id, source, at, +first || 0, +last || 0, +hits || 1, +fixes || 0, visitDates, visitTimes);
             // Cells carried over from the pre-provenance storage have a
             // placeholder 'unknown' row, and one you tapped on the map has a
             // 'manual' one. A real import knows strictly more about them, so it
@@ -2891,14 +3218,49 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
 
     // Saved routes. The list is metadata only unless ?geom=1 — the map holds
     // off on the (much larger) geometry until the routes layer is switched on.
+    if (req.method === 'GET' && pathname === '/api/render/activity-stats') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      const head = conditional(req, res, SERVER_VERSION + ':' + routesSignature(user, false) + ':activity-stats');
+      if (!head) return;
+      return send(res, 200, activityStats(q.routes.all(user.id).map(routeOut)), head);
+    }
+
+    if (req.method === 'GET' && pathname === '/api/render/activity') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      const id = Number(query.get('id'));
+      if (!Number.isSafeInteger(id) || id < 1) return send(res, 400, { error: 'invalid activity id' });
+      const row = q.routeById.get(user.id, id);
+      if (!row) return send(res, 404, { error: 'No such activity.' });
+      // The response also depends on rendering code, not just stored points.
+      // Otherwise a deployment can keep validating old metric gaps forever.
+      const head = conditional(req, res, SERVER_VERSION + ':' + routesSignature(user, true) + ':activity:' + id);
+      if (!head) return;
+      return send(res, 200, activityData(routeOut(row)), head);
+    }
+
+    if (req.method === 'GET' && pathname === '/api/render/routes') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      const prefs = JSON.parse(q.prefs.get(user.id)?.prefs ?? '{}');
+      const stackIds = [...new Set(query.getAll('stack').map(Number))];
+      if (stackIds.length > 256 || stackIds.some(id => !Number.isSafeInteger(id) || id < 1)) return send(res, 400, { error: 'invalid route stack' });
+      const head = conditional(req, res, routesSignature(user, true) + ':' + ACTIVITY_FOLD_REVISION + ':' + JSON.stringify([prefs.routeView ?? {}, stackIds]));
+      if (!head) return;
+      return send(res, 200, routeFeatures(q.routesGeom.all(user.id).map(routeOut), prefs.routeView, stackIds), head);
+    }
+
     if (req.method === 'GET' && pathname === '/api/routes') {
       const user = currentUser(req);
       if (!user) return send(res, 401, { error: 'not authenticated' });
       const withGeom = query.get('geom') === '1';
-      const head = conditional(req, res, routesSignature(user, withGeom));
+      const fold = query.get('fold') === '1';
+      const head = conditional(req, res, routesSignature(user, withGeom) + (fold ? ':fold:' + ACTIVITY_FOLD_REVISION : ''));
       if (!head) return;
       const rows = withGeom ? q.routesGeom.all(user.id) : q.routes.all(user.id);
-      return send(res, 200, { routes: rows.map(routeOut) }, head);
+      const routes = rows.map(routeOut);
+      return send(res, 200, fold ? foldedActivities(routes) : { routes }, head);
     }
 
     // --- Derived, read-only -----------------------------------------------------
@@ -2912,6 +3274,20 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
     // of them also parses 8.1 MB of geography, which is why an untouched map
     // answers in a millisecond and the first one after an import does not.
 
+    if (req.method === 'GET' && pathname === '/api/render/track') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      const { signature, supply } = derivedFor(user);
+      const tripId = query.get('trip'), day = query.get('day');
+      if ((!tripId && !day) || (tripId && day) || (day && !/^\d{4}-\d{2}-\d{2}$/.test(day))) return send(res, 400, { error: 'choose one trip or calendar day' });
+      const head = conditional(req, res, `track:${signature}:${tripId ?? day}`);
+      if (!head) return;
+      const item = day ? await derive.day(user.id, signature, supply, day)
+        : (await derive.trips(user.id, signature, supply)).trips.find(t => String(t.id) === tripId);
+      if (!item) return send(res, 404, { error: 'trip not found' });
+      return send(res, 200, trackData(item, day), head);
+    }
+
     if (req.method === 'GET' && pathname === '/api/trips') {
       const user = currentUser(req);
       if (!user) return send(res, 401, { error: 'not authenticated' });
@@ -2919,6 +3295,24 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       const head = conditional(req, res, signature);
       if (!head) return;
       return send(res, 200, await derive.trips(user.id, signature, supply), head);
+    }
+
+    if (req.method === 'POST' && pathname === '/api/whats-new') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      const body = await readBody(req);
+      const { signature, supply } = derivedFor(user);
+      const snapshot = await derive.announcementSnapshot(user.id, signature, supply);
+      // No awaits after reading the baseline: two simultaneous clients cannot
+      // both consume the same announcement.
+      const before = JSON.parse(q.announcements.get(user.id)?.snapshot ?? 'null');
+      const prefs = JSON.parse(q.prefs.get(user.id)?.prefs ?? '{}');
+      const mode = ['never', 'always', 'substantial'].includes(prefs.whatsNew) ? prefs.whatsNew : 'substantial';
+      const notice = announcementFor(before, snapshot, mode, body?.quiet === true);
+      if (!before || notice.show || mode === 'never' || body?.quiet === true) {
+        q.setAnnouncements.run(user.id, JSON.stringify(announcementBaseline(before, snapshot)));
+      }
+      return send(res, 200, notice);
     }
 
     if (req.method === 'GET' && pathname === '/api/stats') {
@@ -2975,41 +3369,10 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
         // so these chunks are much smaller than the cell ones.
         await chunked(body.routes, (slice) => {
           for (const r of slice) {
-            const geom = r && cleanGeom(r.geom);
-            const key = String(r?.key ?? '').slice(0, 64);
-            if (!geom || !key) {
-              skipped++;
-              continue;
-            }
-            const [minLng, minLat, maxLng, maxLat] = routeBounds(geom);
-            const points = geom.reduce((n, s) => n + s.length, 0);
-            const existed = !!q.hasRoute.get(user.id, key);
-            q.insRoute.run(
-              user.id,
-              key,
-              String(r.name ?? '').slice(0, 120) || 'Route',
-              String(r.place ?? '').slice(0, 120),
-              String(r.sport ?? '').slice(0, 40),
-              r.sportGuessed ? 1 : 0,
-              Math.max(0, Math.round(+r.elevUp || 0)),
-              String(r.source ?? 'other').slice(0, 40),
-              at,
-              Math.max(0, Math.trunc(+r.firstAt || 0)),
-              Math.max(0, Math.trunc(+r.lastAt || 0)),
-              Math.max(0, +r.lengthM || 0),
-              points,
-              minLng,
-              minLat,
-              maxLng,
-              maxLat,
-              String(r.thumb ?? '') || routeThumb(geom),
-              isKomootTourUrl(r.link) ? String(r.link).slice(0, 300) : '',
-              JSON.stringify(geom),
-            );
-            // A route already here is refreshed rather than duplicated — see
-            // insRoute — so it counts as updated, not as skipped.
-            if (existed) updated++;
-            else added++;
+            const result = storeImportedRoute(user, r, at);
+            if (result === 'updated') updated++;
+            else if (result === 'added') added++;
+            else skipped++;
           }
         });
         return send(res, 200, { ok: true, added, updated, skipped, total: routeCount(user) });
@@ -3189,7 +3552,8 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       if (!row) return send(res, 400, { error: 'Save your Strava app details first.' });
       const origin = selfOrigin(req);
       if (!origin) return send(res, 400, { error: 'Could not work out this server’s address.' });
-      const state = randomBytes(16).toString('hex');
+      const body = await readBody(req);
+      const state = (body.native === true ? 'native-' : '') + randomBytes(16).toString('hex');
       q.setStravaState.run(state, user.id);
       return send(res, 200, {
         url: strava.authorizeUrl({
@@ -3203,11 +3567,11 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
     // Strava sends the browser here. This is a navigation, not a fetch, so it
     // answers with a redirect back to the map either way.
     if (req.method === 'GET' && pathname === '/api/strava/callback') {
+      const state = query.get('state') ?? '';
       const back = (result) => {
-        res.writeHead(302, { Location: `/?strava=${result}` });
+        res.writeHead(302, { Location: state.startsWith('native-') ? `sporra://oauth?strava=${result}` : `/?strava=${result}` });
         res.end();
       };
-      const state = query.get('state') ?? '';
       const row = state && q.stravaByState.get(state);
       if (!row) return back('badstate');
       if (query.get('error')) {
@@ -3308,7 +3672,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
 
       await chunked(cells, (slice) => {
         for (const c of slice) {
-          q.mergeRow.run(user.id, c.id, DEVICE_SOURCE, now, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC);
+          q.mergeRow.run(user.id, c.id, DEVICE_SOURCE, now, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC, c.visitDates, c.visitTimes);
           // As for an imported file: a real reading beats a placeholder. The
           // phone having been somewhere is the answer a hand mark was standing
           // in for.
@@ -3371,9 +3735,11 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
             continue;
           }
           // Cells are *added* to what is already there, so a workout taken
-          // twice is a place visited twice. This is the only guard against it
-          // and it has to come before any write.
+          // twice is a place visited twice. The guard has to come before that
+          // write. The trace is not a visit: a workout stored before its
+          // times or its heights were kept can still gain them on a re-send.
           if (q.hasWorkout.get(user.id, w.id)) {
+            backfillHealthTrace(user, w);
             known++;
             continue;
           }
@@ -3381,7 +3747,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
           const built = buildRoutes([w.track], { source: HEALTH_SOURCE });
           tx(() => {
             for (const c of folded) {
-              q.mergeRow.run(user.id, c.id, HEALTH_SOURCE, now, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC);
+              q.mergeRow.run(user.id, c.id, HEALTH_SOURCE, now, c.first, c.last, c.hits, c.fixes, VISIT_GAP_SEC, c.visitDates, c.visitTimes);
               clearPlaceholders(user.id, c.id, HEALTH_SOURCE);
             }
             for (const r of built) {
@@ -3411,6 +3777,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
                 routeThumb(geom),
                 '',
                 JSON.stringify(geom),
+                traceJson(geom, r.trace),
               );
               routes++;
             }
@@ -3439,11 +3806,11 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
     //
     // This is the one destructive call in the connector, and it exists because
     // of what the other guards make impossible. Workout ids are remembered so a
-    // re-send cannot double-count, which also means a workout stored from a bad
-    // reading can never be corrected — the phone offers it, the server says
-    // "known", and the wrong line stays for ever. And cells are merged rather
-    // than replaced, so re-taking the same workouts on top of the old ones would
-    // count every visit twice.
+    // re-send cannot double-count. A re-send may fill a trace that is missing
+    // its times or its heights, and that is all it may fill: the cells are
+    // merged rather than replaced, so re-taking the same workouts on top of the
+    // old ones would count every visit twice, and a wrong line stays until this
+    // call drops it.
     //
     // So a re-read needs the old copy gone rather than merged with, and that is
     // exactly what this does: the `apple-health` cells, the `apple-health`
@@ -3475,6 +3842,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       return send(res, 200, {
         sources: q.sourceTally.all(user.id).map((s) => ({
           key: s.source,
+          label: sourceLabel(s.source),
           cells: s.cells,
           routes: routes.get(s.source) ?? 0,
           firstAt: s.first ?? 0,
@@ -3519,7 +3887,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
           if (q.hasSourceCell.get(user.id, to, r.cell_id)) merged++;
           q.mergeRow.run(
             user.id, r.cell_id, to, r.added_at,
-            r.first_at, r.last_at, r.hits, r.fixes, VISIT_GAP_SEC,
+            r.first_at, r.last_at, r.hits, r.fixes, VISIT_GAP_SEC, JSON.parse(r.visit_dates), JSON.parse(r.visit_times),
           );
         }
       });
@@ -3610,7 +3978,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
             // upsertRow, not mergeRow: this is a re-reading of the same library
             // rather than a new slice of time, so the counts are replaced the
             // way re-importing a file replaces them.
-            q.upsertRow.run(user.id, c.id, PHOTO_SOURCE, now, c.first, c.last, c.hits, c.fixes);
+            q.upsertRow.run(user.id, c.id, PHOTO_SOURCE, now, c.first, c.last, c.hits, c.fixes, c.visitDates, c.visitTimes);
             clearPlaceholders(user.id, c.id, PHOTO_SOURCE);
           }
         });
@@ -3719,6 +4087,28 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       return send(res, 200, out, { 'Cache-Control': 'public, max-age=31536000, immutable' });
     }
 
+    // A driving line from the FOSSGIS OSRM server, or a train from Transitous.
+    // Session-gated for the same reason the track span is: each call spends
+    // somebody else's routing server, and an open one would let anyone spend it.
+    if (req.method === 'GET' && pathname === '/api/directions') {
+      const user = currentUser(req);
+      if (!user) return send(res, 401, { error: 'not authenticated' });
+      try {
+        const points = await fetchDirections({
+          mode: query.get('mode') ?? '',
+          from: { lng: Number(query.get('fromLng')), lat: Number(query.get('fromLat')) },
+          to: { lng: Number(query.get('toLng')), lat: Number(query.get('toLat')) },
+          userAgent: `Sporra/${SERVER_VERSION} (+https://github.com/zhekch/sporra)`,
+          referer: selfOrigin(req),
+        });
+        return send(res, 200, { points }, { 'Cache-Control': 'no-store' });
+      } catch (err) {
+        const code = err instanceof RouteError ? err.code : 'failed';
+        const status = code === 'bad' ? 400 : code === 'none' ? 404 : 502;
+        return send(res, status, { error: code }, { 'Cache-Control': 'no-store' });
+      }
+    }
+
     // --- Train tracks -----------------------------------------------------------
     // A caching proxy onto OpenRailwayMap's vector tiles. Session-gated for the
     // same reason the boundaries above are: it spends somebody else's bandwidth,
@@ -3770,20 +4160,6 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
         if (m) out = await railTiles.tile(decodeURIComponent(m[1]), m[2], m[3], m[4], origin);
       } else if (rest.startsWith('sprite/') || rest.startsWith('sdf-sprite/')) {
         out = await railTiles.sprite(rest, origin);
-      } else if (rest.startsWith('feature/')) {
-        // `<source>/<sourceLayer>/<id>` — what runs over a line the person just
-        // clicked. Both path parts are matched against the style's own layers
-        // inside the module.
-        const m = /^feature\/([^/]+)\/([^/]+)\/(.+)$/.exec(rest);
-        if (m) {
-          // Named rather than spread. `...m.slice(1, 4)` is an array of length
-          // only a human can see is three, so `origin` — which comes off the
-          // Host header — reads as though it could land in any parameter,
-          // including the ones that become the upstream path. That is what
-          // CodeQL's js/request-forgery was pointing at, and it was right to.
-          const [source, sourceLayer, id] = m.slice(1, 4).map(decodeURIComponent);
-          out = await railTiles.feature(source, sourceLayer, id, origin);
-        }
       }
 
       if (!out) return send(res, 404, { error: 'no such tile' });

@@ -1,0 +1,279 @@
+// `Combine` explicitly — this target turns on MemberImportVisibility, so a
+// transitive import does not lend its members, and `@Published` is Combine's.
+import Combine
+import CoreLocation
+import Foundation
+import UIKit
+
+/// How this phone records where it has been.
+///
+/// Everything else about your map lives on the server, where a laptop finds it
+/// in the same place. This does not, and the reason is not tidiness: a schedule
+/// stored on the server could not make a sleeping phone wake up. The timer runs
+/// here or it does not run, so the setting lives where the timer is.
+///
+/// A singleton because iOS relaunches this app *into the background* when the
+/// significant-change monitor fires, and at that moment there is no window, no
+/// `ContentView` and no `@StateObject` — only `didFinishLaunchingWithOptions`
+/// and about a second to have opinions in.
+@MainActor
+final class TrackingSettings: ObservableObject {
+
+    static let shared = TrackingSettings()
+
+    /// How often the phone writes down where it is.
+    ///
+    /// Named in time because that is the question anyone actually asks, and
+    /// implemented in distance as well because that is what CoreLocation can be
+    /// cheap about — a phone that has not moved is not worth waking on a timer,
+    /// and `distanceFilter` is how you say so without holding the GPS open.
+    enum Cadence: Int, CaseIterable, Identifiable {
+        case off = -1
+        case significant = 0
+        case hour = 60
+        case halfHour = 30
+        case quarterHour = 15
+        case fiveMinutes = 5
+        case minute = 1
+
+        var id: Int { rawValue }
+
+        var title: String {
+            switch self {
+            case .off: return "Off"
+            case .significant: return "Only when I go somewhere"
+            case .hour: return "Every hour"
+            case .halfHour: return "Every half hour"
+            case .quarterHour: return "Every 15 minutes"
+            case .fiveMinutes: return "Every 5 minutes"
+            case .minute: return "Every minute"
+            }
+        }
+
+        /// The shortest gap between two recorded fixes.
+        var seconds: TimeInterval { self == .significant ? 0 : Double(max(0, rawValue)) * 60 }
+
+        /// How far you have to move before iOS bothers telling us.
+        ///
+        /// Scaled with the cadence so a phone on your desk costs nothing at any
+        /// setting: the fixes it would deliver are the ones the throttle would
+        /// throw away anyway, and the cheapest fix is the one never taken. The
+        /// floor is 40 m — about one cell — so a walk on the finest cadence
+        /// cannot step over a hex. Coarser cadences stay coarse on purpose.
+        var distanceFilter: CLLocationDistance {
+            switch self {
+            case .off, .significant: return kCLDistanceFilterNone
+            case .hour: return 500
+            case .halfHour: return 350
+            case .quarterHour: return 250
+            case .fiveMinutes: return 80
+            case .minute: return 40
+            }
+        }
+
+        /// Whether this cadence needs the standard location service at all.
+        /// `.significant` does not: the significant-change monitor is a
+        /// different service and a far cheaper one.
+        var wantsContinuousUpdates: Bool {
+            switch self {
+            case .off, .significant: return false
+            default: return true
+            }
+        }
+    }
+
+    /// How vague a fix can be before it is thrown away.
+    ///
+    /// A cell is about 50 m across, so a fix the phone itself calls loose —
+    /// cell-tower fallback, indoors, a cold start — lands several cells away.
+    /// The raw values are the metre caps, and they used to be 100 / 250 / 500,
+    /// which was one cell when a cell was 900 m. ``resolved(_:)`` maps a saved
+    /// setting from that era onto the step it was: tight, normal, loose.
+    enum Precision: Int, CaseIterable, Identifiable {
+        case tight = 30
+        case normal = 80
+        case loose = 200
+        case any = 0
+
+        var id: Int { rawValue }
+
+        var title: String {
+            switch self {
+            case .tight: return "Within 30 m"
+            case .normal: return "Within 80 m"
+            case .loose: return "Within 200 m"
+            case .any: return "Take every fix"
+            }
+        }
+
+        /// A stored cap, including the 100 / 250 / 500 steps from before the
+        /// grid was 50 m. Anything unrecognised is the default rather than a
+        /// crash, which is what a future change to the numbers would want too.
+        static func resolved(_ raw: Int?) -> Precision {
+            guard let raw else { return .normal }
+            if let exact = Precision(rawValue: raw) { return exact }
+            switch raw {
+            case 100: return .tight
+            case 250: return .normal
+            case 500: return .loose
+            default: return .normal
+            }
+        }
+    }
+
+    @Published var cadence: Cadence {
+        didSet {
+            guard cadence != oldValue else { return }
+            defaults.set(cadence.rawValue, forKey: Keys.cadence)
+            LocationLogger.shared.apply()
+        }
+    }
+
+    @Published var precision: Precision {
+        didSet {
+            guard precision != oldValue else { return }
+            defaults.set(precision.rawValue, forKey: Keys.precision)
+        }
+    }
+
+    /// Whether to bring in Apple Health workouts — the ones that went somewhere.
+    @Published var syncWorkouts: Bool {
+        didSet {
+            guard syncWorkouts != oldValue else { return }
+            defaults.set(syncWorkouts, forKey: Keys.syncWorkouts)
+            HealthSync.shared.apply()
+        }
+    }
+
+    /// Whether to read the photo library for the places it has been.
+    @Published var syncPhotos: Bool {
+        didSet {
+            guard syncPhotos != oldValue else { return }
+            defaults.set(syncPhotos, forKey: Keys.syncPhotos)
+            PhotoSync.shared.apply()
+        }
+    }
+
+    /// What this phone calls itself on the sync screen.
+    ///
+    /// Typed rather than read, because since iOS 16 `UIDevice.name` answers
+    /// "iPhone" for everyone unless the app carries an entitlement Apple grants
+    /// case by case. Two phones both filed under "iPhone" is exactly the thing
+    /// this field exists to prevent.
+    @Published var deviceName: String {
+        didSet {
+            let trimmed = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+            defaults.set(trimmed, forKey: Keys.deviceName)
+        }
+    }
+
+    /// This phone's identity to the server, made once and kept.
+    ///
+    /// Not `identifierForVendor`: that is reissued when the last app from a
+    /// vendor is deleted, which would silently turn one phone into two in the
+    /// device list — and, worse, reset the server-side cursor that stops a
+    /// re-sent batch being counted twice.
+    let deviceId: String
+
+    /// The last thing the uploader has to say for itself, for Settings.
+    ///
+    /// Written through to `UserDefaults` on every change. That is not caching:
+    /// "Last checked" is a claim about *this phone's history*, and a value that
+    /// only exists in memory answers "Never" after every cold launch however
+    /// diligently the thing has been running. Which is exactly what it did —
+    /// Photos reads at most once every six hours and the app is relaunched far
+    /// more often than that, so the honest answer was on screen approximately
+    /// never.
+    @Published var status = SyncStatus() {
+        didSet { status.save(to: defaults) }
+    }
+
+    struct SyncStatus {
+        var pending = 0
+        var lastPush: Date?
+        var lastError: String?
+        /// The session cookie has gone. Nothing native can fix this — signing in
+        /// happens on the map, in the site's own login.
+        var signedOut = false
+        var lastWorkoutScan: Date?
+        var workoutsSent = 0
+        var lastPhotoScan: Date?
+        var photosSent = 0
+
+        init() {}
+
+        /// What survives a relaunch, and what deliberately does not.
+        ///
+        /// The dates and the counts do: they are the record of what this phone
+        /// has done, and the screen exists to show it. `pending` does not — the
+        /// queue is on disk and counts itself, so a stored number could only
+        /// ever disagree with it. Nor do `lastError` and `signedOut`: both are
+        /// claims about *now*, and a stale one shown at launch is worse than
+        /// none, because it describes a failure that may already have mended.
+        init(from defaults: UserDefaults) {
+            lastPush = defaults.object(forKey: Keys.lastPush) as? Date
+            lastWorkoutScan = defaults.object(forKey: Keys.lastWorkoutScan) as? Date
+            workoutsSent = defaults.integer(forKey: Keys.workoutsSent)
+            lastPhotoScan = defaults.object(forKey: Keys.lastPhotoScan) as? Date
+            photosSent = defaults.integer(forKey: Keys.photosSent)
+        }
+
+        func save(to defaults: UserDefaults) {
+            defaults.set(lastPush, forKey: Keys.lastPush)
+            defaults.set(lastWorkoutScan, forKey: Keys.lastWorkoutScan)
+            defaults.set(workoutsSent, forKey: Keys.workoutsSent)
+            defaults.set(lastPhotoScan, forKey: Keys.lastPhotoScan)
+            defaults.set(photosSent, forKey: Keys.photosSent)
+        }
+    }
+
+    private let defaults = UserDefaults.standard
+
+    private enum Keys {
+        static let cadence = "tracking.cadence"
+        static let precision = "tracking.precision"
+        static let syncWorkouts = "tracking.syncWorkouts"
+        static let syncPhotos = "tracking.syncPhotos"
+        static let deviceName = "tracking.deviceName"
+        static let deviceId = "tracking.deviceId"
+        static let lastPush = "status.lastPush"
+        static let lastWorkoutScan = "status.lastWorkoutScan"
+        static let workoutsSent = "status.workoutsSent"
+        static let lastPhotoScan = "status.lastPhotoScan"
+        static let photosSent = "status.photosSent"
+    }
+
+    private init() {
+        let d = UserDefaults.standard
+        // `object(forKey:)` rather than `integer(forKey:)`: an unset integer
+        // reads back as 0, which is a real Cadence (`.significant`), so the
+        // default would be "already tracking" for anyone who never asked.
+        cadence = (d.object(forKey: Keys.cadence) as? Int).flatMap(Cadence.init) ?? .off
+        precision = Precision.resolved(d.object(forKey: Keys.precision) as? Int)
+        // Assigned here rather than in the property's initial value, so it is
+        // read once from disk and does not immediately write itself back — a
+        // `didSet` does not fire for an assignment made inside `init`.
+        status = SyncStatus(from: d)
+        syncWorkouts = d.bool(forKey: Keys.syncWorkouts)
+        syncPhotos = d.bool(forKey: Keys.syncPhotos)
+        deviceName = d.string(forKey: Keys.deviceName) ?? UIDevice.current.name
+        if let existing = d.string(forKey: Keys.deviceId), !existing.isEmpty {
+            deviceId = existing
+        } else {
+            let fresh = UUID().uuidString
+            d.set(fresh, forKey: Keys.deviceId)
+            deviceId = fresh
+        }
+    }
+
+    var isTracking: Bool { cadence != .off }
+
+    /// What every push carries so the server can tell this phone from another.
+    var deviceHeader: [String: String] {
+        [
+            "id": deviceId,
+            "name": deviceName.trimmingCharacters(in: .whitespacesAndNewlines),
+            "platform": "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)",
+        ]
+    }
+}

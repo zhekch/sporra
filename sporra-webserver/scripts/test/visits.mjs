@@ -95,6 +95,14 @@ console.log('\nfixtures with no clock fall back to run length');
   check(cells.length === 2, 'and the fixtures really did land in two cells', String(cells.length));
 }
 
+
+{
+  const cells = pointsToCells(at(T('2024-01-01T10:00:00Z'), T('2024-01-01T11:00:00Z'), T('2024-02-03T10:00:00Z'), T('2024-04-05T10:00:00Z')));
+  check(JSON.stringify(cells[0].visitDates) === JSON.stringify(['2024-04-05','2024-02-03','2024-01-01']), 'each recorded day survives aggregation, without duplicates');
+  const { routeVisitDates } = await import('../../src/visit-dates.js');
+  const route = {geom:[[[HERE.lng,HERE.lat],[HERE.lng,HERE.lat],[HERE.lng,HERE.lat]]],trace:[[[null,T('2024-01-01T10:00:00Z')],[null,T('2024-02-03T10:00:00Z')],[null,T('2024-04-05T10:00:00Z')]]]};
+  check(routeVisitDates([route]).get(cells[0].id)?.size === 3, 'saved route traces recover intermediate visit dates');
+}
 console.log('\nfixes are counted separately, and are not visits');
 
 {

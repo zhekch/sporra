@@ -6,6 +6,12 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* MapLibre in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* MapLibre */; };
+		A10000000000000000000003 /* SporraCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000004 /* SporraCore */; };
+		A10000000000000000000005 /* MapboxMaps in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000006 /* MapboxMaps */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		7E2405E8301D4620008324E9 /* Sporra.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Sporra.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -22,6 +28,9 @@
 		7E2405E5301D4620008324E9 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				A10000000000000000000001 /* MapLibre in Frameworks */,
+				A10000000000000000000003 /* SporraCore in Frameworks */,
+				A10000000000000000000005 /* MapboxMaps in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -60,6 +69,11 @@
 				7E2405EA301D4620008324E9 /* Sporra */,
 			);
 			name = Sporra;
+			packageProductDependencies = (
+				A10000000000000000000002 /* MapLibre */,
+				A10000000000000000000004 /* SporraCore */,
+				A10000000000000000000006 /* MapboxMaps */,
+			);
 			productName = Sporra;
 			productReference = 7E2405E8301D4620008324E9 /* Sporra.app */;
 			productType = "com.apple.product-type.application";
@@ -89,6 +103,8 @@
 			mainGroup = 7E2405DF301D4620008324E9;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				A10000000000000000000007 /* XCRemoteSwiftPackageReference "maplibre-gl-native-distribution" */,
+				A10000000000000000000008 /* XCRemoteSwiftPackageReference "mapbox-maps-ios" */,
 				7EA0000000000000000000A1 /* XCLocalSwiftPackageReference "SporraCore" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -245,8 +261,8 @@
 				CLANG_USE_OPTIMIZATION_PROFILE = YES;
 				CODE_SIGN_ENTITLEMENTS = Sporra.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 26;
-				DEVELOPMENT_TEAM = K83N2TZ5G3;
+				CURRENT_PROJECT_VERSION = 55;
+				DEVELOPMENT_TEAM = 6BCPV8A5CW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
@@ -265,8 +281,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.18.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zhekch.sporra;
+				MARKETING_VERSION = 0.20.27;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kexts.sporra;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -286,8 +302,8 @@
 				CLANG_USE_OPTIMIZATION_PROFILE = YES;
 				CODE_SIGN_ENTITLEMENTS = Sporra.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 26;
-				DEVELOPMENT_TEAM = K83N2TZ5G3;
+				CURRENT_PROJECT_VERSION = 55;
+				DEVELOPMENT_TEAM = 6BCPV8A5CW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
@@ -306,8 +322,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.18.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zhekch.sporra;
+				MARKETING_VERSION = 0.20.27;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kexts.sporra;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -346,6 +362,43 @@
 			relativePath = SporraCore;
 		};
 /* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A10000000000000000000007 /* XCRemoteSwiftPackageReference "maplibre-gl-native-distribution" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/maplibre/maplibre-gl-native-distribution.git";
+			requirement = {
+				kind = exactVersion;
+				version = 6.28.0;
+			};
+		};
+		A10000000000000000000008 /* XCRemoteSwiftPackageReference "mapbox-maps-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mapbox/mapbox-maps-ios.git";
+			requirement = {
+				kind = exactVersion;
+				version = 11.32.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A10000000000000000000002 /* MapLibre */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000007 /* XCRemoteSwiftPackageReference "maplibre-gl-native-distribution" */;
+			productName = MapLibre;
+		};
+		A10000000000000000000004 /* SporraCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7EA0000000000000000000A1 /* XCLocalSwiftPackageReference "SporraCore" */;
+			productName = SporraCore;
+		};
+		A10000000000000000000006 /* MapboxMaps */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000008 /* XCRemoteSwiftPackageReference "mapbox-maps-ios" */;
+			productName = MapboxMaps;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 7E2405E0301D4620008324E9 /* Project object */;
 	validationLevel = 1;

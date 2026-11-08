@@ -36,6 +36,21 @@ struct BlobRendererTests {
         guard try makeRenderer() != nil else { return }
     }
 
+    @Test("a real viewport may exceed Metal's inline vertex-byte limit")
+    func manyCellsUseVertexBuffer() throws {
+        guard let renderer = try makeRenderer() else { return }
+        var discs: [BlobDisc] = []
+        for i in 0..<600 {
+            let center = SIMD2<Float>(Float(100 + i % 20), Float(100 + i / 20))
+            discs.append(BlobDisc(center: center, radius: 6, color: SIMD4<Float>(0.38, 0.67, 1, 1)))
+        }
+        #expect(MemoryLayout<BlobDisc>.stride * discs.count > 4096)
+        let pixels = try #require(renderer.renderPixels(discs: discs, size: Self.sheet,
+            unit: 6, edge: BlobShaping.edge, featherPx: BlobShaping.featherPx))
+        #expect(alpha(pixels, 110, 110) > 200)
+        #expect(alpha(pixels, 2, 2) == 0)
+    }
+
     /// The shape test: a cluster of cells in the middle must come out solid in
     /// the middle and empty at the rim, with the sheet's own corners untouched.
     /// A cut that inflated the blob would light the corners; one that ate it

@@ -15,6 +15,7 @@
 // happen, which is the same honesty the rest of the map keeps.
 
 import { cellCenter, project, parseCellId, wrapLng } from './hexgrid.js';
+import { cellVisitTimes } from './visit-dates.js';
 
 /** Silence longer than this ends a trip. Being home ends one at any length. */
 export const TRIP_GAP_DAYS = 2;
@@ -245,6 +246,25 @@ function events(cellMeta, routes) {
         const p = project(cellCenter(L, col, row));
         lngLat = [wrapLng(p[0]), p[1]];
       }
+      if (e.visitTimes?.length) {
+        const days = new Map();
+        for (const time of cellVisitTimes(e)) {
+          const day = dayKey(time);
+          if (!days.has(day)) days.set(day, []);
+          days.get(day).push(time);
+        }
+        let first = true;
+        for (const samples of days.values()) {
+          const at = samples[0], last = samples[samples.length - 1];
+          const base = { lng: lngLat[0], lat: lngLat[1], cell: id };
+          // A fast recorder must not outvote a slowly sampled place when
+          // deciding whether a day was spent away or when naming the trip.
+          out.push({ ...base, at, samples, hits: first ? Math.max(1, e.hits || 0) : 0 });
+          if (last > at) out.push({ ...base, at: last, hits: 0 });
+          first = false;
+        }
+        continue;
+      }
       out.push({
         at,
         // How long this one row says the cell went on being seen — what the
@@ -417,9 +437,8 @@ export function buildTrips(cellMeta, routes = [], opts = {}) {
       // has no id, and two of them must not merge into one place.
       const key = e.cell ?? e.route;
       let spot = spots.get(key);
-      // `at` is when you first got there, which is what threads the spots into
-      // the order they happened — the map draws a trip as its own track, and a
-      // track needs a direction. Events arrive sorted, so the first one wins.
+      // Naming needs one entry per place with its earliest arrival. Drawing
+      // retains the separate visits below. Events arrive sorted, so first wins.
       if (!spot) spots.set(key, (spot = { lng: e.lng, lat: e.lat, hits: 0, secs: 0, at: e.at, days: new Set() }));
       spot.hits += e.hits ?? 0;
       spot.secs += stayOf(e, t.events[i + 1]);
@@ -456,10 +475,10 @@ export function buildTrips(cellMeta, routes = [], opts = {}) {
       lengthM: tripRoutes.reduce((m, r) => m + (r.lengthM || 0), 0),
       bbox,
       center,
-      // Sorted, though the events they were built from already arrive in order:
-      // the map threads these into a line and a scribble is what it draws if
-      // they ever stop being ordered. One line here is cheaper than that being
-      // a property of how events happen to be gathered.
+      // Naming counts places; drawing needs visits. Keeping only each place's
+      // first sighting removes the return leg of an out-and-back journey.
+      points: visitPoints(t.events),
+      // Keep the place summary ordered for consumers of older trip responses.
       spots: [...spots.values()]
         .map((s) => ({ lng: s.lng, lat: s.lat, hits: s.hits, secs: s.secs, at: s.at, days: [...s.days] }))
         .sort((a, b) => a.at - b.at),
@@ -469,6 +488,21 @@ export function buildTrips(cellMeta, routes = [], opts = {}) {
   }
   out.sort((a, b) => b.start - a.start);
   return dropRoutine(out, opts);
+}
+
+function visitPoints(events) {
+  const seen = new Set();
+  const points = [];
+  for (const e of events) {
+    if (!e.cell) continue; // an activity's bounding-box centre is not a fix
+    for (const at of e.samples ?? [e.at]) {
+      const key = `${e.cell}:${at}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      points.push({ lng: e.lng, lat: e.lat, at });
+    }
+  }
+  return points.sort((a, b) => a.at - b.at);
 }
 
 /**
@@ -763,8 +797,8 @@ export const dayBounds = (key) => {
 /**
  * Where you were on one calendar day, in the order you were there.
  *
- * The same reading as the calendar's dots — both ends of every stored row, and
- * nothing in between — but placed and timed rather than counted, because a day
+ * The same measured times as the calendar's dots, including retained intermediate
+ * visits, but placed and timed rather than counted, because a day
  * with a dot on it is a day you should be able to *look* at. Sorted by time so
  * the map can thread the points into the track they came from.
  *
@@ -773,28 +807,38 @@ export const dayBounds = (key) => {
  * @returns {Array<{id:string, lng:number, lat:number, at:number, fresh:boolean}>}
  */
 export function dayCells(key, cellMeta) {
+  return dayEvidence(key, cellMeta).cells;
+}
+
+function dayEvidence(key, cellMeta) {
   const [start, end] = dayBounds(key);
   const inDay = (at) => at >= start && at < end;
   const out = [];
+  const points = [];
   for (const [id, entries] of cellMeta ?? []) {
     const [L, col, row] = parseCellId(id);
     if (!Number.isFinite(L)) continue;
     let at = 0;
     let fresh = false;
+    const times = new Set();
     for (const e of entries) {
-      // First seen and last seen are both dates the row actually carries; a
-      // cell whose row merely *spans* this day says nothing about it.
-      const hit = inDay(e.firstAt || 0) ? e.firstAt : inDay(e.lastAt || 0) ? e.lastAt : 0;
-      if (!hit) continue;
+      // Every recorded fix is evidence, including revisits between the
+      // aggregate endpoints. A date-only visit never invents a clock time.
+      for (const time of cellVisitTimes(e)) {
+        if (!inDay(time)) continue;
+        times.add(time);
+        if (!at || time < at) at = time;
+      }
       if (inDay(e.firstAt || 0)) fresh = true;
-      if (!at || hit < at) at = hit;
     }
     if (!at) continue;
     const p = project(cellCenter(L, col, row));
     out.push({ id, lng: wrapLng(p[0]), lat: p[1], at, fresh });
+    for (const time of times) points.push({ lng: wrapLng(p[0]), lat: p[1], at: time });
   }
   out.sort((a, b) => a.at - b.at);
-  return out;
+  points.sort((a, b) => a.at - b.at);
+  return { cells: out, points };
 }
 
 /**
@@ -809,7 +853,7 @@ export function dayDetail(key, trips, routes, cellMeta) {
   const dayRoutes = (routes ?? []).filter((r) => inDay(r.firstAt || r.lastAt || 0));
   // Two different counts, because they answer two different questions: how
   // much of the map you were on that day, and how much of it was new.
-  const cells = dayCells(key, cellMeta);
+  const { cells, points } = dayEvidence(key, cellMeta);
   const trip = (trips ?? []).find((t) => t.start < end && t.end >= start) ?? null;
   return {
     key,
@@ -818,7 +862,7 @@ export function dayDetail(key, trips, routes, cellMeta) {
     routes: dayRoutes,
     cells: cells.length,
     newCells: cells.filter((c) => c.fresh).length,
-    points: cells,
+    points,
     trip,
   };
 }
@@ -859,14 +903,17 @@ export function activeDays(cellMeta, routes) {
     d[what]++;
     days.set(key, d);
   };
-  // Both ends of a cell's span, not just the first: a cell recorded on the
-  // Saturday and again on the Wednesday is evidence of two days, and neither is
-  // an inference — they are both dates the data actually carries. The days in
-  // between stay dark, because nothing says you were there.
+  // Use every measured day, once per cell/source. Legacy endpoints remain
+  // evidence too; unrecorded days in between them stay dark.
   for (const entries of cellMeta.values()) {
     for (const e of entries) {
-      bump(e.firstAt, 'cells');
-      if (e.lastAt && dayKey(e.lastAt) !== dayKey(e.firstAt || e.lastAt)) bump(e.lastAt, 'cells');
+      const daysSeen = new Set();
+      for (const at of cellVisitTimes(e)) {
+        const key = dayKey(at);
+        if (daysSeen.has(key)) continue;
+        daysSeen.add(key);
+        bump(at, 'cells');
+      }
     }
   }
   for (const r of routes ?? []) bump(r.firstAt || r.lastAt, 'routes');
@@ -899,4 +946,32 @@ export function nextRecordedDay(keys, from, dir) {
     if (!best || (dir > 0 ? k < best : k > best)) best = k;
   }
   return best;
+}
+
+/**
+ * The workout `step` places along from this one, in time.
+ *
+ * +1 is the one that happened after, −1 the one before — the same sign the
+ * day chip uses. A route with no start is ordered by when it was added, which
+ * is how the list itself arrives; two that share a clock are ordered by id,
+ * lower first, so a pair that started in the same second still has a before
+ * and an after. The ends are null rather than wrapping.
+ *
+ * Folded copies are the caller's to leave out. This walks the list it is
+ * given, and the chip asks it of the routes worth listing.
+ *
+ * @param {Array<{id:number, firstAt?:number, addedAt?:number}>} routes
+ * @param {number|null} id
+ * @param {number} step
+ * @returns {object|null}
+ */
+export function workoutBeside(routes, id, step) {
+  if (id == null || !step || !routes?.length) return null;
+  // `firstAt` of 0 is "the file didn't say", not the epoch. Treating it as a
+  // real start would put every undated ride before history.
+  const clock = (r) => (r.firstAt > 0 ? r.firstAt : r.addedAt) || 0;
+  const list = routes.slice().sort((a, b) => clock(a) - clock(b) || a.id - b.id);
+  const at = list.findIndex((r) => r.id === id);
+  if (at < 0) return null;
+  return list[at + step] ?? null;
 }

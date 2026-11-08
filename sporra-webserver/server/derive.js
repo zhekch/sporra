@@ -31,6 +31,12 @@ import { lakeAround, loadPlaces, nearestTown } from '../src/places.js';
 import { loadRegions, regionNear } from '../src/regions.js';
 import { computeStats } from '../src/stats.js';
 import { activeDays, buildTrips, dayDetail, findHome, nameTrips } from '../src/trips.js';
+import { cellCenter, parseCellId, project, wrapLng } from '../src/hexgrid.js';
+import { foldedActivities } from './render-routes.js';
+
+const MIN_CITY_RADIUS_M = 1500;
+const MAX_CITY_RADIUS_M = 8000;
+const CITY_POPULATION_RADIUS_M = 500;
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
@@ -145,7 +151,9 @@ export async function trips(userId, signature, supply) {
   if (held.trips) return held.trips;
 
   await prime();
-  const { cellMeta, routes, home } = supply();
+  const input = supply();
+  const { routes, home } = input;
+  const cellMeta = input.trackCellMeta ?? input.cellMeta;
 
   const list = buildTrips(cellMeta, routes, home ? { home } : {});
   try {
@@ -180,6 +188,7 @@ function forWire(trip) {
     ...trip,
     bbox: trip.bbox?.map(round),
     center: trip.center?.map(round),
+    points: trip.points?.map((p) => ({ ...p, lng: round(p.lng), lat: round(p.lat) })),
     spots: trip.spots?.map((s) => ({ ...s, lng: round(s.lng), lat: round(s.lat) })),
   };
 }
@@ -208,6 +217,46 @@ export async function stats(userId, signature, supply) {
   return held.stats;
 }
 
+/** Named ground and activity identities, cached with the same input as stats. */
+export async function announcementSnapshot(userId, signature, supply) {
+  const held = slot(userId, signature);
+  if (held.announcements) return held.announcements;
+  const coverage = await stats(userId, signature, supply);
+  const { cellIds, routes } = supply();
+  const cities = new Map();
+  const lookup = new Map();
+  for (const id of cellIds) {
+    const [level, col, row] = parseCellId(id);
+    const [rawLng, lat] = project(cellCenter(level, col, row));
+    const lng = wrapLng(rawLng);
+    const key = `${Math.round(lng * 100)}/${Math.round(lat * 100)}`;
+    if (!lookup.has(key)) {
+      const town = nearestTown(lng, lat);
+      // A distant nearest town is a route name, not evidence of visiting it.
+      const radius = town ? Math.max(MIN_CITY_RADIUS_M, Math.min(MAX_CITY_RADIUS_M, Math.sqrt(town.pop) * CITY_POPULATION_RADIUS_M)) : 0;
+      const country = town && town.distM <= radius ? countryNear(lng, lat) : null;
+      lookup.set(key, country ? { id: `${country.id}/${town.name}`, name: town.name, country: country.id } : null);
+    }
+    const city = lookup.get(key);
+    if (city) cities.set(city.id, city);
+  }
+  const folded = foldedActivities(routes);
+  const groups = new Map(folded.routes.map(route => [String(route.id), {
+    id: route.id, name: route.name, ids: [String(route.id)],
+  }]));
+  for (const [id, canonical] of Object.entries(folded.duplicates)) {
+    groups.get(String(canonical))?.ids.push(String(id));
+  }
+  held.announcements = {
+    km2: coverage.km2,
+    countries: coverage.countries.map(country => ({ id: country.id, name: country.id })),
+    regions: coverage.regions.map(region => ({ id: region.id, name: region.name })),
+    cities: [...cities.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    activities: [...groups.values()],
+  };
+  return held.announcements;
+}
+
 /**
  * Every calendar day the history has evidence for, as
  * `{ "2024-08-12": { cells, routes } }`.
@@ -218,7 +267,9 @@ export function days(userId, signature, supply) {
   const held = slot(userId, signature);
   if (held.days) return held.days;
 
-  const { cellMeta, routes } = supply();
+  const input = supply();
+  const { routes } = input;
+  const cellMeta = input.trackCellMeta ?? input.cellMeta;
   held.days = Object.fromEntries(activeDays(cellMeta, routes));
   return held.days;
 }
@@ -226,6 +277,8 @@ export function days(userId, signature, supply) {
 /** What happened on one day: its routes, its ground, and the trip it belongs to. */
 export async function day(userId, signature, supply, key) {
   const { trips: list } = await trips(userId, signature, supply);
-  const { cellMeta, routes } = supply();
+  const input = supply();
+  const { routes } = input;
+  const cellMeta = input.trackCellMeta ?? input.cellMeta;
   return dayDetail(key, list, routes, cellMeta);
 }
