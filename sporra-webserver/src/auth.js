@@ -231,11 +231,11 @@ export const auth = {
   // Timestamps are epoch seconds; 0 means the source didn't carry a date.
   // `hits` counts separate visits, `fixes` the raw points behind them.
   getVisitDates: (info, hidden = []) => {
-    const query = new URLSearchParams(info.area
+    const query = new URLSearchParams(info.town ? info.town : info.area
       ? {kind: info.area.kind, id: info.area.id}
       : {lng: info.lng, lat: info.lat, level: info.level});
     for (const source of hidden) query.append('hidden', source);
-    return api('GET', '/api/render/visit-dates?' + query);
+    return api('GET', (info.town ? '/api/render/town?' : '/api/render/visit-dates?') + query);
   },
   getCells: () => api('GET', '/api/cells'),
   // The same answer as bytes, unparsed — for src/cells-load.js, which hands it

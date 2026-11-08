@@ -112,7 +112,7 @@ import { banner } from './banner.js';
 // anything if it moves, so move it — a patch bump for a fix, a minor for
 // anything a user would notice. Stale here is worse than absent: a version that
 // lies is how you rule out the very thing that is wrong.
-export const SERVER_VERSION = '0.143.4';
+export const SERVER_VERSION = '0.143.5';
 
 // --- …and whether somebody has published a newer one ------------------------------
 //
@@ -2933,7 +2933,7 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       } catch (e) { return send(res, 400, { error: e.message }); }
     }
 
-    if (req.method === 'GET' && ['/api/render/regions', '/api/render/at', '/api/render/visit-dates', '/api/search', '/api/locale/en'].includes(pathname)) {
+    if (req.method === 'GET' && ['/api/render/regions', '/api/render/at', '/api/render/town', '/api/render/visit-dates', '/api/search', '/api/locale/en'].includes(pathname)) {
       const user = currentUser(req);
       if (!user) return send(res, 401, { error: 'not authenticated' });
       mergeBakedImport(user);
@@ -2953,7 +2953,11 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
           const plain = new URLSearchParams(query); plain.set('level', '0');
           options = { ...render.cellsOptions(plain), level, fine: query.get('fine') === '1' };
         }
-        if (pathname === '/api/render/visit-dates' && query.has('kind') && (!['region', 'country', 'continent'].includes(query.get('kind')) || !query.get('id') || query.get('id').length > 200)) throw new Error('invalid area');
+        if (pathname === '/api/render/visit-dates' && query.has('kind') && (!['region', 'country', 'continent', 'town'].includes(query.get('kind')) || !query.get('id') || query.get('id').length > 200)) throw new Error('invalid area');
+        if (pathname === '/api/render/town') {
+          point = renderGeo.coordinate(query.get('lng'), query.get('lat'));
+          if ((query.get('name') ?? '').length > 200) throw new Error('invalid town name');
+        }
         if (pathname === '/api/render/at' || (pathname === '/api/render/visit-dates' && !query.has('kind'))) {
           point = renderGeo.coordinate(query.get('lng'), query.get('lat'));
           const zoom = Number(query.get('zoom') ?? 13.6);
@@ -2965,12 +2969,17 @@ async function handleApi(req, res, pathname, query = new URLSearchParams()) {
       const head = conditional(req, res, tag);
       if (!head) return;
       if (pathname === '/api/render/regions') return send(res, 200, await renderGeo.regions(renderGeo.inputFor(user.id, signature, supply), options, iso => fineRegions.get(iso)), head);
+      if (pathname === '/api/render/town') {
+        const data = await renderGeo.townAt(renderGeo.inputFor(user.id, signature, supply), ...point, query.get('name'), query.getAll('hidden'), () => q.routesGeom.all(user.id).map(routeOut));
+        return send(res, data ? 200 : 404, data ?? {error: 'Town not found'}, head);
+      }
       if (pathname === '/api/render/visit-dates') {
         const input = renderGeo.inputFor(user.id, signature, supply);
         const routes = () => q.routesGeom.all(user.id).map(routeOut);
         const data = query.has('kind')
           ? await renderGeo.visitDatesForArea(input, query.get('kind'), query.get('id'), query.getAll('hidden'), routes)
           : await renderGeo.at(input, ...point, level, query.getAll('hidden'), routes);
+        if (!data) return send(res, 404, {error: 'Town not found'}, head);
         return send(res, 200, {visited: data.visited, name: data.name, visitDates: data.visitDates ?? [], visitCount: data.visitCount ?? 0}, head);
       }
       if (pathname === '/api/render/at') return send(res, 200, await renderGeo.at(renderGeo.inputFor(user.id, signature, supply), ...point, level, query.getAll('hidden'), () => q.routesGeom.all(user.id).map(routeOut)), head);

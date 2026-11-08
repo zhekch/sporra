@@ -50,3 +50,7 @@ assert.equal(ids['cell-info-dates'].hidden,true);
 offline.show({title:'Bern',visited:true,visitDates:[]});
 assert.equal(ids['cell-info-coord'].textContent,'You have been here');
 console.log('cell info: date disclosure, accessible toggle, stale response and offline checks passed');
+offline.show({title:'Zürich',town:{name:'Zürich',lng:8.55,lat:47.367},loading:true});
+assert.equal(ids['cell-info-coord'].textContent,'Loading visit details…');
+await new Promise(r=>setTimeout(r,0));
+assert.match(ids['cell-info-coord'].textContent,/could not be loaded/,'failed town requests do not claim an unknown town is visited');

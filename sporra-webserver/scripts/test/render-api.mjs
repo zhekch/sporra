@@ -64,6 +64,7 @@ async function api(method, url, body, headers = {}) {
 try {
   if (!(await waitForServer())) throw new Error(serverErr);
   check((await api('GET', '/api/render/cells')).status === 401, 'requires authentication');
+  check((await api('GET', '/api/render/town?lng=8.55&lat=47.367')).status === 401, 'town visits require authentication');
   await api('POST', '/api/register', { username: 'rendertest', password: 'a-long-enough-pw' });
   await api('POST', '/api/cells/import', { source: 'gpx', cells: [['0/0/0',100,200,3,5],['0/1/0',150,250,9,10],['0/625481/0',300,400,2,4]] });
   const { cells, cellsOptions, forget } = await import('../../server/render.js');
@@ -308,6 +309,40 @@ try {
   await api('POST', '/api/register', {username:'renderother', password:'a-long-enough-pw'});
   check((await api('GET', '/api/render/activity?id=' + activityId)).status === 404, 'activity detail is isolated to its owner');
   check((await api('GET', '/api/render/routes')).body.features.length === 0, 'native activity geometry is account isolated');
+
+  await api('POST', '/api/register', {username:'towntest', password:'a-long-enough-pw'});
+  const townCell = (lng, lat) => {
+    const [col, row] = pointToCell(0, mercX(lng), mercY(lat));
+    return `0/${normCol(col, colsOf(0))}/${row}`;
+  };
+  const townFirst = townCell(8.54, 47.37), townSecond = townCell(8.57, 47.385);
+  const winterthur = townCell(8.725, 47.5);
+  const importedTownDays = ['2024-03-01', '2024-03-05'];
+  await api('POST', '/api/cells/import', {source:'town-a', cells:[
+    [townFirst, 0, 0, 2, 2, importedTownDays], [winterthur, 0, 0, 1, 1, ['2024-04-01']],
+  ]});
+  await api('POST', '/api/cells/import', {source:'town-b', cells:[
+    [townSecond, 0, 0, 2, 2, ['2024-03-05', '2024-03-07']],
+  ]});
+  const townUrl = '/api/render/town?lng=8.55&lat=47.367&name=Zurich';
+  const townInfo = await api('GET', townUrl);
+  check(townInfo.status === 200 && townInfo.body.area.kind === 'town' && townInfo.body.name === 'Zürich', 'town labels resolve using their name and geometry coordinate');
+  check(JSON.stringify(townInfo.body.visitDates) === JSON.stringify(['2024-03-07','2024-03-05','2024-03-01']) && townInfo.body.visitCount === 3,
+    'town API combines separate cells, deduplicates days and excludes nearby towns');
+  check(!townInfo.body.geometry && !townInfo.body.cellID, 'town API does not describe the cell beneath the label');
+  check((await api('GET', townUrl + '&hidden=town-b')).body.visitCount === 2, 'town dates respect hidden sources');
+  check((await api('GET', townUrl + '&hidden=town-a&hidden=town-b')).body.visited === false, 'town with all sources hidden is unvisited');
+  const sharedDates = await api('GET', '/api/render/visit-dates?kind=town&id=' + encodeURIComponent(townInfo.body.area.id));
+  check(JSON.stringify(sharedDates.body.visitDates) === JSON.stringify(townInfo.body.visitDates), 'named town dates share the same server result');
+  check((await api('GET', townUrl, undefined, {'If-None-Match':townInfo.etag})).status === 304, 'town responses support conditional caching');
+  check((await api('GET', townUrl + '&hidden=town-b', undefined, {'If-None-Match':townInfo.etag})).status === 200, 'town source filters have separate validators');
+  for (const suffix of ['?lng=bad&lat=47', '?lng=181&lat=47', '?lng=8.55', '?lng=8.55&lat=47&name='+'a'.repeat(201)]) {
+    check((await api('GET', '/api/render/town'+suffix)).status === 400, 'invalid town request is rejected');
+  }
+  check((await api('GET', '/api/render/town?lng=-30&lat=40&name=Atlantis')).status === 404, 'an unmatched label cannot silently open another town');
+  check((await api('GET', '/api/render/visit-dates?kind=town&id=missing')).status === 404, 'an unknown town ID is rejected');
+  await api('POST', '/api/register', {username:'townother', password:'a-long-enough-pw'});
+  check((await api('GET', townUrl)).body.visited === false, 'town history remains isolated by account');
 
 
 } catch(e) { check(false,'test run',e.stack); }

@@ -338,9 +338,13 @@ final class NativeMapController: UIViewController, CLLocationManagerDelegate, UI
                     self?.update()
                 }
                 new.moved = { [weak self] in self?.mapMoved() }
-                let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
-                tap.delegate = self
-                new.view.addGestureRecognizer(tap)
+                if let box = new as? BoxEngine {
+                    box.tapped = { [weak self] point, town in self?.handleTap(point, town: town) }
+                } else {
+                    let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+                    tap.delegate = self
+                    new.view.addGestureRecognizer(tap)
+                }
                 let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
                 pan.minimumNumberOfTouches = 1
                 pan.maximumNumberOfTouches = 1
@@ -875,8 +879,11 @@ final class NativeMapController: UIViewController, CLLocationManagerDelegate, UI
     }
     @objc private func tapped(_ recognizer: UITapGestureRecognizer) {
         guard let engine else { return }
-        let point = recognizer.location(in: engine.view)
-        let coordinate = engine.coordinate(recognizer.location(in: engine.view))
+        handleTap(recognizer.location(in: engine.view))
+    }
+    private func handleTap(_ point: CGPoint, town: MapTownLabel? = nil) {
+        guard let engine else { return }
+        let coordinate = engine.coordinate(point)
         tapGeneration += 1
         let tap = tapGeneration
         let tappedLevel = level
@@ -902,6 +909,10 @@ final class NativeMapController: UIViewController, CLLocationManagerDelegate, UI
                         ])
                     self.store.undo = value["undo"]
                     self.store.changed()
+                    return
+                }
+                if let town, self.store.cellInfo {
+                    await self.store.selectTown(town)
                     return
                 }
                 let photoIndices = self.store.photos ? await engine.photoIndices(at: point) : []

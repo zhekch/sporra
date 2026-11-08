@@ -50,6 +50,12 @@ number of approaches that were tried and abandoned.
   visits, and which app it came from — or switch **Tap for details** off in the
   layers menu when you would rather just look at the map. Routes, photos and the
   reference overlays still answer; they are things you aimed at.
+- **Click a town name.** On Mapbox 3D and satellite maps, city and town labels
+  open visits across the town instead of the cell under the text. Server
+  0.143.5 supplies the same town history to the web and iPhone app through
+  `/api/render/town`; `/api/render/visit-dates` also accepts `kind=town` and
+  the returned area ID. Dates respect hidden sources and use the existing
+  nearby-town gazetteer rather than municipal boundaries.
 - **Train tracks.** Every line, siding and yard OpenRailwayMap knows about, laid
   over the map in the basemap's own light or dark. Switch it on in the layers
   menu; choose what it draws in Settings → Map layers — tracks, stations,

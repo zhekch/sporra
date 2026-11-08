@@ -154,6 +154,11 @@ struct NativeAPICheck {
         let place = try await api.get(
             "/api/render/at", query: query(["lat": "47.37", "lng": "8.54", "level": "0"]))
         try check(place["visited"].bool, "inspects the same visited ground")
+        let townQuery = query(["lng": "8.55", "lat": "47.367", "name": "Zurich"])
+        let town = try await api.get("/api/render/town", query: townQuery)
+        try check(town["visited"].bool && town["area"]["kind"].string == "town", "uses shared server town visits")
+        let cachedTown = await api.cachedGet("/api/render/town", query: townQuery)
+        try check(cachedTown == town, "town visits use the account-scoped offline cache")
         let cachedPlace = await api.cachedGet("/api/render/at", query: [
             URLQueryItem(name: "level", value: "0"), URLQueryItem(name: "lng", value: "8.54"),
             URLQueryItem(name: "lat", value: "47.37"),

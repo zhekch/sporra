@@ -9,7 +9,7 @@ struct NativeMenu: View {
     @State private var last2DStyle = "dark"
     var body: some View {
         Form {
-            Section("Appearance") {
+            Section {
                 Picker("Map type", selection: mapType) {
                     Text("2D").tag("2d")
                     Text("3D").tag("3d").disabled(store.token.isEmpty)
@@ -77,7 +77,7 @@ struct NativeMenu: View {
                 }
                 .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
             }
-            Section("Your map") {
+            Section {
                 Toggle("Activities", isOn: $store.activities)
                 Toggle("Tap places for details", isOn: $store.cellInfo)
                 Toggle("Photographs on this iPhone", isOn: $store.photos)
@@ -87,7 +87,7 @@ struct NativeMenu: View {
                 NavigationLink("Statistics", destination: NativeStatistics(store: store))
                 NavigationLink("Activity colours", destination: NativeActivityStyles(store: store))
             }
-            Section("Reference layers") {
+            Section {
                 Toggle("Railways", isOn: $store.rail)
                 if store.rail {
                     NavigationLink("Railway options") {

@@ -2,7 +2,7 @@ import { routeVisitDates } from '../src/visit-dates.js';
 import { readFileSync } from 'node:fs';
 import { loadCountries, countryNear, searchCountries, countryIso, countryGeometry, countryAreaKm2 } from '../src/countries.js';
 import { loadRegions, regionNear, regionsInCountry, searchRegions, countriesInView, regionById, addFineRegions, addFineOutline, seamedRegion, fineRegionsVersion, regionGeometry, geometryAreaM2 } from '../src/regions.js';
-import { loadPlaces, searchPlaces, nearestTown } from '../src/places.js';
+import { loadPlaces, searchPlaces, nearestTown, resolveTown, townById } from '../src/places.js';
 import { areaOfCell, WHOLE_COUNTRY, cellAreaKm2 } from '../src/stats.js';
 import { continentOf, continentAreaKm2 } from '../src/continents.js';
 import { tallyAreas, areaFeatures, areaGeometry } from '../src/area-render.js';
@@ -17,6 +17,7 @@ const accounts = new Map();
 const prepared = new WeakMap();
 const datedRoutes = new WeakMap();
 const areaAnswers = new WeakMap();
+const townAssignments = new WeakMap();
 const sharpened = new Map();
 export function forget(userId) {
   if (userId === undefined) accounts.clear(); else accounts.delete(userId);
@@ -166,10 +167,43 @@ function visitDatesForCells(input, ids, hidden, supplyRoutes) {
 }
 export async function visitDatesForArea(input, kind, id, hidden = [], supplyRoutes) {
   await prime();
+  if (kind === 'town') return town(input, townById(id), hidden, supplyRoutes);
   const rolled = prepare(input, hidden);
   const ids = [...rolled.shown ?? input.cellIds].filter(cell => geography(kind, cell) === id);
   const dates = visitDatesForCells(input, ids, hidden, supplyRoutes);
   return { visited: ids.length > 0, visitDates: dates, visitCount: dates.length };
+}
+
+/** Towns share the gazetteer's catchments used to name routes and trips.
+ * Retain both a small town's own catchment and its absorbing city's grouping. */
+export async function town(input, place, hidden = [], supplyRoutes) {
+  await prime();
+  if (!place) return null;
+  let assignments = townAssignments.get(input);
+  if (!assignments) townAssignments.set(input, assignments = new Map());
+  const visible = prepare(input, hidden).shown ?? input.cellIds;
+  const ids = [...visible].filter(id => {
+    const cell = parseCellId(id);
+    const [lng, lat] = project(cellCenter(...cell));
+    const deltaLng = Math.abs(((lng - place.lng + 540) % 360) - 180);
+    if (Math.abs(lat - place.lat) > 0.4 || deltaLng * Math.cos(lat * Math.PI / 180) > 0.6) return false;
+    if (!assignments.has(id)) {
+      const main = nearestTown(lng, lat)?.id;
+      const local = nearestTown(lng, lat, {absorb: false})?.id;
+      assignments.set(id, [main, local]);
+    }
+    return assignments.get(id).includes(place.id);
+  });
+  const dates = visitDatesForCells(input, ids, hidden, supplyRoutes);
+  const visibleMeta = new Map(ids.map(id => [id, (input.cellMeta.get(id) ?? []).filter(m => !hidden.includes(m.source))]));
+  return { name: place.name, lng: place.lng, lat: place.lat,
+    area: {kind: 'town', id: place.id, name: place.name},
+    visited: ids.length > 0, ...summarizeCells(ids, visibleMeta), visitDates: dates, visitCount: dates.length };
+}
+
+export async function townAt(input, lng, lat, name, hidden = [], supplyRoutes) {
+  await prime();
+  return town(input, resolveTown(lng, lat, name), hidden, supplyRoutes);
 }
 
 export async function at(input, lng, lat, level, hidden = [], supplyRoutes) {

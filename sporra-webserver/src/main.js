@@ -62,6 +62,7 @@ import {
   setLightChoice, setMapboxToken,
 } from './mapbox.js';
 import { rememberSunSite } from './sun.js';
+import { installTownLabelClicks } from './town-labels.js';
 import { installGlide } from './glide.js';
 import { installHeading } from './heading.js';
 import { draggableCard } from './popup-drag.js';
@@ -2504,6 +2505,7 @@ function setAllSources(show) {
 function applyHiddenSources() {
   saveHiddenSources();
   recomputeLit();
+  if (selection?.town) showTownInfo(selection.town);
   updateLayersUi();
   updateGrid(true);
   updateTiles();
@@ -4236,6 +4238,7 @@ const SEL_CASING = 'rgba(8, 10, 16, 0.85)';
 // regions use, so it reads as part of the same language.
 function selectionFC() {
   if (!selection || !map.getSource('sel')) return EMPTY;
+  if (selection.town) return EMPTY;
   // A selected region is outlined by its own border rather than by a ring, so
   // the highlight says which shape was picked instead of merely where.
   if (selection.area) {
@@ -4574,6 +4577,15 @@ function showCellInfoAt(lngLat) {
   selection = { L, col, row: r };
   updateSelection();
   cellInfo?.show(info);
+}
+
+function showTownInfo(town) {
+  closeRouteInfo();
+  closePhotoInfo();
+  lastInfoLngLat = null;
+  selection = {town};
+  updateSelection();
+  cellInfo?.show({title: town.name, town, loading: true, sizeLabel: 'Town'});
 }
 
 // --- Saved routes -------------------------------------------------------------
@@ -11828,7 +11840,7 @@ if (STYLES[styleKey].build) {
 const isCtrl = (e) => e.ctrlKey || e.metaKey;
 
 {
-  onMapBuilt(() => map.on('click', (e) => {
+  onMapBuilt(() => installTownLabelClicks(map, (e, town) => {
       // On a phone the menu is a sheet over the map, so the tap that dismisses it
       // is aimed at the sheet, not at the ground behind it — marking a cell or
       // opening an info card there is never what was meant. The menu is closed by
@@ -11858,6 +11870,11 @@ const isCtrl = (e) => e.ctrlKey || e.metaKey;
       }
       if (currentLevel == null) return;
       if (mode !== 'edit') {
+        if (town && cellsInteractive) {
+          closeRouteStack();
+          showTownInfo(town);
+          return;
+        }
         // The open stack card goes first, before anything is asked what is under
         // the pointer. While it is up the route layers are filtered down to the
         // routes it lists (see setStackOnly), and a hit test run against that is

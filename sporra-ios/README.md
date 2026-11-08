@@ -5,7 +5,7 @@ colour pickers, navigation, calendars, sheets, and sharing. The map uses native
 MapLibre and Mapbox views. Flutter is not required to build or run it.
 
 Connect it to the same Sporra server and account you use on the web. Use server
-version **0.143.4**. Your history and account preferences remain on your
+version **0.143.5**. Your history and account preferences remain on your
 server; this app does not require a separate backend or database migration.
 
 ## Run it
@@ -33,6 +33,11 @@ Search finds places, activities, and trips; Calendar selects recorded days.
 Tap a cell to highlight its boundary. Place cards open immediately with available
 map facts while full visit details load in the background. Saved cells also appear
 before server validation when you open or pan the map.
+On Mapbox 3D and satellite maps, tap a city or town name to see visits across
+that town. The shared server API combines recorded cells and activity vertices,
+respects hidden sources, and supplies the same town visits to the web app. Dates
+open the recorded day when selected. Towns use Sporra's nearby-town gazetteer
+rather than municipal boundaries. Previously opened town cards work offline.
 Recent dates across activities, trips, visits, photos, and settings use Today,
 Yesterday, and relative labels for the past six days. Older dates retain the full
 calendar date.

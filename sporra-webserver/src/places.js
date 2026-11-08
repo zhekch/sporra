@@ -100,7 +100,7 @@ const ABSORB_RATIO = 5;
  * The town a point belongs to, or null if nothing is close enough.
  * @returns {{name:string, distM:number, pop:number}|null}
  */
-export function nearestTown(lng, lat) {
+export function nearestTown(lng, lat, { absorb = true } = {}) {
   if (!TOWNS) return null;
   const cLng = Math.floor(lng / CELL);
   const cLat = Math.floor(lat / CELL);
@@ -126,12 +126,13 @@ export function nearestTown(lng, lat) {
         if (score < bestScore) {
           bestScore = score;
           bestT = t;
-          best = { name: t[0], distM: d, pop: t[3] };
+          best = { name: t[0], distM: d, pop: t[3], id: townId(t), lng: t[1], lat: t[2] };
         }
       }
     }
   }
   if (!best) return null;
+  if (!absorb) return best;
   let city = null;
   for (const t of near) {
     if (t[3] < best.pop * ABSORB_RATIO) continue;
@@ -139,7 +140,34 @@ export function nearestTown(lng, lat) {
     if (metres(bestT[1], bestT[2], t[1], t[2]) > ABSORB_M) continue;
     city = t;
   }
-  return city ? { name: city[0], distM: metres(lng, lat, city[1], city[2]), pop: city[3] } : best;
+  return city ? { name: city[0], distM: metres(lng, lat, city[1], city[2]), pop: city[3], id: townId(city), lng: city[1], lat: city[2] } : best;
+}
+
+const townId = t => `${t[1]},${t[2]}`;
+let townsById;
+export function townById(id) {
+  if (!TOWNS) return null;
+  townsById ??= new Map(TOWNS.map(t => [townId(t), t]));
+  const t = townsById.get(id);
+  return t ? { id, name: t[0], lng: t[1], lat: t[2], pop: t[3] } : null;
+}
+
+/** Match a rendered label by name and coordinate, including localized names. */
+export function resolveTown(lng, lat, name = '') {
+  if (!TOWNS) return null;
+  const normalize = value => fold(value).replace(/ city$/, '');
+  const wanted = normalize(name);
+  let exact, closest;
+  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+    const x = ((Math.floor(lng) + dx + 180) % 360 + 360) % 360 - 180;
+    for (const i of index.get(`${x}/${Math.floor(lat) + dy}`) ?? []) {
+      const t = TOWNS[i], distance = metres(lng, lat, t[1], t[2]);
+      if (distance <= 30000 && wanted && normalize(t[0]) === wanted && (!exact || distance < exact.distance)) exact = {t, distance};
+      if (distance <= 3000 && (!closest || distance < closest.distance)) closest = {t, distance};
+    }
+  }
+  const t = (exact ?? closest)?.t;
+  return t ? townById(townId(t)) : null;
 }
 
 // --- Lakes ----------------------------------------------------------------------

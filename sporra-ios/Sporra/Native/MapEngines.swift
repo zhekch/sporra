@@ -342,6 +342,7 @@ final class LibreEngine: NSObject, MapEngine, MLNMapViewDelegate {
 
 final class BoxEngine: MapEngine {
     let map: MapboxMaps.MapView
+    var tapped: ((CGPoint, MapTownLabel?) -> Void)?
     var ready: (() -> Void)?
     var moved: (() -> Void)?
     var view: UIView { map }
@@ -356,6 +357,19 @@ final class BoxEngine: MapEngine {
                     rawValue: satellite
                         ? "mapbox://styles/mapbox/standard-satellite" : "mapbox://styles/mapbox/standard")))
         map.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // Use one SDK gesture path: a handled label must never also select
+        // the grid cell under the text through a second UIKit recognizer.
+        map.mapboxMap.addInteraction(TapInteraction { [weak self] context in
+            self?.tapped?(context.point, nil)
+            return true
+        })
+        map.mapboxMap.addInteraction(TapInteraction(.standardPlaceLabels) { [weak self] feature, context in
+            guard MapTownLabel.isTownClass(feature.class), let name = feature.name,
+                !name.isEmpty, case .point(let point) = feature.geometry else { return false }
+            self?.tapped?(context.point, MapTownLabel(name: name,
+                lng: point.coordinates.longitude, lat: point.coordinates.latitude))
+            return true
+        })
         if [.authorizedAlways, .authorizedWhenInUse].contains(CLLocationManager().authorizationStatus) {
             map.location.options.puckType = .puck2D()
         }

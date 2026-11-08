@@ -21,8 +21,18 @@ struct SporraApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .toggleStyle(SwitchToggleStyle(tint: .green))
+                .toggleStyle(NativeSwitchStyle())
         }
+    }
+}
+
+/// Keep the native switch and its accessibility, with a track that remains
+/// distinct from the white thumb inside sheets tinted with the label colour.
+private struct NativeSwitchStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Toggle(isOn: configuration.$isOn) { configuration.label }
+            .toggleStyle(.switch)
+            .tint(Color(uiColor: .systemGray))
     }
 }
 

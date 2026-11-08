@@ -605,7 +605,14 @@ final class NativeStore: ObservableObject {
         place = value
         return selectionEpoch
     }
-    func selectPlace(_ initial: JSON, query: [URLQueryItem]) async {
+    func selectTown(_ town: MapTownLabel) async {
+        await selectPlace(.object([
+            "name": .string(town.name), "loading": .bool(true),
+            "area": .object(["kind": .string("town"), "id": .string("\(town.lng),\(town.lat)")]),
+        ]), query: query(["lng": String(town.lng), "lat": String(town.lat), "name": town.name])
+            + hidden.sorted().map { URLQueryItem(name: "hidden", value: $0) }, path: "/api/render/town")
+    }
+    func selectPlace(_ initial: JSON, query: [URLQueryItem], path: String = "/api/render/at") async {
         let epoch = showPlace(initial)
         let identity = place["selectionID"]
         let selectedAccount = accountEpoch, selectedRevision = revision, selectedHidden = hidden
@@ -619,7 +626,7 @@ final class NativeStore: ObservableObject {
         let memory = reusable ? placeDetails.first { $0.key == cacheKey }?.value : nil
         let cached: JSON?
         if let memory { cached = memory }
-        else { cached = await api.cachedGet("/api/render/at", query: query) }
+        else { cached = await api.cachedGet(path, query: query) }
         guard isCurrent() else { return }
         func display(_ data: JSON) {
             var value = data
@@ -632,7 +639,7 @@ final class NativeStore: ObservableObject {
         if let cached { display(cached) }
         if memory != nil || (cached != nil && offline) { return }
         do {
-            let data = try await api.get("/api/render/at", query: query)
+            let data = try await api.get(path, query: query)
             guard isCurrent() else { return }
             if reusable && (!initial["area"]["id"].exists || initial["area"]["id"] == data["area"]["id"]) {
                 placeDetails.removeAll { $0.key == cacheKey }
@@ -643,7 +650,11 @@ final class NativeStore: ObservableObject {
         } catch {
             guard isCurrent() else { return }
             place["loading"] = .bool(false)
-            if cached == nil { place["detailsError"] = .string("Visit details are unavailable. Tap the map to retry.") }
+            if cached == nil {
+                place["detailsError"] = .string(path == "/api/render/town" && (error as? ServerFailure)?.status == 404
+                    ? "Town visits need Sporra server 0.143.5 or later."
+                    : "Visit details are unavailable. Tap the map to retry.")
+            }
             await report(error)
         }
     }

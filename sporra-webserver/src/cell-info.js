@@ -88,7 +88,8 @@ export function mountCellInfo({ onClose, loadDates } = {}) {
         titleEl.replaceChildren(name);
       }
       if (!dates.length) {
-        coordEl.textContent = current.visited === false ? 'Not visited yet' : 'You have been here';
+        coordEl.textContent = current.loading && current.visited == null ? 'Loading visit details…'
+          : current.detailsError ?? (current.visited === false ? 'Not visited yet' : 'You have been here');
         return;
       }
       const toggle = document.createElement('button');
@@ -120,8 +121,12 @@ export function mountCellInfo({ onClose, loadDates } = {}) {
     }
     renderDates(info);
     if (loadDates) Promise.resolve().then(() => loadDates(info)).then(data => {
-      if (request === generation && !card.hidden) renderDates(data);
-    }).catch(() => {}); // Retain the local dates when offline.
+      if (request === generation && !card.hidden) renderDates({...data, loading: false});
+    }).catch(() => {
+      if (request === generation && !card.hidden && info.town) {
+        renderDates({loading: false, detailsError: 'Town visits could not be loaded. Tap the town to retry.'});
+      }
+    }); // Retain existing local dates when offline.
 
     // "Added to map" is a fact about the import, not about the place — it says
     // when a file was dropped in, which is never the question anyone opened this
