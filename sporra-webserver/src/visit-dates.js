@@ -33,3 +33,48 @@ export function routeVisitDates(routes) {
   }
   return cells;
 }
+
+// Retain every measured Unix timestamp, not a representative time for its day.
+// Sorting and deduplication make imports and retried batches order independent.
+export function normalizeVisitTimes(values) {
+  if (!Array.isArray(values)) return [];
+  const earliest = Date.UTC(1990, 0, 1) / 1000;
+  const latest = Date.now() / 1000 + 86400;
+  return [...new Set(values.filter(t => typeof t === 'number' && Number.isFinite(t) && t >= earliest && t <= latest))]
+    .sort((a, b) => a - b);
+}
+
+// Endpoints remain real evidence on legacy rows. Date-only strings deliberately
+// contribute no midnight timestamp: a day does not tell us when we were there.
+export function cellVisitTimes(entry) {
+  return normalizeVisitTimes([...(entry.visitTimes ?? []), entry.firstAt, entry.lastAt]);
+}
+
+// Recover only measured vertices from saved activity traces. Do not resurrect
+// cleared cells or turn a route's start time into the time of every vertex.
+export function withRouteVisitTimes(cellMeta, routes) {
+  const recovered = new Map();
+  for (const route of routes ?? []) {
+    for (let s = 0; s < (route.geom?.length ?? 0); s++) {
+      for (let i = 0; i < route.geom[s].length; i++) {
+        const at = route.trace?.[s]?.[i]?.[1];
+        if (!Number.isFinite(at) || at <= 0) continue;
+        const [lng, lat] = route.geom[s][i];
+        const [col, row] = pointToCell(0, mercX(lng), mercY(lat));
+        const id = `0/${normCol(col, colsOf(0))}/${row}`;
+        if (!cellMeta.get(id)?.some(e => e.source === route.source)) continue;
+        let sources = recovered.get(id);
+        if (!sources) recovered.set(id, sources = new Map());
+        let times = sources.get(route.source);
+        if (!times) sources.set(route.source, times = []);
+        times.push(at);
+      }
+    }
+  }
+  const result = new Map(cellMeta);
+  for (const [id, sources] of recovered) {
+    result.set(id, cellMeta.get(id).map(e => sources.has(e.source)
+      ? { ...e, visitTimes: normalizeVisitTimes([...(e.visitTimes ?? []), ...sources.get(e.source)]) } : e));
+  }
+  return result;
+}

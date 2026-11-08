@@ -11,7 +11,7 @@ final class NativeAuthorization: NSObject, ASWebAuthenticationPresentationContex
             throw ServerFailure(status: 0, message: "An authorization is already open.")
         }
         return try await withCheckedThrowingContinuation { continuation in
-            let auth = ASWebAuthenticationSession(url: url, callbackURLScheme: "sporra-flutter") {
+            let auth = ASWebAuthenticationSession(url: url, callbackURLScheme: "sporra") {
                 [weak self] result, error in
                 self?.session = nil
                 if let result {

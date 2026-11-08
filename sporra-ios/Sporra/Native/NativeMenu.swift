@@ -6,21 +6,41 @@ struct NativeMenu: View {
     var close: () -> Void = {}
     @State private var opacity = 0.3
     @State private var color = Color.blue
+    @State private var last2DStyle = "dark"
     var body: some View {
         Form {
             Section("Appearance") {
-                Picker("Basemap", selection: $store.style) {
-                    Text("Dark").tag("dark")
-                    Text("Light").tag("voyager")
-                    Text("Terrain").tag("terrain")
+                Picker("Map type", selection: mapType) {
+                    Text("2D").tag("2d")
+                    Text("3D").tag("3d").disabled(store.token.isEmpty)
                     Text("Satellite").tag("satellite")
-                    if !store.token.isEmpty { Text("3D").tag("mapbox") }
+                }.pickerStyle(.segmented)
+                if mapType.wrappedValue == "2d" {
+                    Picker("2D appearance", selection: $store.style) {
+                        Text("Dark").tag("dark")
+                        Text("Terrain").tag("terrain")
+                        Text("Light").tag("voyager")
+                    }.pickerStyle(.segmented)
+                } else if mapType.wrappedValue == "3d" {
+                    Picker("3D appearance", selection: Binding(
+                        get: { store.prefs["mapboxLight"].text("auto") },
+                        set: { store.save(["mapboxLight": .string($0)]) }
+                    )) {
+                        Text("Dark").tag("night")
+                        Text("Light").tag("day")
+                        Text("Auto").tag("auto")
+                    }.pickerStyle(.segmented)
+                }
+                if store.token.isEmpty {
+                    Text("Add a Mapbox public token in Settings → Map layers to enable 3D.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 Picker("Detail", selection: $store.detail) {
                     Text("Automatic").tag("auto")
                     Text("Finest").tag("finest")
+                    Text("Regions").tag("regions")
                     Text("Country").tag("country")
-                }
+                }.pickerStyle(.menu)
                 Picker(
                     "Colour by",
                     selection: Binding(get: { store.mode }, set: { store.save(["heatMode": .string($0)]) })
@@ -29,7 +49,7 @@ struct NativeMenu: View {
                     Text("Visits").tag("visits")
                     Text("First visit").tag("oldest")
                     Text("Source").tag("type")
-                }
+                }.pickerStyle(.menu)
                 if store.mode == "flat" {
                     ColorPicker("Visited colour", selection: $color, supportsOpacity: false).onChange(
                         of: color
@@ -40,24 +60,24 @@ struct NativeMenu: View {
                         store.save(["accent": .string(hex), "accents": accents])
                     }
                 }
-                VStack(alignment: .leading) {
+                VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text("Opacity")
                         Spacer()
                         Text(opacity, format: .percent.precision(.fractionLength(0))).foregroundStyle(
                             .secondary)
                     }
-                    Slider(value: $opacity, in: 0...1) { editing in
-                        if !editing {
-                            var values = store.prefs["mapOpacities"]
-                            values[store.mode] = .number(opacity)
-                            store.save(["mapOpacities": values])
-                        }
-                    }.accessibilityLabel("Map opacity")
+                    NativeOpacitySlider(value: $opacity) {
+                        var values = store.prefs["mapOpacities"]
+                        values[store.mode] = .number(opacity)
+                        store.save(["mapOpacities": values])
+                    }
+                    .frame(height: 32)
+                    .onChange(of: store.mode) { _ in opacity = store.opacity }
                 }
+                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
             }
             Section("Your map") {
-                Toggle("Visited areas", isOn: $store.ground)
                 Toggle("Activities", isOn: $store.activities)
                 Toggle("Tap places for details", isOn: $store.cellInfo)
                 Toggle("Photographs on this iPhone", isOn: $store.photos)
@@ -133,14 +153,77 @@ struct NativeMenu: View {
                 }
                 NavigationLink("Settings", destination: NativeSettings(store: store))
             }
-        }.navigationTitle("Your map")
+        }
+            .navigationTitle("Your map")
             .onAppear {
+                if !["mapbox", "satellite"].contains(store.style) { last2DStyle = store.style }
                 opacity = store.opacity
                 color = Color(uiColor: UIColor(mapColor: store.accent))
             }
     }
+    private var mapType: Binding<String> {
+        Binding(
+            get: {
+                store.style == "mapbox" ? "3d" : (store.style == "satellite" ? "satellite" : "2d")
+            },
+            set: { value in
+                guard value != "3d" || !store.token.isEmpty else { return }
+                if !["mapbox", "satellite"].contains(store.style) { last2DStyle = store.style }
+                switch value {
+                case "3d": store.style = "mapbox"
+                case "satellite": store.style = "satellite"
+                default: store.style = last2DStyle
+                }
+            })
+    }
+
     private func prefBool(_ key: String) -> Binding<Bool> {
         Binding(get: { store.prefs[key].bool }, set: { store.save([key: .bool($0)]) })
+    }
+}
+
+/// UIKit owns the thumb, relative tracking, press animation and accessibility.
+private struct NativeOpacitySlider: UIViewRepresentable {
+    @Binding var value: Double
+    var commit: () -> Void
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIView(context: Context) -> UISlider {
+        let slider = UISlider()
+        slider.minimumValue = 0
+        slider.maximumValue = 1
+        slider.minimumTrackTintColor = .label
+        if #available(iOS 26.0, *) {
+            slider.sliderStyle = .thumbless
+        } else {
+            let thumb = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
+            slider.setThumbImage(thumb, for: .normal)
+            slider.setThumbImage(thumb, for: .highlighted)
+        }
+        slider.accessibilityLabel = "Map opacity"
+        slider.addTarget(context.coordinator, action: #selector(Coordinator.began(_:)), for: .touchDown)
+        slider.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        slider.addTarget(context.coordinator, action: #selector(Coordinator.ended(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        return slider
+    }
+    func updateUIView(_ slider: UISlider, context: Context) {
+        context.coordinator.parent = self
+        if !slider.isTracking { slider.setValue(Float(value), animated: false) }
+        slider.accessibilityValue = value.formatted(.percent.precision(.fractionLength(0)))
+    }
+    final class Coordinator: NSObject {
+        var parent: NativeOpacitySlider
+        private let feedback = UISelectionFeedbackGenerator()
+        private var step: Int?
+        init(_ parent: NativeOpacitySlider) { self.parent = parent }
+        @objc func began(_ slider: UISlider) { step = Int((slider.value * 20).rounded()); feedback.prepare() }
+        @objc func changed(_ slider: UISlider) {
+            parent.value = Double(slider.value)
+            let next = Int((slider.value * 20).rounded())
+            if step != next { feedback.selectionChanged(); feedback.prepare(); step = next }
+            slider.accessibilityValue = parent.value.formatted(.percent.precision(.fractionLength(0)))
+            parent.commit()
+        }
+        @objc func ended(_ slider: UISlider) { parent.value = Double(slider.value); parent.commit(); step = nil }
     }
 }
 

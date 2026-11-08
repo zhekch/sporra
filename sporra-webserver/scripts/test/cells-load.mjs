@@ -25,7 +25,7 @@ const body = {
     ['0/10/20', 2, 1700000001, 1500000000, 1690000000, 9, 0],
     ['0/11/20', 1, 1700000002, 0, 0, 1, 0],
     ['0/12/21', 0, 1700000003, null, 1650000000, 2, null], // a null that must stay null
-    ['1/4/7', 7, 1700000004, 1, 2, 5], // no fixes at all, and a source index past the list
+    ['1/4/7', 7, 1700000004, 1, 2, 5, 0], // a source index past the list
   ],
 };
 

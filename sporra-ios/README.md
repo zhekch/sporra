@@ -5,7 +5,7 @@ colour pickers, navigation, calendars, sheets, and sharing. The map uses native
 MapLibre and Mapbox views. Flutter is not required to build or run it.
 
 Connect it to the same Sporra server and account you use on the web. Use server
-version **0.136.0 or newer**. Your history and account preferences remain on your
+version **0.143.4**. Your history and account preferences remain on your
 server; this app does not require a separate backend or database migration.
 
 ## Run it
@@ -17,7 +17,7 @@ if no simulator destinations are available.
 
 For a physical iPhone, select your Apple development team in Signing &
 Capabilities, enable Developer Mode on the phone, and run the same scheme.
-The bundle identifier remains `com.zhekch.sporra`, so this replaces the previous
+The bundle identifier is `com.kexts.sporra`, so this replaces the previous
 iOS web-view app. The older Flutter preview can remain installed alongside it.
 
 Enter your server address and account credentials on the sign-in screen. For a
@@ -30,6 +30,12 @@ existing registration policy.
 
 The menu opens appearance, activity, trip, statistics, and settings screens.
 Search finds places, activities, and trips; Calendar selects recorded days.
+Tap a cell to highlight its boundary. Place cards open immediately with available
+map facts while full visit details load in the background. Saved cells also appear
+before server validation when you open or pan the map.
+Recent dates across activities, trips, visits, photos, and settings use Today,
+Yesterday, and relative labels for the past six days. Older dates retain the full
+calendar date.
 Day and trip tracks have previous/next controls. Activity cards show the
 server's speed and elevation readings, with a graph you can drag to inspect a
 point on the map. Overlapping activities offer a picker.
@@ -43,6 +49,10 @@ without a token.
 Railways, airport categories, and waymarked trails are available under Reference
 layers. Enable Editing to paint or erase with the brush, clear a region, and
 undo. Activities can be renamed, reclassified, deleted, and restored with Undo.
+
+Settings uses header pills in the same order as the web app: Personal, Map
+layers, Sources, Import, Sync, Backups, Admin, and Other. Backups and Admin are
+visible to administrators. Offline access and device maintenance are under Other.
 
 Settings includes reviewed file imports, Komoot links, source management,
 Strava authorization, Home Assistant devices and schedules, and account
@@ -61,7 +71,7 @@ expired session keeps your saved map available and offers **Sign in to sync**.
 Only explicit sign-out removes the saved account and its private offline data.
 
 The app saves viewed content and downloads visits at every detail level, activity
-lines, calendar days, trips, and statistics in the background. Settings → Offline
+lines, calendar days, trips, and statistics in the background. Settings → Other → Offline
 access shows download progress and lets you refresh that data. Saved activity
 cards, day tracks, searches, and other details remain browsable offline; content
 that has not been downloaded says so. Offline storage is bounded, so sufficiently
@@ -82,11 +92,19 @@ responses but retains the saved account.
 
 ## Recording and photographs
 
-Settings → Import & sync → **This iPhone** controls background location
+Settings → Sync → **This iPhone** controls background location
 recording, accuracy, the device name, Apple Health workouts, and photo-location
 sync. Records stay queued until the server accepts them. iOS permissions and
 background execution limits still apply; the simulator needs configured
 location, Health, or photo data to exercise these features.
+
+While signed in with Sporra open, fresh location readings save each newly
+entered cell immediately and colour it locally. This works independently of the
+background recording schedule, respects the selected accuracy limit, and needs
+location permission. Fixes remain on disk until uploaded; foreground uploads are
+batched at a 15-second interval. Returning to the background restores your
+chosen recording schedule. Server shading replaces the local cell preview after
+syncing.
 
 **Photographs on this iPhone** in the map menu displays local geotagged photos.
 Tap a photo marker to open the native gallery, including video playback.
@@ -94,5 +112,6 @@ Selecting a day or trip filters photos to that period. Browsing photos and
 syncing their locations are separate switches. Images and videos are never
 uploaded.
 
-The app supports iOS 16 and later. Implementation and verification details are
-in [ARCHITECTURE.md](../ARCHITECTURE.md#native-swift-ios-interface).
+The app supports iOS 16 and later. Liquid Glass is used on iOS 26; earlier
+versions use native material surfaces and standard controls. Implementation and
+verification details are in [ARCHITECTURE.md](../ARCHITECTURE.md#native-swift-ios-interface).

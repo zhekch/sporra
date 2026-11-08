@@ -15,6 +15,7 @@
 // happen, which is the same honesty the rest of the map keeps.
 
 import { cellCenter, project, parseCellId, wrapLng } from './hexgrid.js';
+import { cellVisitTimes } from './visit-dates.js';
 
 /** Silence longer than this ends a trip. Being home ends one at any length. */
 export const TRIP_GAP_DAYS = 2;
@@ -245,6 +246,25 @@ function events(cellMeta, routes) {
         const p = project(cellCenter(L, col, row));
         lngLat = [wrapLng(p[0]), p[1]];
       }
+      if (e.visitTimes?.length) {
+        const days = new Map();
+        for (const time of cellVisitTimes(e)) {
+          const day = dayKey(time);
+          if (!days.has(day)) days.set(day, []);
+          days.get(day).push(time);
+        }
+        let first = true;
+        for (const samples of days.values()) {
+          const at = samples[0], last = samples[samples.length - 1];
+          const base = { lng: lngLat[0], lat: lngLat[1], cell: id };
+          // A fast recorder must not outvote a slowly sampled place when
+          // deciding whether a day was spent away or when naming the trip.
+          out.push({ ...base, at, samples, hits: first ? Math.max(1, e.hits || 0) : 0 });
+          if (last > at) out.push({ ...base, at: last, hits: 0 });
+          first = false;
+        }
+        continue;
+      }
       out.push({
         at,
         // How long this one row says the cell went on being seen — what the
@@ -472,13 +492,17 @@ export function buildTrips(cellMeta, routes = [], opts = {}) {
 
 function visitPoints(events) {
   const seen = new Set();
-  return events.filter(e => {
-    if (!e.cell) return false; // an activity's bounding-box centre is not a fix
-    const key = `${e.cell}:${e.at}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).map(e => ({ lng: e.lng, lat: e.lat, at: e.at }));
+  const points = [];
+  for (const e of events) {
+    if (!e.cell) continue; // an activity's bounding-box centre is not a fix
+    for (const at of e.samples ?? [e.at]) {
+      const key = `${e.cell}:${at}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      points.push({ lng: e.lng, lat: e.lat, at });
+    }
+  }
+  return points.sort((a, b) => a.at - b.at);
 }
 
 /**
@@ -773,8 +797,8 @@ export const dayBounds = (key) => {
 /**
  * Where you were on one calendar day, in the order you were there.
  *
- * The same reading as the calendar's dots — both ends of every stored row, and
- * nothing in between — but placed and timed rather than counted, because a day
+ * The same measured times as the calendar's dots, including retained intermediate
+ * visits, but placed and timed rather than counted, because a day
  * with a dot on it is a day you should be able to *look* at. Sorted by time so
  * the map can thread the points into the track they came from.
  *
@@ -798,14 +822,14 @@ function dayEvidence(key, cellMeta) {
     let fresh = false;
     const times = new Set();
     for (const e of entries) {
-      // First seen and last seen are both dates the row actually carries; a
-      // cell whose row merely *spans* this day says nothing about it.
-      const hit = inDay(e.firstAt || 0) ? e.firstAt : inDay(e.lastAt || 0) ? e.lastAt : 0;
-      if (!hit) continue;
+      // Every recorded fix is evidence, including revisits between the
+      // aggregate endpoints. A date-only visit never invents a clock time.
+      for (const time of cellVisitTimes(e)) {
+        if (!inDay(time)) continue;
+        times.add(time);
+        if (!at || time < at) at = time;
+      }
       if (inDay(e.firstAt || 0)) fresh = true;
-      if (inDay(e.firstAt || 0)) times.add(e.firstAt);
-      if (inDay(e.lastAt || 0)) times.add(e.lastAt);
-      if (!at || hit < at) at = hit;
     }
     if (!at) continue;
     const p = project(cellCenter(L, col, row));
@@ -879,14 +903,17 @@ export function activeDays(cellMeta, routes) {
     d[what]++;
     days.set(key, d);
   };
-  // Both ends of a cell's span, not just the first: a cell recorded on the
-  // Saturday and again on the Wednesday is evidence of two days, and neither is
-  // an inference — they are both dates the data actually carries. The days in
-  // between stay dark, because nothing says you were there.
+  // Use every measured day, once per cell/source. Legacy endpoints remain
+  // evidence too; unrecorded days in between them stay dark.
   for (const entries of cellMeta.values()) {
     for (const e of entries) {
-      bump(e.firstAt, 'cells');
-      if (e.lastAt && dayKey(e.lastAt) !== dayKey(e.firstAt || e.lastAt)) bump(e.lastAt, 'cells');
+      const daysSeen = new Set();
+      for (const at of cellVisitTimes(e)) {
+        const key = dayKey(at);
+        if (daysSeen.has(key)) continue;
+        daysSeen.add(key);
+        bump(at, 'cells');
+      }
     }
   }
   for (const r of routes ?? []) bump(r.firstAt || r.lastAt, 'routes');

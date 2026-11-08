@@ -70,7 +70,8 @@ export function parseCellsBuffer(buffer) {
   const { sources = [], rows = [] } = JSON.parse(new TextDecoder().decode(buffer)) ?? {};
   const n = rows.length;
   const ids = new Array(n);
-  const visitDates = rows.map(r => r[7] ?? []);
+  const visitDates = rows.map(r => r[7]);
+  const visitTimes = rows.map(r => r[8]);
   const src = new Uint16Array(n);
   const cols = [new Float64Array(n), new Float64Array(n), new Float64Array(n), new Float64Array(n), new Float64Array(n)];
   for (let i = 0; i < n; i++) {
@@ -79,10 +80,10 @@ export function parseCellsBuffer(buffer) {
     src[i] = r[1] ?? 65535;
     for (let c = 0; c < 5; c++) {
       const v = r[c + 2];
-      cols[c][i] = v == null ? (c === 4 && v === undefined ? 0 : NaN) : v;
+      cols[c][i] = v == null ? NaN : v;
     }
   }
-  return { sources, ids: ids.join('\n'), n, src, cols, visitDates };
+  return { sources, ids: ids.join('\n'), n, src, cols, visitDates, visitTimes };
 }
 
 let worker = null;
@@ -119,7 +120,7 @@ function getWorker() {
 }
 
 /**
- * Parse a `/api/cells` body into columns: `{ sources, ids, n, src, cols, visitDates }`,
+ * Parse a `/api/cells` body into columns: `{ sources, ids, n, src, cols, visitDates, visitTimes }`,
  * where `ids` is every row's cell id joined by newlines — one string rather than
  * 595k, because splitting it here would be the very block this avoids; the
  * filling walks it instead — and `cols` is added, first, last, hits and fixes,
@@ -153,7 +154,7 @@ export async function parseCells(buffer) {
  * A generator for runSliced.
  */
 export function* fillCells(parsed, visited, cellMeta) {
-  const { sources, ids, n, src, cols, visitDates } = parsed;
+  const { sources, ids, n, src, cols, visitDates, visitTimes } = parsed;
   const [added, first, last, hits, fixes] = cols;
   const num = (v) => (Number.isNaN(v) ? null : v);
   let at = 0;
@@ -171,6 +172,7 @@ export function* fillCells(parsed, visited, cellMeta) {
       hits: num(hits[i]),
       fixes: num(fixes[i]),
       ...(visitDates?.[i]?.length ? { visitDates: visitDates[i] } : {}),
+      ...(visitTimes?.[i]?.length ? { visitTimes: visitTimes[i] } : {}),
     };
     const list = cellMeta.get(id);
     if (list) list.push(entry);

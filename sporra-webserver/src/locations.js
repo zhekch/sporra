@@ -26,7 +26,7 @@
 //   • any other JSON — the generic harvester above still walks the whole tree
 
 import { mercX, mercY, pointToCell, normCol, colsOf } from './hexgrid.js';
-import { normalizeVisitDates } from './visit-dates.js';
+import { normalizeVisitDates, normalizeVisitTimes } from './visit-dates.js';
 import { parseTcx, looksLikeTcx } from './tcx.js';
 import { climb } from './routes.js';
 
@@ -687,7 +687,7 @@ function countVisits(times, runs, gap) {
  * `hits` is the visit count (what the heat map reads); `fixes` is how many raw
  * points landed in the cell, which is only ever shown as a detail.
  * @param {Array<{lat:number,lng:number,t:number}>} points in the order the file listed them
- * @returns {Array<{id:string, first:number, last:number, hits:number, fixes:number}>}
+ * @returns {Array<{id:string, first:number, last:number, hits:number, fixes:number, visitDates:string[], visitTimes:number[]}>}
  */
 export function pointsToCells(points, { visitGap = VISIT_GAP_SEC } = {}) {
   const N = colsOf(0);
@@ -711,5 +711,6 @@ export function pointsToCells(points, { visitGap = VISIT_GAP_SEC } = {}) {
     ...cell,
     hits: countVisits(times, runs, visitGap),
     visitDates: normalizeVisitDates(times),
+    visitTimes: normalizeVisitTimes(times),
   }));
 }

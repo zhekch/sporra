@@ -221,6 +221,9 @@ public final class BlobRenderer {
         // Keep ARC from reaping the pair mid-flight on a debug build.
         front = nil
         back = nil
+        // iOS can reject GPU work as the app enters the background. Failed
+        // commands do not contain a valid image and must remain retryable.
+        guard commands.status == .completed else { return nil }
         return output
     }
 

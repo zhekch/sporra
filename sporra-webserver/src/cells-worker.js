@@ -18,7 +18,8 @@ self.onmessage = (event) => {
     const { sources = [], rows = [] } = JSON.parse(new TextDecoder().decode(buffer)) ?? {};
     const n = rows.length;
     const ids = new Array(n);
-  const visitDates = rows.map(r => r[7] ?? []);
+    const visitDates = rows.map(r => r[7]);
+    const visitTimes = rows.map(r => r[8]);
     const src = new Uint16Array(n);
     // A missing number is sent as NaN, which the reader turns back into the
     // null the JSON held — the columns cannot hold a null, and 0 means something.
@@ -29,10 +30,10 @@ self.onmessage = (event) => {
       src[i] = r[1] ?? 65535;
       for (let c = 0; c < 5; c++) {
         const v = r[c + 2];
-        cols[c][i] = v == null ? (c === 4 && v === undefined ? 0 : NaN) : v;
+        cols[c][i] = v == null ? NaN : v;
       }
     }
-    const out = { id, sources, ids: ids.join('\n'), n, src, cols, visitDates };
+    const out = { id, sources, ids: ids.join('\n'), n, src, cols, visitDates, visitTimes };
     self.postMessage(out, [src.buffer, ...cols.map((a) => a.buffer)]);
   } catch (error) {
     self.postMessage({ id, error: String(error?.message ?? error) });

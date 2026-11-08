@@ -60,7 +60,7 @@ for (const f of files) {
   console.log(`${f}: ${parsed.points.length} fixes → ${sourceLabel(parsed.source)}`);
 }
 
-// detail rows: [cellId, source, firstAt, lastAt, hits, fixes] (epoch seconds,
+// detail rows: [cellId, source, firstAt, lastAt, hits, fixes, visitDates, visitTimes] (epoch seconds,
 // 0 = no date in the file; `hits` counts separate visits, `fixes` the raw
 // points behind them). `cells` stays a plain id list for older readers.
 const detail = [];
@@ -68,7 +68,7 @@ const ids = new Set();
 for (const [source, points] of bySource) {
   const cells = pointsToCells(points);
   for (const c of cells) {
-    detail.push([c.id, source, c.first, c.last, c.hits, c.fixes, c.visitDates]);
+    detail.push([c.id, source, c.first, c.last, c.hits, c.fixes, c.visitDates, c.visitTimes]);
     ids.add(c.id);
   }
   console.log(`  ${sourceLabel(source)}: ${cells.length} cells`);

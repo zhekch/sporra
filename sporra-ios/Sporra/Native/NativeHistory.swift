@@ -9,69 +9,118 @@ struct NativeSearch: View {
     @State private var results: [JSON] = []
     @State private var searching = false
     @State private var error: String?
-    var body: some View {
-        List {
-            if searching { ProgressView("Searching…") }
-            if let error { Text(error).foregroundStyle(.secondary) }
-            if text.isEmpty {
-                NavigationLink("Recorded days", destination: NativeCalendarScreen(store: store, close: close))
-                NavigationLink("Trips", destination: NativeTrips(store: store, close: close))
-            }
-            ForEach(Array(results.enumerated()), id: \.offset) { _, item in
-                Button {
-                    Task {
-                        if item["kind"].string == "route" {
-                            await store.openActivity(item["id"])
-                        } else if item["kind"].string == "trip" {
-                            await store.selectTrack(trip: item["id"])
-                        } else {
-                            store.setFocus(item)
-                        }
-                        close()
-                    }
-                } label: {
-                    VStack(alignment: .leading) {
-                        Text(item["name"].text("Place"))
-                        Text(item["country"].text(item["kind"].string.capitalized)).font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .contextMenu {
-                    if item["lat"].exists && item["lng"].exists {
-                        Button("Set as home") {
-                            store.save([
-                                "home": .object([
-                                    "lat": item["lat"], "lng": item["lng"], "name": item["name"],
-                                ])
-                            ])
-                        }
-                    }
-                }
-            }
-            if text.count >= 2 && !searching && results.isEmpty && error == nil {
-                Text("No results").foregroundStyle(.secondary)
-            }
-        }.navigationTitle("Search")
-            .searchable(text: $text, prompt: "Places, activities, dates")
-            .task(id: text) {
-                guard text.count >= 2 else {
-                    results = []
-                    return
-                }
-                searching = true
-                do {
-                    try await Task.sleep(for: .milliseconds(250))
-                    let response = try await store.api.get("/api/search", query: query(["q": text]))
-                    try Task.checkCancellation()
-                    results = response["results"].array
-                    error = nil
-                    searching = false
-                } catch is CancellationError {} catch {
-                    self.error = error.localizedDescription
-                    searching = false
-                }
-            }
+
+    private var queryText: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var items: [JSON] {
+        queryText.isEmpty
+            ? RecentSearchItems.combine(routes: store.recentRoutes, trips: store.recentTrips, prefs: store.prefs)
+            : results
     }
+
+    var body: some View {
+        Group {
+            List {
+                if let message = queryText.isEmpty ? store.recentSearchError : error {
+                    Text(message).foregroundStyle(.secondary)
+                    if queryText.isEmpty { Button("Try again") { Task { await store.prepareRecentSearch(force: true) } } }
+                }
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    Button {
+                        Task {
+                            if item["kind"].string == "route" {
+                                close()
+                                await store.openActivity(item["id"], preview: item)
+                                return
+                            } else if item["kind"].string == "trip" {
+                                await store.selectTrack(trip: item["id"])
+                            } else {
+                                store.setFocus(item)
+                            }
+                            close()
+                        }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: NativeSearchPresentation.icon(item))
+                                .font(.title3).foregroundStyle(.white)
+                                .frame(width: 28).accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item["name"].text(item["kind"].string == "route" ? "Activity" : "Place"))
+                                    .foregroundStyle(.primary)
+                                if item["kind"].string == "route" {
+                                    Text("Activity · \(nativeDate(item["firstAt"]))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                } else if item["kind"].string == "trip" {
+                                    Text("Trip · \(nativeDateRange(item["start"], item["end"]))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                } else {
+                                    Text(item["country"].text(item["kind"].string.capitalized))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        if item["lat"].exists && item["lng"].exists {
+                            Button("Set as home") {
+                                store.save([
+                                    "home": .object([
+                                        "lat": item["lat"], "lng": item["lng"], "name": item["name"],
+                                    ])
+                                ])
+                            }
+                        }
+                    }
+                }
+                if items.isEmpty {
+                    if queryText.isEmpty && store.recentSearchLoaded && store.recentSearchError == nil {
+                        Text("No recent trips or activities").foregroundStyle(.secondary)
+                    } else if queryText.count >= 2 && !searching && error == nil {
+                        Text("No results").foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .navigationTitle("Search")
+        .searchable(text: $text, prompt: "Places, activities, dates")
+        .toolbar {
+            if #available(iOS 26.0, *) {
+                DefaultToolbarItem(kind: .search, placement: .bottomBar)
+                ToolbarSpacer(.fixed, placement: .bottomBar)
+            }
+            ToolbarItem(placement: .bottomBar) {
+                NavigationLink {
+                    NativeCalendarScreen(store: store, close: close)
+                } label: {
+                    Image(systemName: "calendar")
+                }.accessibilityLabel("Calendar")
+            }
+        }
+        .task { await store.prepareRecentSearch() }
+        .task(id: queryText) {
+            results = []
+            error = nil
+            searching = false
+            guard queryText.count >= 2 else { return }
+            let term = queryText
+            searching = true
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+                let response = try await store.api.get("/api/search", query: query(["q": term]))
+                try Task.checkCancellation()
+                results = response["results"].array
+                searching = false
+            } catch is CancellationError {
+                // The next query owns the loading state and result list.
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.error = error.localizedDescription
+                searching = false
+            }
+        }
+    }
+
 }
 
 struct NativeCalendarScreen: View {
@@ -88,7 +137,7 @@ struct NativeCalendarScreen: View {
                     }
                 }.frame(minHeight: 380)
             }
-        }.navigationTitle("Recorded days")
+        }.navigationTitle("Recorded days").modifier(NativeHistoryTitleStyle())
     }
 }
 struct NativeCalendar: UIViewRepresentable {
@@ -141,53 +190,27 @@ struct NativeTrips: View {
     var close: () -> Void = {}
     @State private var rename: JSON = .null
     @State private var name = ""
-    @State private var showHidden = false
+    @State private var sort = "date"
     var body: some View {
         ServerContent(store: store, path: "/api/trips") { data in
             List {
                 if !data["home"].exists {
-                    Text("Set your home by searching for a place and holding its result.").foregroundStyle(
-                        .secondary)
+                    Text("Set your home by searching for a place and holding its result.").foregroundStyle(.secondary)
                 }
-                Toggle("Show hidden trips", isOn: $showHidden)
-                ForEach(Array(data["trips"].array.enumerated()), id: \.offset) { _, trip in
-                    let hidden = store.prefs["hiddenTrips"].array.contains(trip["id"])
-                    if !hidden || showHidden {
-                        Button {
-                            Task {
-                                await store.selectTrack(trip: trip["id"])
-                                close()
-                            }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(
-                                    store.prefs["tripNames"][trip["id"].string].text(
-                                        trip["name"].text("Trip"))
-                                ).font(.headline)
-                                Text("\(nativeDate(trip["start"])) – \(nativeDate(trip["end"]))").font(
-                                    .caption
-                                ).foregroundStyle(.secondary)
-                            }.opacity(hidden ? 0.5 : 1)
-                        }.swipeActions {
-                            Button(hidden ? "Show" : "Hide") {
-                                var ids = store.prefs["hiddenTrips"].array
-                                if hidden {
-                                    ids.removeAll { $0 == trip["id"] }
-                                } else {
-                                    ids.append(trip["id"])
-                                }
-                                store.save(["hiddenTrips": .array(ids)])
-                            }
-                            Button("Rename") {
-                                rename = trip
-                                name = store.prefs["tripNames"][trip["id"].string].text(trip["name"].string)
-                            }.tint(.blue)
-                        }
+                Picker("Sort by", selection: $sort) {
+                    Text("Date").tag("date")
+                    Text("Country").tag("country")
+                }
+                let trips = NativeTripPresentation.visible(data["trips"].array, prefs: store.prefs)
+                if sort == "country" {
+                    ForEach(NativeTripPresentation.groups(trips), id: \.country) { group in
+                        Section(group.country) { tripRows(group.trips) }
                     }
-                }
-                if data["trips"].array.isEmpty { Text("No trips yet").foregroundStyle(.secondary) }
+                } else { tripRows(trips) }
+                if trips.isEmpty { Text("No trips to show").foregroundStyle(.secondary) }
             }
-        }.navigationTitle("Trips")
+        }.tint(.white).navigationTitle("Trips")
+            .modifier(NativeHistoryTitleStyle())
             .alert(
                 "Trip name", isPresented: Binding(get: { rename.exists }, set: { if !$0 { rename = .null } })
             ) {
@@ -201,6 +224,33 @@ struct NativeTrips: View {
                 Button("Cancel", role: .cancel) { rename = .null }
             }
     }
+    private func tripRows(_ trips: [JSON]) -> some View {
+        ForEach(Array(trips.enumerated()), id: \.offset) { _, trip in
+            Button {
+                Task {
+                    await store.selectTrack(trip: trip["id"])
+                    close()
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(store.prefs["tripNames"][trip["id"].string].text(trip["name"].text("Trip")))
+                        .font(.headline).foregroundStyle(.white)
+                    Text(nativeDateRange(trip["start"], trip["end"]))
+                        .font(.caption).foregroundStyle(.white.opacity(0.75))
+                }
+            }.swipeActions {
+                Button("Hide") {
+                    var ids = store.prefs["hiddenTrips"].array
+                    if !ids.contains(trip["id"]) { ids.append(trip["id"]) }
+                    store.save(["hiddenTrips": .array(ids)])
+                }
+                Button("Rename") {
+                    rename = trip
+                    name = store.prefs["tripNames"][trip["id"].string].text(trip["name"].string)
+                }.tint(.gray)
+            }
+        }
+    }
 }
 
 struct NativeActivities: View {
@@ -212,12 +262,17 @@ struct NativeActivities: View {
     var body: some View {
         ServerContent(store: store, path: "/api/routes?fold=1") { value in
             List {
+                NavigationLink {
+                    NativeActivityStatistics(store: store)
+                } label: {
+                    Label("Activity statistics", systemImage: "chart.bar")
+                }.foregroundStyle(.white)
                 Picker("Sort by", selection: $sort) {
                     Text("Date").tag("date")
                     Text("Distance").tag("distance")
                     Text("Name").tag("name")
                 }
-                let routes = value["routes"].array.filter {
+                let routes = NativeActivityCopies.folded(value["routes"].array).filter {
                     search.isEmpty || $0["name"].string.localizedCaseInsensitiveContains(search)
                         || $0["sport"].string.localizedCaseInsensitiveContains(search)
                 }.sorted {
@@ -229,27 +284,30 @@ struct NativeActivities: View {
                 ForEach(Array(routes.enumerated()), id: \.offset) { _, route in
                     Button {
                         Task {
-                            await store.openActivity(route["id"])
                             close()
+                            await store.openActivity(route["id"], preview: route)
                         }
                     } label: {
                         HStack {
-                            Image(systemName: "figure.outdoor.cycle").foregroundStyle(.tint)
+                            Image(systemName: NativeSearchPresentation.sportIcon(route["sport"].string))
+                                .foregroundStyle(.white).frame(width: 24)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(route["name"].text("Activity")).foregroundStyle(.primary)
+                                Text(route["name"].text("Activity")).foregroundStyle(.white)
                                 Text("\(nativeDate(route["firstAt"])) · \(route["sport"].string)").font(
                                     .caption
-                                ).foregroundStyle(.secondary)
+                                ).foregroundStyle(.white.opacity(0.75))
                             }
                             Spacer()
                             Text(String(format: "%.1f km", route["lengthM"].double / 1000)).font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.white.opacity(0.75))
                         }
                     }
                 }
-                if routes.isEmpty { Text("No activities").foregroundStyle(.secondary) }
+                if routes.isEmpty { Text("No activities").foregroundStyle(.white.opacity(0.75)) }
             }
-        }.navigationTitle("Activities").searchable(text: $search, prompt: "Name or activity type")
+        }.tint(.white).navigationTitle("Activities")
+            .modifier(NativeHistoryTitleStyle())
+            .searchable(text: $search, prompt: "Name or activity type")
     }
 }
 
@@ -295,11 +353,8 @@ struct NativeStatistics: View {
                         }
                     }
                 }
-                Section("Activity totals") {
-                    NativeActivityTotals(store: store)
-                }
             }
-        }.navigationTitle("Statistics")
+        }.navigationTitle("Statistics").modifier(NativeHistoryTitleStyle())
     }
     private func coverage(_ area: JSON) -> some View {
         HStack {
@@ -312,6 +367,15 @@ struct NativeStatistics: View {
         }
     }
 }
+struct NativeActivityStatistics: View {
+    @ObservedObject var store: NativeStore
+    var body: some View {
+        List {
+            Section("Activity totals") { NativeActivityTotals(store: store) }
+        }.navigationTitle("Activity statistics").modifier(NativeHistoryTitleStyle())
+    }
+}
+
 struct NativeActivityTotals: View {
     @ObservedObject var store: NativeStore
     var body: some View {

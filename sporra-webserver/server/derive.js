@@ -151,7 +151,9 @@ export async function trips(userId, signature, supply) {
   if (held.trips) return held.trips;
 
   await prime();
-  const { cellMeta, routes, home } = supply();
+  const input = supply();
+  const { routes, home } = input;
+  const cellMeta = input.trackCellMeta ?? input.cellMeta;
 
   const list = buildTrips(cellMeta, routes, home ? { home } : {});
   try {
@@ -265,7 +267,9 @@ export function days(userId, signature, supply) {
   const held = slot(userId, signature);
   if (held.days) return held.days;
 
-  const { cellMeta, routes } = supply();
+  const input = supply();
+  const { routes } = input;
+  const cellMeta = input.trackCellMeta ?? input.cellMeta;
   held.days = Object.fromEntries(activeDays(cellMeta, routes));
   return held.days;
 }
@@ -273,6 +277,8 @@ export function days(userId, signature, supply) {
 /** What happened on one day: its routes, its ground, and the trip it belongs to. */
 export async function day(userId, signature, supply, key) {
   const { trips: list } = await trips(userId, signature, supply);
-  const { cellMeta, routes } = supply();
+  const input = supply();
+  const { routes } = input;
+  const cellMeta = input.trackCellMeta ?? input.cellMeta;
   return dayDetail(key, list, routes, cellMeta);
 }

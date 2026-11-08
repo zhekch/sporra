@@ -40,12 +40,12 @@ const REPO = path.resolve(ROOT, '..');
 const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 const readApp = (rel) => readFileSync(path.join(REPO, rel), 'utf8');
 
-const bridgeSwift = readApp('sporra-ios/Sporra/PhotoBridge.swift');
+const bridgeSwift = readApp('sporra-macos/Sporra/PhotoBridge.swift');
 const librarySwift = readApp('sporra-ios/Sporra/PhotoLibrary.swift');
 const gallerySwift = readApp('sporra-ios/Sporra/PhotoGallery.swift');
 const playbackSwift = readApp('sporra-ios/Sporra/VideoPlayback.swift');
 const syncSwift = readApp('sporra-ios/Sporra/PhotoSync.swift');
-const webPanelSwift = readApp('sporra-ios/Sporra/WebPanel.swift');
+const webPanelSwift = readApp('sporra-macos/Sporra/WebPanel.swift');
 const plist = readApp('sporra-ios/Info.plist');
 const project = readApp('sporra-ios/Sporra.xcodeproj/project.pbxproj');
 const photosJs = read('src/photos.js');

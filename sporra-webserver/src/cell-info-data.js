@@ -33,7 +33,7 @@ export function recordedVisitDates(ids, cellMeta) {
   for (const id of ids) {
     for (const m of cellMeta.get(id) ?? []) {
       if (m.source === 'manual' || m.source === 'unknown') continue;
-      for (const day of normalizeVisitDates([...(m.visitDates ?? []), m.firstAt, m.lastAt])) days.add(day);
+      for (const day of normalizeVisitDates([...(m.visitDates ?? []), ...(m.visitTimes ?? []), m.firstAt, m.lastAt])) days.add(day);
     }
   }
   return [...days].sort().reverse();

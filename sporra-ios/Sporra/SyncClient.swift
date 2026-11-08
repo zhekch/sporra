@@ -1,6 +1,5 @@
 import Foundation
 import UIKit
-import WebKit
 
 /// Background uploads use the same persistent cookie jar as the native API.
 /// The generation prevents a reply from a signed-out session acknowledging
@@ -9,6 +8,7 @@ import WebKit
 final class SyncClient {
 
     static let shared = SyncClient()
+    static let didUploadFixes = Notification.Name("SporraFixesUploaded")
     private static var sessionGeneration = 0
 
     /// One push at a time, and never more than this many fixes in it. A phone
@@ -24,7 +24,7 @@ final class SyncClient {
 
     private let session: URLSession
     private var flushing = false
-    private var lastFlush: Date?
+    private var lastAttempt: Date?
 
     private init() {
         let config = URLSessionConfiguration.default
@@ -66,10 +66,12 @@ final class SyncClient {
             settings.status.pending = 0
             return
         }
-        if !force, let last = lastFlush, Date().timeIntervalSince(last) < Self.minGap { return }
+        let gap: TimeInterval = UIApplication.shared.applicationState == .active ? 15 : Self.minGap
+        if !force, let last = lastAttempt, Date().timeIntervalSince(last) < gap { return }
 
         let generation = Self.sessionGeneration
         flushing = true
+        lastAttempt = Date()
         defer {
             flushing = false
             if generation == Self.sessionGeneration { settings.status.pending = FixQueue.shared.count }
@@ -93,10 +95,11 @@ final class SyncClient {
                 // Only now: a fix leaves the queue when the server has it, not
                 // when it has been sent.
                 FixQueue.shared.drop(batch.count)
-                lastFlush = Date()
+                lastAttempt = Date()
                 settings.status.lastPush = Date()
                 settings.status.lastError = nil
                 settings.status.signedOut = false
+                NotificationCenter.default.post(name: Self.didUploadFixes, object: nil)
             } catch SyncError.signedOut {
                 settings.status.signedOut = true
                 settings.status.lastError = SyncError.signedOut.errorDescription
@@ -212,28 +215,7 @@ final class SyncClient {
         return json ?? [:]
     }
 
-    // MARK: - Borrowing the session
-
-    /// Copy the site's cookies out of the web view and into the jar
-    /// `URLSession` uses.
-    ///
-    /// Called after every page load, because that is when the interesting
-    /// change happens — you have just signed in — and because a copy taken once
-    /// at launch would be the copy from before you did.
-    static func adoptWebViewCookies() async {
-        let host = AppSettings.shared.baseURL?.host
-        let cookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
-        for cookie in cookies where host == nil || cookie.domain.hasSuffix(host!) {
-            HTTPCookieStorage.shared.setCookie(cookie)
-        }
-    }
-
-    /// Signing out: throw the borrowed session away too.
-    ///
-    /// `AppSettings.signOut()` clears what the *web view* keeps, which used to
-    /// be the whole story. It is not any more — leaving a copy of `sid` in
-    /// `HTTPCookieStorage` would mean a phone that had signed out went on
-    /// uploading, which is the one thing "sign out" has to mean.
+    /// Sign-out also stops background uploads from using the account's cookies.
     static func forgetSession() {
         sessionGeneration += 1
         for cookie in HTTPCookieStorage.shared.cookies ?? [] {

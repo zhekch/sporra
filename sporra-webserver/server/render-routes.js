@@ -2,6 +2,8 @@ import { duplicateRoutes, routeSamples, recordedSeconds, formatDistance, formatD
 import { sourceLabel } from '../src/locations.js';
 import { graphData } from '../src/route-graph.js';
 import { metricCollection } from '../src/route-metric.js';
+export const ACTIVITY_FOLD_REVISION = 'close-start-v2';
+
 // Native clients consume the browser's palette and account preferences.
 import { paletteFor } from '../src/route-colors.js';
 import { hexOpaque, hexAlpha } from '../src/color-picker.js';

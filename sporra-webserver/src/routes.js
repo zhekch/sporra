@@ -59,9 +59,10 @@ const PRECISION = 1e5;
 //
 // They are set from what the real pairs actually look like, not from what felt
 // safe: across every duplicate on a real map the two rows start within 5
-// seconds of each other and their lengths differ by at most 0.4%. The tolerances
-// below are an order of magnitude looser than that, and still nowhere near
-// loose enough to catch two genuinely different outings.
+// seconds of each other. Most lengths agree within 0.4%, but a phone/watch
+// pair of the same short run differs by 5.94% despite identical start clocks
+// and 98.5% bounding-box overlap. Extra distance slack is limited to starts
+// within five seconds; the broader start-time window retains its 5% gate.
 // Below this, the clock was left running rather than the ride being slow. Two
 // real Komoot tours claim 596 h for 20 km (0.03 km/h) and 163 h for 11.5 km —
 // between them 759 of the 956 hours the map thought it had recorded. The
@@ -156,7 +157,11 @@ const DUP_START_SEC = 120; // how far apart two recordings of one start can be
 // at a tenth, two recordings that fold necessarily overlap by nine tenths of the
 // shorter one, and you cannot have been on two outings at once.
 const DUP_START_SPAN = 0.1;
-const DUP_LENGTH_TOL = 0.05; // 5% — observed worst case is 0.4%
+const DUP_LENGTH_TOL = 0.05;
+// Near-identical start clocks and matching coverage identify the same outing
+// even when the watch and phone estimate its distance differently.
+const DUP_CLOSE_START_SEC = 5;
+const DUP_CLOSE_START_LENGTH_TOL = 0.1;
 const DUP_BBOX_IOU = 0.6; // and they have to have happened in the same place
 
 // Which copy speaks for an outing when two apps recorded it. Only the three
@@ -1131,7 +1136,9 @@ export function routesLookAlike(a, b) {
   if (Math.abs(a.firstAt - b.firstAt) > startGate(a, b)) return false;
   const longest = Math.max(a.lengthM || 0, b.lengthM || 0);
   if (!longest) return false;
-  if (Math.abs((a.lengthM || 0) - (b.lengthM || 0)) / longest > DUP_LENGTH_TOL) return false;
+  const lengthTolerance = Math.abs(a.firstAt - b.firstAt) <= DUP_CLOSE_START_SEC
+    ? DUP_CLOSE_START_LENGTH_TOL : DUP_LENGTH_TOL;
+  if (Math.abs((a.lengthM || 0) - (b.lengthM || 0)) / longest > lengthTolerance) return false;
   // `bounds` is what the API calls it; `bbox` is what a freshly built route
   // carries before it has been round-tripped. Both are [w, s, e, n].
   return bboxIou(a.bounds ?? a.bbox, b.bounds ?? b.bbox) >= DUP_BBOX_IOU;

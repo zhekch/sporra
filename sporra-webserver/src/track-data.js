@@ -73,7 +73,7 @@ export function bboxOfPoints(points) {
 
 
 export function trackData(item, day = null) {
-  const points = item.points ?? item.spots ?? [];
+  const points = item.points ?? [];
   const track = trackFC(points);
   let km = 0;
   for (const f of track.features) {

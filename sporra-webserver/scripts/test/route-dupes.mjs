@@ -63,6 +63,15 @@ check(routesLookAlike(bounded({ id: 14 }), bounded({ id: 47, lengthM: 9845 })),
 check(routesLookAlike(bounded({ id: 14 }), route({ id: 47, lengthM: 9845 })),
   'even when the two rows disagree about which name to use');
 
+check(routesLookAlike(route({ lengthM: 2059 }), route({ id: 2, lengthM: 2189 })),
+  'matching start clocks allow the phone/watch distance estimate to differ by 5.94%');
+check(!routesLookAlike(route({ lengthM: 2059 }), route({ id: 2, lengthM: 2189, firstAt: T('2025-04-03T11:13:59Z') })),
+  'extra distance tolerance does not widen the normal start window');
+check(!routesLookAlike(route({ lengthM: 1900 }), route({ id: 2, lengthM: 2189 })),
+  'even an identical start clock does not merge a distance difference over ten percent');
+check(!routesLookAlike(route({ lengthM: 2059 }), route({ id: 2, lengthM: 2189, bbox: [8, 47, 8.1, 47.1] })),
+  'matching start clocks and length still require matching route coverage');
+
 console.log('\nthings that are not duplicates');
 check(!routesLookAlike(route({}), route({ id: 2, firstAt: T('2025-04-03T14:00:00Z') })),
   'a second outing later the same day', 'started nearly 3 h apart');

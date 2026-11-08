@@ -30,7 +30,7 @@ private nonisolated final class Latch: @unchecked Sendable {
 ///
 /// Two things want it and they want different amounts of it. ``PhotoSync`` sends
 /// the coordinates to the server and never needs to know which photograph a
-/// coordinate came from. ``PhotoBridge`` draws them on the map, where tapping a
+/// coordinate came from. the native map draws them on the map, where tapping a
 /// point has to produce the picture — so it needs the asset's identity kept.
 ///
 /// The enumeration used to live inside the uploader, which was right while it
@@ -43,7 +43,7 @@ private nonisolated final class Latch: @unchecked Sendable {
 ///
 /// This target builds with `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, so
 /// everything unannotated here would be main-actor isolated — including the walk
-/// over the whole library. `PhotoBridge` runs that walk inside a
+/// over the whole library. The native map runs that walk inside a
 /// `Task.detached` precisely so a map on screen does not freeze for a second
 /// while it happens, and without this keyword the hop back to the main actor
 /// would undo exactly that, silently. The compiler does say so, as a warning
@@ -55,8 +55,7 @@ nonisolated enum PhotoLibrary {
 
     /// One photograph, as much of it as leaves this file.
     struct Located {
-        /// `PHAsset.localIdentifier`. Never crosses the bridge to the page — see
-        /// the note on ``PhotoBridge``.
+        /// `PHAsset.localIdentifier`, retained on the device to open the original.
         let id: String
         let lat: Double
         let lng: Double

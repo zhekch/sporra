@@ -1,3 +1,4 @@
+import CoreFoundation
 import CryptoKit
 import Foundation
 
@@ -35,6 +36,25 @@ nonisolated enum JSON: Codable, Sendable, Equatable {
         case .array(let v): try c.encode(v)
         case .object(let v): try c.encode(v)
         }
+    }
+    /// Codable's speculative scalar decodes throw several errors for every
+    /// array in a large map response. Foundation identifies each value once.
+    static func decode(_ bytes: Data) throws -> JSON {
+        func convert(_ raw: Any) -> JSON {
+            switch raw {
+            case let number as NSNumber:
+                return CFGetTypeID(number) == CFBooleanGetTypeID()
+                    ? .bool(number.boolValue) : .number(number.doubleValue)
+            case let string as String: return .string(string)
+            case let array as [Any]: return .array(array.map(convert))
+            case let object as [String: Any]: return .object(object.mapValues(convert))
+            default: return .null
+            }
+        }
+        return convert(try JSONSerialization.jsonObject(with: bytes, options: [.fragmentsAllowed]))
+    }
+    static func decodeInBackground(_ bytes: Data) async throws -> JSON {
+        try await Task.detached(priority: Task.currentPriority) { try decode(bytes) }.value
     }
     subscript(_ key: String) -> JSON {
         get { object[key] ?? .null }
@@ -79,6 +99,12 @@ nonisolated struct OfflineRecord: Codable {
 nonisolated struct ServerFailure: LocalizedError, Sendable {
     let status: Int
     let message: String
+    let isReadFailure: Bool
+    init(status: Int, message: String, isReadFailure: Bool = false) {
+        self.status = status
+        self.message = message
+        self.isReadFailure = isReadFailure
+    }
     var errorDescription: String? { message }
 }
 
@@ -111,7 +137,7 @@ actor ServerAPI {
         self.cacheRoot = root
         let c = URLSessionConfiguration.default
         c.httpCookieStorage = cookieStorage
-        c.timeoutIntervalForRequest = 30
+        c.timeoutIntervalForRequest = 40
         c.timeoutIntervalForResource = 120
         cache = URLCache(
             memoryCapacity: 32 * 1024 * 1024, diskCapacity: 256 * 1024 * 1024,
@@ -165,7 +191,7 @@ actor ServerAPI {
         let c = URLSessionConfiguration.default
         c.httpCookieStorage = cookieStorage
         c.urlCache = cache
-        c.timeoutIntervalForRequest = 30
+        c.timeoutIntervalForRequest = 40
         c.timeoutIntervalForResource = 120
         session = URLSession(configuration: c)
     }
@@ -182,15 +208,87 @@ actor ServerAPI {
     }
     func isOffline() -> Bool { offline }
     static func isUnavailable(_ error: Error) -> Bool {
-        if let failure = error as? ServerFailure { return failure.status >= 500 || failure.status == -1009 }
+        if let failure = error as? ServerFailure { return failure.status == -1009 }
         guard let failure = error as? URLError else { return false }
         return [
             .notConnectedToInternet, .timedOut, .cannotFindHost, .cannotConnectToHost,
             .networkConnectionLost, .dnsLookupFailed, .dataNotAllowed, .internationalRoamingOff,
         ].contains(failure.code)
     }
+    static func isQuietReadFailure(_ error: Error) -> Bool {
+        if let failure = error as? ServerFailure {
+            return failure.message == "Unable to read the server response."
+                || (failure.isReadFailure && (failure.status >= 500 || failure.status == 0))
+        }
+        let failure = error as NSError
+        return error is DecodingError || (failure.domain == NSCocoaErrorDomain && failure.code == 3840)
+    }
     func get(_ path: String, query: [URLQueryItem] = [], fresh: Bool = false) async throws -> JSON {
         try await request(path, query: query, body: nil, fresh: fresh)
+    }
+    /// Read the account-scoped disk cache without waiting for the network.
+    func cachedGet(_ path: String, query: [URLQueryItem] = []) async -> JSON? {
+        guard let request = try? makeRequest(path, query: query, body: nil, fresh: false),
+            canSave(request), let bytes = savedResponse(request)
+        else { return nil }
+        let epoch = generation
+        let value = try? await JSON.decodeInBackground(bytes)
+        return epoch == generation ? value : nil
+    }
+    /// Retry must be a real, cancellable probe, independent of cached reads
+    /// and the longer timeout used by map and offline-download requests.
+    func validateSession() async throws -> JSON {
+        var request = try makeRequest("/api/me", query: [], body: nil, fresh: true)
+        request.timeoutInterval = 8
+        let epoch = generation
+        let bytes = try await downloadRequest(request)
+        try Task.checkCancellation()
+        let value = try await JSON.decodeInBackground(bytes)
+        guard epoch == generation else { throw CancellationError() }
+        try Task.checkCancellation()
+        return value
+    }
+    func hasSavedGet(_ path: String, query: [URLQueryItem]) -> Bool {
+        guard let request = try? makeRequest(path, query: query, body: nil, fresh: false),
+            let record = records[responseKey(request)], let directory = offlineDirectory else { return false }
+        return FileManager.default.fileExists(atPath: directory.appendingPathComponent(record.file).path)
+    }
+    /// Aggregate sizes only; activity identities and coordinates stay on-device.
+    /// Detail size scales with recorded points, so use that rather than count
+    /// alone when estimating a complete download from the saved sample.
+    func activityStorageSummary(routes: [JSON]) -> [String: Int] {
+        let points = Dictionary(routes.map { ($0["id"].string, $0["points"].int) },
+            uniquingKeysWith: { first, _ in first })
+        var savedCount = 0, savedBytes = 0, savedPoints = 0
+        for (key, record) in records {
+            guard let parts = URLComponents(string: key), parts.path == "/api/render/activity",
+                let id = parts.queryItems?.first(where: { $0.name == "id" })?.value,
+                let count = points[id] else { continue }
+            savedCount += 1
+            savedBytes += record.bytes
+            savedPoints += count
+        }
+        let totalPoints = points.values.reduce(0, +)
+        return ["total-count": points.count, "saved-count": savedCount,
+            "saved-bytes": savedBytes, "saved-points": savedPoints, "total-points": totalPoints,
+            "estimated-bytes": savedPoints > 0
+                ? Int(Double(savedBytes) * Double(totalPoints) / Double(savedPoints)) : 0]
+    }
+    func cachedRegionSnapshot(query: [URLQueryItem]) async -> (data: JSON, fine: Bool)? {
+        let appearance = query.filter { !["info", "fine"].contains($0.name) }
+        let wantedFine = query.first { $0.name == "fine" }?.value ?? "1"
+        for fine in [wantedFine, wantedFine == "1" ? "0" : "1"] {
+            for info in ["0", "1"] {
+                if let saved = await cachedGet("/api/render/regions", query: appearance + [
+                    URLQueryItem(name: "info", value: info), URLQueryItem(name: "fine", value: fine),
+                ]) { return (saved, fine == "1") }
+            }
+        }
+        return nil
+    }
+    func regionSnapshot(query: [URLQueryItem]) async throws -> JSON {
+        let appearance = query.filter { $0.name != "info" }
+        return try await get("/api/render/regions", query: appearance + [URLQueryItem(name: "info", value: "1")])
     }
     func post(_ path: String, _ body: [String: JSON] = [:]) async throws -> JSON {
         if offline && !["/api/login", "/api/register"].contains(path) {
@@ -218,10 +316,12 @@ actor ServerAPI {
             throw ServerFailure(status: 0, message: "Invalid server resource.")
         }
         if !query.isEmpty { parts.queryItems = (parts.queryItems ?? []) + query }
-        guard let url = parts.url else { throw ServerFailure(status: 0, message: "Invalid server resource.") }
+        guard let url = parts.url else {
+            throw ServerFailure(status: 0, message: "Invalid server resource.")
+        }
         var r = URLRequest(url: url)
         r.setValue("ios-native", forHTTPHeaderField: "X-Sporra-Client")
-        r.cachePolicy = fresh ? .reloadRevalidatingCacheData : .useProtocolCachePolicy
+        r.cachePolicy = (fresh || offline) ? .reloadIgnoringLocalCacheData : .useProtocolCachePolicy
         if let body {
             r.httpMethod = "POST"
             r.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -229,36 +329,61 @@ actor ServerAPI {
         }
         return r
     }
-    private func request(_ path: String, query: [URLQueryItem], body: JSON?, fresh: Bool) async throws -> JSON
+    private func request(_ path: String, query: [URLQueryItem], body: JSON?, fresh: Bool)
+        async throws
+        -> JSON
     {
-        var request = try makeRequest(path, query: query, body: body, fresh: fresh)
+        let request = try makeRequest(path, query: query, body: body, fresh: fresh)
         let cacheable = body == nil && canSave(request)
-        if offline && !fresh && cacheable {
-            guard let saved = savedResponse(request) else { throw missingOfflineData() }
-            return try JSONDecoder().decode(JSON.self, from: saved)
-        }
-        if body == nil { request.timeoutInterval = 5 }
         let epoch = generation
+        if offline && !fresh && cacheable, let saved = savedResponse(request) {
+            let value = try await JSON.decodeInBackground(saved)
+            guard epoch == generation else { throw CancellationError() }
+            return value
+        }
         do {
             let bytes = try await downloadRequest(request)
-            let value = bytes.isEmpty ? JSON.object([:]) : try JSONDecoder().decode(JSON.self, from: bytes)
+            let value = bytes.isEmpty ? JSON.object([:]) : try await JSON.decodeInBackground(bytes)
+            guard epoch == generation else { throw CancellationError() }
             if cacheable { saveResponse(bytes, request: request) }
             return value
         } catch {
             guard epoch == generation else { throw CancellationError() }
             if Self.isUnavailable(error) {
-                setOffline(true)
+                // A slow render or interrupted request says nothing about the
+                // rest of the server. Confirm reachability before going offline.
+                let unavailable = await serverIsUnreachable()
+                guard epoch == generation else { throw CancellationError() }
+                setOffline(unavailable)
                 if cacheable, let saved = savedResponse(request) {
-                    return try JSONDecoder().decode(JSON.self, from: saved)
+                    let value = try await JSON.decodeInBackground(saved)
+                    guard epoch == generation else { throw CancellationError() }
+                    return value
                 }
-                if cacheable { throw missingOfflineData() }
+                if cacheable && unavailable { throw missingOfflineData() }
             }
             throw error
         }
     }
+    private func serverIsUnreachable() async -> Bool {
+        guard var request = try? makeRequest("/api/health", query: [], body: nil, fresh: true)
+        else {
+            return false
+        }
+        request.timeoutInterval = 10
+        do {
+            // Even an HTTP error proves the server is reachable. Keep endpoint
+            // and authentication errors distinct from a failed connection.
+            _ = try await session.data(for: request)
+            return false
+        } catch {
+            return Self.isUnavailable(error)
+        }
+    }
     private func missingOfflineData() -> ServerFailure {
         ServerFailure(
-            status: -1009, message: "This content isn't saved on this device yet. Reconnect to download it.")
+            status: -1009,
+            message: "This content isn't saved on this device yet. Reconnect to download it.")
     }
     private func canSave(_ request: URLRequest) -> Bool {
         guard account != "signed-out", let path = request.url?.path else { return false }
@@ -299,8 +424,7 @@ actor ServerAPI {
     private func savedResponse(_ request: URLRequest) -> Data? {
         guard let directory = offlineDirectory else { return nil }
         if let record = records[responseKey(request)],
-            let bytes = try? Data(contentsOf: directory.appendingPathComponent(record.file)),
-            (try? JSONDecoder().decode(JSON.self, from: bytes)) != nil
+            let bytes = try? Data(contentsOf: directory.appendingPathComponent(record.file))
         {
             return bytes
         }
@@ -408,8 +532,12 @@ actor ServerAPI {
             throw ServerFailure(
                 status: status,
                 message: reply?["error"].text("Your server answered \(status).")
-                    ?? "Unable to read the server response.")
+                    ?? "Unable to read the server response.",
+                isReadFailure: (request.httpMethod ?? "GET") == "GET")
         }
+        // Only a real network response can restore connectivity; cached reads
+        // must not hide an outage. Other in-flight requests can recover it too.
+        if request.cachePolicy == .reloadIgnoringLocalCacheData { setOffline(false) }
         return data
     }
 }

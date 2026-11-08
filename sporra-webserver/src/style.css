@@ -8645,43 +8645,6 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   background: rgba(255, 255, 255, 0.18);
 }
 
-/* The door from Personal into the iOS app's own settings. Hidden in a browser
-   — the handler is not there — and a row rather than a labelled control,
-   because it opens a screen rather than setting a value. */
-.app-settings-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  width: 100%;
-  box-sizing: border-box;
-  margin: 4px 0 12px;
-  padding: 12px 14px;
-  appearance: none;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  text-align: left;
-  color: #fff;
-  cursor: pointer;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-}
-
-.app-settings-row[hidden] {
-  display: none;
-}
-
-.app-settings-row:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.app-settings-go {
-  flex: none;
-  opacity: 0.4;
-}
-
 .home-hits {
   display: flex;
   flex-direction: column;
@@ -8761,16 +8724,6 @@ body:has(:is(.maplibregl-ctrl-logo, .mapboxgl-ctrl-logo)) {
   background: rgba(15, 23, 42, 0.07);
   border-color: rgba(15, 23, 42, 0.14);
   color: #0f172a;
-}
-
-[data-theme='light'] .app-settings-row {
-  background: rgba(15, 23, 42, 0.05);
-  border-color: rgba(15, 23, 42, 0.12);
-  color: #0f172a;
-}
-
-[data-theme='light'] .app-settings-row:hover {
-  background: rgba(15, 23, 42, 0.1);
 }
 
 [data-theme='light'] .home-hit:hover {

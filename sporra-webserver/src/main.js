@@ -3287,7 +3287,7 @@ async function restoreCells(snapshot) {
     cellMeta.set(id, list.map((e) => ({ ...e })));
     // It's going back on the map, so a queued "remove it" is no longer true.
     pendingRemove.delete(id);
-    for (const e of list) rows.push([id, e.source, e.addedAt, e.firstAt, e.lastAt, e.hits, e.fixes, e.visitDates]);
+    for (const e of list) rows.push([id, e.source, e.addedAt, e.firstAt, e.lastAt, e.hits, e.fixes, e.visitDates ?? [], e.visitTimes ?? []]);
   }
   await auth.restoreCells(rows);
   recomputeLit();

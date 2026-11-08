@@ -1,3 +1,4 @@
+import { cellFixtures } from './cell-fixtures.mjs';
 // The two server-side halves of Undo, and the backup endpoints, over real HTTP.
 //
 // Undo is only as good as what it can put back. Clearing a cell drops every
@@ -76,7 +77,7 @@ async function api(method, url, body) {
   const res = await fetch(`${BASE}${url}`, {
     method,
     headers: { 'Content-Type': 'application/json', ...(jars[who] ? { Cookie: jars[who] } : {}) },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(cellFixtures(body)),
   });
   const setCookie = res.headers.get('set-cookie');
   if (setCookie) jars[who] = setCookie.split(';')[0];

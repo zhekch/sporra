@@ -4,6 +4,7 @@ import Combine
 import CoreLocation
 import Foundation
 import UIKit
+import SporraCore
 
 /// Recording where the phone has been, with the screen off.
 ///
@@ -42,6 +43,16 @@ final class LocationLogger: NSObject, ObservableObject, CLLocationManagerDelegat
 
     private let manager = CLLocationManager()
     private var lastRecorded: Date?
+    static let didRecordForegroundFix = Notification.Name("SporraForegroundFixRecorded")
+    private var foregroundRecording = false
+    private var foregroundCells = ForegroundCellRecorder()
+
+    func setForegroundRecording(_ enabled: Bool) {
+        guard foregroundRecording != enabled else { return }
+        foregroundRecording = enabled
+        if enabled { foregroundCells = ForegroundCellRecorder() }
+        apply()
+    }
     /// Set while we are waiting for the system prompt to be answered, so the
     /// answer can start the services the request was made for.
     private var startWhenAuthorized = false
@@ -67,7 +78,7 @@ final class LocationLogger: NSObject, ObservableObject, CLLocationManagerDelegat
     /// time and idempotent, which is what lets every caller be careless.
     func apply() {
         let settings = TrackingSettings.shared
-        guard settings.isTracking else {
+        guard settings.isTracking || foregroundRecording else {
             manager.stopUpdatingLocation()
             manager.stopMonitoringSignificantLocationChanges()
             manager.allowsBackgroundLocationUpdates = false
@@ -91,7 +102,7 @@ final class LocationLogger: NSObject, ObservableObject, CLLocationManagerDelegat
             // Works while the app is on screen, and the escalation prompt is
             // how it comes to work with it away. Asked here rather than at
             // launch because iOS only allows it once.
-            manager.requestAlwaysAuthorization()
+            if settings.isTracking { manager.requestAlwaysAuthorization() }
         default:
             break
         }
@@ -99,15 +110,17 @@ final class LocationLogger: NSObject, ObservableObject, CLLocationManagerDelegat
         startWhenAuthorized = false
         let cadence = settings.cadence
 
-        if CLLocationManager.significantLocationChangeMonitoringAvailable() {
+        if settings.isTracking && CLLocationManager.significantLocationChangeMonitoringAvailable() {
             manager.startMonitoringSignificantLocationChanges()
+        } else {
+            manager.stopMonitoringSignificantLocationChanges()
         }
 
-        if cadence.wantsContinuousUpdates {
+        if foregroundRecording || cadence.wantsContinuousUpdates {
             // Only legal with `location` in UIBackgroundModes — CoreLocation
             // raises rather than returning false if it is missing.
-            manager.allowsBackgroundLocationUpdates = true
-            manager.distanceFilter = cadence.distanceFilter
+            manager.allowsBackgroundLocationUpdates = settings.isTracking && cadence.wantsContinuousUpdates
+            manager.distanceFilter = foregroundRecording ? 10 : cadence.distanceFilter
             manager.startUpdatingLocation()
         } else {
             manager.stopUpdatingLocation()
@@ -128,13 +141,14 @@ final class LocationLogger: NSObject, ObservableObject, CLLocationManagerDelegat
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         authorization = manager.authorizationStatus
-        guard startWhenAuthorized || TrackingSettings.shared.isTracking else { return }
+        guard startWhenAuthorized || foregroundRecording || TrackingSettings.shared.isTracking else { return }
         apply()
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         let settings = TrackingSettings.shared
-        guard settings.isTracking else { return }
+        let foreground = foregroundRecording && UIApplication.shared.applicationState == .active
+        guard settings.isTracking || foreground else { return }
 
         let limit = Double(settings.precision.rawValue)
         let cadence = settings.cadence
@@ -152,6 +166,21 @@ final class LocationLogger: NSObject, ObservableObject, CLLocationManagerDelegat
             // it is where you were — but it must not set the throttle's clock
             // forward or be mistaken for a fresh reading.
             guard stamp.timeIntervalSinceNow > -3600 else { continue }
+            if foreground {
+                guard Int(stamp.timeIntervalSince1970) > (FixQueue.shared.newest ?? 0),
+                    foregroundCells.visit(
+                        lat: location.coordinate.latitude, lng: location.coordinate.longitude,
+                        accuracy: location.horizontalAccuracy, timestamp: stamp.timeIntervalSince1970,
+                        now: Date().timeIntervalSince1970, maximumAccuracy: limit) != nil
+                else { continue }
+                let fix = FixQueue.Fix(lat: location.coordinate.latitude, lng: location.coordinate.longitude,
+                    t: Int(stamp.timeIntervalSince1970))
+                FixQueue.shared.append(fix)
+                lastRecorded = stamp
+                took = true
+                NotificationCenter.default.post(name: Self.didRecordForegroundFix, object: fix)
+                continue
+            }
             if let last = lastRecorded, cadence.seconds > 0,
                stamp.timeIntervalSince(last) < cadence.seconds { continue }
 

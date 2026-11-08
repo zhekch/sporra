@@ -2,6 +2,31 @@ import Combine
 import SwiftUI
 import UIKit
 
+private let mapMenuCompactFraction = 0.515
+
+private struct NativeMapControlStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 21, weight: .semibold))
+            .frame(width: 50, height: 50)
+            .contentShape(Rectangle())
+            .background {
+                Circle().fill(.primary.opacity(configuration.isPressed ? 0.10 : 0))
+                    .padding(4)
+            }
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 1.12 : 1)
+            .animation(reduceMotion ? .none : .spring(response: 0.24, dampingFraction: 0.65),
+                value: configuration.isPressed)
+    }
+}
+
+private nonisolated enum MapPanel: String, Identifiable {
+    case menu, search
+    var id: String { rawValue }
+}
+
 struct ContentView: View {
     @StateObject private var store = NativeStore()
     var body: some View {
@@ -90,94 +115,78 @@ private struct NativeLogin: View {
 
 struct NativeMapScreen: View {
     @ObservedObject var store: NativeStore
-    @State private var panel: String?
+    @State private var panel: MapPanel?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         NavigationStack {
             NativeMap(store: store).ignoresSafeArea()
-                .overlay(alignment: .top) {
-                    if store.busy {
-                        ProgressView().padding(12).background(.regularMaterial, in: Capsule()).padding()
-                    }
-                }
-                .safeAreaInset(edge: .bottom, spacing: 8) {
+                .safeAreaInset(edge: .bottom, spacing: 0) {
                     VStack(spacing: 8) {
-                        if store.offline || store.needsSignIn {
-                            HStack {
-                                Image(systemName: "wifi.slash")
-                                Text(
-                                    store.needsSignIn
-                                        ? "Saved data · sign in to sync" : "Offline · showing saved data"
-                                )
-                                .font(.caption)
-                                Spacer()
-                                if store.needsSignIn {
-                                    Button("Sign in") { store.beginSignIn() }
-                                } else {
-                                    Button("Retry") { Task { await store.reconnect() } }.disabled(
-                                        store.reconnecting)
+                        mapControls
+                            .background(GeometryReader { proxy in
+                                Color.clear
+                                    .onAppear { store.mapControlsFrame = proxy.frame(in: .global) }
+                                    .onChange(of: proxy.frame(in: .global)) { store.mapControlsFrame = $0 }
+                            })
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .padding(.horizontal, 16)
+                            .overlay(alignment: .bottom) {
+                                if store.offline || store.connectionNotice || store.needsSignIn {
+                                    offlineNotice
                                 }
-                            }.padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+                            }
+                        VStack(spacing: 8) {
+                            if store.notice.exists { announcement }
+                            if store.undo["route"].exists || store.undo["routeUpdate"].exists {
+                                HStack {
+                                    Text(store.undo["route"].exists ? "Activity deleted" : "Activity updated")
+                                    Spacer()
+                                    Button("Undo") { Task { await store.undoEdit() } }
+                                    Button {
+                                        store.undo = .null
+                                    } label: {
+                                        Image(systemName: "xmark")
+                                    }.accessibilityLabel("Dismiss undo")
+                                }.font(.subheadline).padding().modifier(NativeMapCardSurface())
+                            }
+                            if store.editing { editBar }
+                            if store.activity.exists {
+                                NativeActivityCard(store: store)
+                                    .frame(maxWidth: 440)
+                                    .id("activity:" + store.activity["route"]["id"].string)
+                                    .transition(cardTransition)
+                            } else if store.track.exists {
+                                NativeTrackCard(store: store)
+                                    .id(store.trackDay ?? store.track["id"].string)
+                                    .transition(cardTransition)
+                            } else if store.place.exists {
+                                NativePlaceCard(store: store)
+                                    .id(store.placeCardID)
+                                    .transition(cardTransition)
+                            }
                         }
-                        if store.notice.exists { announcement }
-                        if store.undo["route"].exists || store.undo["routeUpdate"].exists {
-                            HStack {
-                                Text(store.undo["route"].exists ? "Activity deleted" : "Activity updated")
-                                Spacer()
-                                Button("Undo") { Task { await store.undoEdit() } }
-                                Button {
-                                    store.undo = .null
-                                } label: {
-                                    Image(systemName: "xmark")
-                                }.accessibilityLabel("Dismiss undo")
-                            }.font(.subheadline).padding().background(
-                                .regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-                        }
-                        if store.editing { editBar }
-                        if store.activity.exists {
-                            NativeActivityCard(store: store)
-                        } else if store.track.exists {
-                            trackBar
-                        } else if store.place.exists {
-                            NativePlaceCard(store: store)
-                        }
-                    }.padding(.horizontal).padding(.bottom, 8).frame(maxWidth: 600)
+                        .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.32, dampingFraction: 0.88), value: selectionCardID)
+                        .background(GeometryReader { proxy in
+                            let layout = MapCardLayout(id: selectionCardID, frame: proxy.frame(in: .global))
+                            Color.clear
+                                .onAppear { store.mapCardLayout = layout }
+                                .onChange(of: layout) { store.mapCardLayout = $0 }
+                        })
+                        .padding(.horizontal, 12).frame(maxWidth: 600)
+                    }.padding(.bottom, 12)
                 }
-                .toolbar {
-                    ToolbarItemGroup(placement: .topBarLeading) {
-                        Button {
-                            panel = "menu"
-                        } label: {
-                            Label("Your map", systemImage: "line.3.horizontal")
-                        }
-                        Button {
-                            panel = "search"
-                        } label: {
-                            Label("Search", systemImage: "magnifyingglass")
-                        }
-                    }
-                    ToolbarItemGroup(placement: .topBarTrailing) {
-                        Button {
-                            panel = "calendar"
-                        } label: {
-                            Label("Calendar", systemImage: "calendar")
-                        }
-                        Button {
-                            store.locationCommand = UUID()
-                        } label: {
-                            Label("My location", systemImage: "location")
-                        }
-                    }
-                }
-                .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+                .ignoresSafeArea(.container, edges: .bottom)
+                .toolbar(.hidden, for: .navigationBar)
                 .navigationBarTitleDisplayMode(.inline)
         }
-        .sheet(isPresented: Binding(get: { panel != nil }, set: { if !$0 { panel = nil } })) {
+        .sheet(item: $panel) { destination in
             NavigationStack {
                 Group {
-                    switch panel {
-                    case "search": NativeSearch(store: store, close: { panel = nil })
-                    case "calendar": NativeCalendarScreen(store: store, close: { panel = nil })
-                    default: NativeMenu(store: store, close: { panel = nil })
+                    switch destination {
+                    case .search:
+                        NativeSearch(store: store, close: { panel = nil }).modifier(NativeSheetTitleStyle())
+                    case .menu:
+                        NativeMenu(store: store, close: { panel = nil }).modifier(NativeSheetTitleStyle())
                     }
                 }
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { panel = nil } } }
@@ -189,20 +198,35 @@ struct NativeMapScreen: View {
                 } message: {
                     Text(store.error ?? "")
                 }
-            }.presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+            }.tint(.primary)
+                .presentationDetents(destination == .search ? [.medium, .large] : [.fraction(mapMenuCompactFraction), .large])
+                .presentationDragIndicator(.visible)
         }
-        .confirmationDialog(
-            "Choose an activity",
-            isPresented: Binding(
-                get: { !store.routeChoices.isEmpty }, set: { if !$0 { store.routeChoices = [] } }),
-            titleVisibility: .visible
+        .sheet(isPresented: Binding(
+            get: { !store.routeChoices.isEmpty }, set: { if !$0 { store.routeChoices = [] } })
         ) {
-            ForEach(Array(store.routeChoices.enumerated()), id: \.offset) { _, route in
-                Button(route["name"].text("Activity")) {
-                    store.routeChoices = []
-                    Task { await store.openActivity(route["id"]) }
-                }
+            NativeActivityPicker(store: store)
+        }
+        .onAppear {
+            store.restorePendingCells()
+            LocationLogger.shared.setForegroundRecording(true)
+        }
+        .onDisappear { LocationLogger.shared.setForegroundRecording(false) }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            LocationLogger.shared.setForegroundRecording(false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: LocationLogger.didRecordForegroundFix)) { event in
+            if let fix = event.object as? FixQueue.Fix { store.recordForegroundFix(fix) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SyncClient.didUploadFixes)) { _ in
+            Task {
+                await store.api.invalidateHTTPCache()
+                store.changed()
             }
+        }
+        .onReceive(Timer.publish(every: 15, on: .main, in: .common).autoconnect()) { _ in
+            guard UIApplication.shared.applicationState == .active else { return }
+            Task { await SyncClient.shared.flush() }
         }
         .task { await store.checkAnnouncements() }
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) {
@@ -224,6 +248,7 @@ struct NativeMapScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) {
             _ in
             store.lightClock = Date()
+            LocationLogger.shared.setForegroundRecording(true)
             Task { await store.reconnect() }
         }
         .sheet(isPresented: Binding(get: { store.shareURL != nil }, set: { if !$0 { store.shareURL = nil } }))
@@ -231,6 +256,64 @@ struct NativeMapScreen: View {
             if let url = store.shareURL { NativeShare(items: [url]) }
         }
     }
+    private var selectionCardID: String { store.mapSelectionID }
+    private var cardTransition: AnyTransition {
+        reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity)
+    }
+
+    @ViewBuilder
+    private var mapControls: some View {
+        if #available(iOS 26.0, *) {
+            mapControlButtons
+                // One shared glass surface; each button handles its own press.
+                .glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            mapControlButtons.background(.regularMaterial, in: Capsule())
+        }
+    }
+
+    private var mapControlButtons: some View {
+        VStack(spacing: 0) {
+            mapButton("My location", icon: store.locationFocused ? "location.fill" : "location") {
+                store.locationCommand = UUID()
+            }
+            .accessibilityValue(store.locationFocused ? "Focused on your location" : "Not focused")
+            Divider().frame(width: 24).opacity(0.4)
+            mapButton("Search and calendar", icon: "magnifyingglass") { panel = .search }
+            Divider().frame(width: 24).opacity(0.4)
+            mapButton("Your map", icon: "line.3.horizontal") { panel = .menu }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func mapButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            if #available(iOS 17.0, *) {
+                Image(systemName: icon).contentTransition(.symbolEffect(.replace))
+            } else {
+                Image(systemName: icon)
+            }
+        }
+        .buttonStyle(NativeMapControlStyle())
+        .accessibilityLabel(title)
+    }
+
+    private var offlineNotice: some View {
+        Button {
+            if store.needsSignIn { store.beginSignIn() }
+            else { Task { await store.reconnect(force: true) } }
+        } label: {
+            HStack(spacing: 5) {
+                if store.reconnecting { ProgressView().controlSize(.mini) }
+                Label("Offline", systemImage: "wifi.slash")
+                if !store.reconnecting { Image(systemName: "arrow.clockwise") }
+            }.font(.caption2).padding(.horizontal, 10).padding(.vertical, 6)
+        }
+        .buttonStyle(.plain).modifier(NativeMapCardSurface())
+        .accessibilityLabel(store.needsSignIn ? "Offline. Sign in to sync" : "Offline. Retry connection")
+    }
+
     private var announcement: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
@@ -249,7 +332,7 @@ struct NativeMapScreen: View {
             } label: {
                 Image(systemName: "xmark")
             }.accessibilityLabel("Dismiss news")
-        }.padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        }.padding().modifier(NativeMapCardSurface())
     }
     private var editBar: some View {
         HStack {
@@ -275,32 +358,9 @@ struct NativeMapScreen: View {
             } label: {
                 Image(systemName: "checkmark")
             }.accessibilityLabel("Finish editing")
-        }.padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        }.padding(12).modifier(NativeMapCardSurface())
     }
-    private var trackBar: some View {
-        HStack {
-            Button {
-                Task { await store.step(-1) }
-            } label: {
-                Image(systemName: "chevron.left")
-            }.accessibilityLabel("Previous")
-            VStack(alignment: .leading) {
-                Text(store.track["label"].text("Your track")).font(.headline)
-                Text(String(format: "%.1f km", store.track["km"].double)).font(.caption).foregroundStyle(
-                    .secondary)
-            }.frame(maxWidth: .infinity, alignment: .leading)
-            Button {
-                Task { await store.step(1) }
-            } label: {
-                Image(systemName: "chevron.right")
-            }.accessibilityLabel("Next")
-            Button {
-                store.closeSelection()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-            }.accessibilityLabel("Close track")
-        }.padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
-    }
+
 }
 
 struct NativeShare: UIViewControllerRepresentable {
@@ -311,25 +371,15 @@ struct NativeShare: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
-func nativeDate(_ value: JSON) -> String {
-    if !value.exists || value == .number(0) { return "Unknown" }
-    let date =
-        value.double > 0
-        ? Date(timeIntervalSince1970: value.double) : ISO8601DateFormatter().date(from: value.string)
-    return date?.formatted(date: .abbreviated, time: .omitted) ?? value.string
-}
-
-func nativeDateTime(_ value: JSON, clock: String) -> String {
-    guard value.double > 0 else { return "Unknown" }
-    let date = Date(timeIntervalSince1970: value.double)
-    let formatter = DateFormatter()
-    if clock == "24" {
-        formatter.dateFormat = "d MMM yyyy HH:mm"
-    } else if clock == "12" {
-        formatter.dateFormat = "d MMM yyyy h:mm a"
-    } else {
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
+/// Keep the larger, leading title inside the toolbar alongside Done.
+private struct NativeSheetTitleStyle: ViewModifier {
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 17.0, *) {
+            content.toolbarTitleDisplayMode(verticalSizeClass == .compact ? .inline : .inlineLarge)
+        } else {
+            content.navigationBarTitleDisplayMode(.inline)
+        }
     }
-    return formatter.string(from: date)
 }

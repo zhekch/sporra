@@ -367,7 +367,6 @@ export default {
   "offline-retry.retry": "Retry",
   "offline.can-t-reach-the-server": "Can't reach the server",
   "personal.add-and-remove-cells-by": "Add and remove cells by hand",
-  "personal.app-settings": "App settings",
   "personal.clock": "Clock",
   "personal.distances-are-measured-from-here": "Distances are measured from here",
   "personal.editing": "Editing",

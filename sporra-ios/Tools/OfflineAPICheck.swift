@@ -28,6 +28,7 @@ struct OfflineAPICheck {
                 ])
             _ = try await api.get(
                 "/api/render/cells", query: query(["level": "0", "info": "0", "fine": "1"]))
+            _ = try await api.regionSnapshot(query: query(["level": "6", "fine": "0"]))
             _ = try await api.get("/api/days")
             _ = try await api.get("/api/stats")
             // An unauthenticated server response must remain distinguishable from
@@ -56,6 +57,12 @@ struct OfflineAPICheck {
             "restores account after process restart without a server")
         try check(saved?["pending"]["clock"].string == "24", "retains pending preferences across launches")
         await api.configure(base, account: "offline-test")
+        let instant = await api.cachedGet("/api/days")
+        let untouchedConnection = await api.isOffline()
+        try check(instant?["days"].exists == true && !untouchedConnection,
+            "cached reads restore content after restart without contacting the stopped server")
+        let missing = await api.cachedGet("/api/render/activity?id=987654")
+        try check(missing == nil, "an uncached read returns immediately without a network fallback")
         // No explicit offline flag: a real failed connection must trigger fallback.
         let cells = try await api.get(
             "/api/render/cells", query: query(["fine": "1", "info": "0", "level": "0"]))
@@ -66,6 +73,9 @@ struct OfflineAPICheck {
             "/api/render/cells", query: query(["level": "0", "info": "0", "fine": "1", "bbox": "8,47,9,48"]))
         try check(
             viewport["rows"] == cells["rows"], "world snapshots survive a changed viewport and query order")
+        let richRegions = try await api.regionSnapshot(query: query(["level": "6", "fine": "0", "bbox": "8,47,9,48"]))
+        try check(!richRegions["infoFeatures"].array.isEmpty,
+            "new offline region snapshots retain immediate names, borders and coverage")
         let days = try await api.get("/api/days")
         try check(days["days"].exists, "reads saved calendar data without networking")
         _ = try await api.get("/api/stats")
@@ -84,6 +94,8 @@ struct OfflineAPICheck {
             try check(failure.status == -1009, "never pretends offline server mutations succeeded")
         }
         await api.configure(base, account: "another-account")
+        let privateCache = await api.cachedGet("/api/days")
+        try check(privateCache == nil, "instant cache reads remain isolated by account")
         await api.setOffline(true)
         do {
             _ = try await api.get("/api/days")

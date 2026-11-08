@@ -7,7 +7,7 @@
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>sporra-flutter</string>
+				<string>sporra</string>
 			</array>
 		</dict>
 	</array>
